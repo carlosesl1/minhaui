@@ -30,7 +30,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Pin stable Rust/MSVC target; deny warnings; configure format, clippy, tests, dependency/license audit, panic/crash policy, and Win10 minimum contract.
   - Verify: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. Manual QA: toolchain transcript `.omo/evidence/task-2-toolchain.txt`.
 
-- [ ] 3. Build versioned domain model, reducer, configuration, and theme bundle
+- [x] 3. Build versioned domain model, reducer, configuration, and theme bundle
   - Depends on: 2. Files: `crates/shell-core/**`, `crates/shell-config/**`, fixtures and unit/property tests.
   - Model monitors, dock items, running indicators, topbar modules, popovers, autohide, taskbar policy, accessibility and performance presets. Use atomic writes, schema migrations, validation, safe defaults, and checksum-aware local theme import/export.
   - Verify malformed/truncated/old/future configs recover without panic; round trips and migrations pass. Manual QA: CLI fixture report `.omo/evidence/task-3-config-matrix.txt`.
