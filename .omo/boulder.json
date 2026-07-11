@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "active_work_id": "windows-native-dock-v1",
+  "works": {
+    "windows-native-dock-v1": {
+      "work_id": "windows-native-dock-v1",
+      "active_plan": ".omo/plans/windows-native-dock-v1.md",
+      "plan_name": "windows-native-dock-v1",
+      "session_ids": ["codex:windows-native-dock-v1"],
+      "status": "active",
+      "worktree_path": "C:/Users/Carlos/Documents/Codex/Minha UI APP-worktrees/windows-native-dock-v1"
+    }
+  }
+}
