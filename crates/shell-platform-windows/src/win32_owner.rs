@@ -1,13 +1,15 @@
 #![deny(unsafe_code)]
 
+use shell_renderer::DipRect;
 use shell_renderer::native::{
     CompositionRenderer, DeviceKind, WindowSurface, is_recoverable_hresult,
 };
 use windows::core::Result;
 
 use crate::win32::OwnedWindow;
+use crate::win32_actions::apply_dock_actions;
 use crate::win32_windowing::primary_work_area;
-use crate::{PlatformEvent, RuntimeAction, RuntimeOrchestrator};
+use crate::{DockController, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
 
 pub(super) struct RuntimeSurfaces {
     force_warp: bool,
@@ -15,16 +17,23 @@ pub(super) struct RuntimeSurfaces {
     topbar: Option<WindowSurface>,
     dock: Option<WindowSurface>,
     orchestration: RuntimeOrchestrator,
+    dock_controller: DockController,
 }
 
 impl RuntimeSurfaces {
-    pub(super) fn new(force_warp: bool, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<Self> {
+    pub(super) fn new(
+        force_warp: bool,
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        dock_controller: DockController,
+    ) -> Result<Self> {
         let mut runtime = Self {
             force_warp,
             renderer: None,
             topbar: None,
             dock: None,
             orchestration: RuntimeOrchestrator::new(),
+            dock_controller,
         };
         runtime.build(topbar, dock)?;
         Ok(runtime)
@@ -42,6 +51,49 @@ impl RuntimeSurfaces {
         topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
     ) -> Result<bool> {
+        match &event {
+            PlatformEvent::DockPointer(sample) => {
+                let actions = self
+                    .dock_controller
+                    .handle_pointer(*sample)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if !apply_dock_actions(&actions)? {
+                    return Ok(false);
+                }
+                self.rebuild(topbar, dock)?;
+                return Ok(true);
+            }
+            PlatformEvent::DockContextMenu { point, command } => {
+                let actions = self
+                    .dock_controller
+                    .handle_context_menu(*point, *command)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if !apply_dock_actions(&actions)? {
+                    return Ok(false);
+                }
+                self.rebuild(topbar, dock)?;
+                return Ok(true);
+            }
+            PlatformEvent::DockDrop { point, path } => {
+                let actions = self
+                    .dock_controller
+                    .handle_drop(*point, path)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if !apply_dock_actions(&actions)? {
+                    return Ok(false);
+                }
+                self.rebuild(topbar, dock)?;
+                return Ok(true);
+            }
+            PlatformEvent::TaskbarCreated
+            | PlatformEvent::DpiChanged(_)
+            | PlatformEvent::DisplayChanged
+            | PlatformEvent::PowerResumed
+            | PlatformEvent::DeviceLost
+            | PlatformEvent::QaExitRequested
+            | PlatformEvent::CloseRequested
+            | PlatformEvent::Destroyed => {}
+        }
         let action = self.orchestration.handle(event);
         match action {
             RuntimeAction::None => {}
@@ -88,12 +140,16 @@ impl RuntimeSurfaces {
             topbar.role,
             topbar.rect.width.max(1) as u32,
             topbar.rect.height.max(1) as u32,
+            None,
         )?;
+        self.dock_controller.update_surface(dip_surface(dock));
+        let dock_scene = self.dock_controller.scene();
         let dock_surface = renderer.create_surface(
             dock.hwnd,
             dock.role,
             dock.rect.width.max(1) as u32,
             dock.rect.height.max(1) as u32,
+            Some(&dock_scene),
         )?;
         self.renderer = Some(renderer);
         self.topbar = Some(topbar_surface);
@@ -108,4 +164,18 @@ impl RuntimeSurfaces {
         );
         Ok(())
     }
+}
+
+const fn invalid_arg() -> windows::core::HRESULT {
+    windows::core::HRESULT(0x8007_0057_u32 as i32)
+}
+
+fn dip_surface(window: &OwnedWindow) -> DipRect {
+    let scale = window.dpi().scale();
+    DipRect::new(
+        0.0,
+        0.0,
+        window.rect.width as f32 / scale,
+        window.rect.height as f32 / scale,
+    )
 }

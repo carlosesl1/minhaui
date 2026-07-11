@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{Interface, Result};
 
+use crate::DockScene;
 use crate::native_device::create_d3d_device;
 use crate::native_present::present_swap_chain;
 use crate::native_showcase::draw_showcase;
@@ -105,6 +106,7 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         width: u32,
         height: u32,
+        dock_scene: Option<&DockScene>,
     ) -> Result<WindowSurface> {
         let dxgi_device: IDXGIDevice = self._d3d.cast()?;
         // SAFETY: Category 8 (FFI boundary). `dxgi_device` is live and its adapter
@@ -161,6 +163,7 @@ impl CompositionRenderer {
             role,
             width as f32,
             height as f32,
+            dock_scene,
         )?;
 
         // SAFETY: Category 8 (FFI boundary). `hwnd` is a live top-level window owned

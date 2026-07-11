@@ -9,17 +9,21 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
 };
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowRect, HTCLIENT, HTTRANSPARENT, MSG,
     PBT_APMRESUMEAUTOMATIC, PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-    TranslateMessage, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_NCHITTEST,
-    WM_POWERBROADCAST, WM_TIMER,
+    TranslateMessage, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_TIMER,
 };
 use windows::core::Result;
 
-use crate::PlatformEvent;
-use crate::win32::{LIVE_WINDOWS, TASKBAR_CREATED, TIMER_ID};
+use crate::win32::{DOCK_DRAGGING, DOCK_WINDOW, LIVE_WINDOWS, TASKBAR_CREATED, TIMER_ID};
+use crate::{ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent};
 
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
 
@@ -100,6 +104,59 @@ pub(super) unsafe extern "system" fn window_proc(
         return LRESULT(0);
     }
     match message {
+        WM_MOUSEMOVE if is_dock_window(hwnd) => {
+            track_mouse_leave(hwnd);
+            let phase = if DOCK_DRAGGING.load(Ordering::Acquire) {
+                DockPointerPhase::Dragged
+            } else {
+                DockPointerPhase::Moved
+            };
+            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
+                phase,
+                client_point(hwnd, lparam),
+            )));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE if is_dock_window(hwnd) => {
+            DOCK_DRAGGING.store(false, Ordering::Release);
+            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
+                DockPointerPhase::Exited,
+                DipPoint::new(-1.0, -1.0),
+            )));
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN if is_dock_window(hwnd) => {
+            DOCK_DRAGGING.store(true, Ordering::Release);
+            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
+                DockPointerPhase::Pressed,
+                client_point(hwnd, lparam),
+            )));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP if is_dock_window(hwnd) => {
+            DOCK_DRAGGING.store(false, Ordering::Release);
+            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
+                DockPointerPhase::Released,
+                client_point(hwnd, lparam),
+            )));
+            LRESULT(0)
+        }
+        WM_RBUTTONUP if is_dock_window(hwnd) => {
+            queue_event(PlatformEvent::DockContextMenu {
+                point: client_point(hwnd, lparam),
+                command: ContextMenuCommand::Unpin,
+            });
+            LRESULT(0)
+        }
+        WM_DROPFILES if is_dock_window(hwnd) => {
+            if let Some(path) = first_drop_path(wparam) {
+                queue_event(PlatformEvent::DockDrop {
+                    point: DipPoint::new(0.0, 0.0),
+                    path,
+                });
+            }
+            LRESULT(0)
+        }
         WM_NCHITTEST => hit_test(hwnd, lparam),
         WM_DPICHANGED => {
             // SAFETY: Category 8 (FFI boundary). Windows documents lParam for
@@ -151,6 +208,54 @@ pub(super) unsafe extern "system" fn window_proc(
             // parameters are forwarded unchanged to the documented default callback.
             unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
         }
+    }
+}
+
+fn is_dock_window(hwnd: HWND) -> bool {
+    DOCK_WINDOW.load(Ordering::Acquire) == hwnd.0 as isize
+}
+
+fn track_mouse_leave(hwnd: HWND) {
+    let mut event = TRACKMOUSEEVENT {
+        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    // SAFETY: Category 8 (FFI boundary). The tracked HWND is live during message
+    // dispatch and the structure contains the documented size and leave flag.
+    let _ = unsafe { TrackMouseEvent(&mut event) };
+}
+
+fn client_point(hwnd: HWND, lparam: LPARAM) -> DipPoint {
+    let x = (lparam.0 as u16) as i16 as i32;
+    let y = ((lparam.0 >> 16) as u16) as i16 as i32;
+    // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
+    let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
+    let scale = dpi.scale();
+    DipPoint::new(x as f32 / scale, y as f32 / scale)
+}
+
+fn first_drop_path(wparam: WPARAM) -> Option<String> {
+    let hdrop = HDROP(wparam.0 as *mut std::ffi::c_void);
+    // SAFETY: Category 8 (FFI boundary). WM_DROPFILES supplies a valid HDROP until
+    // DragFinish is called below.
+    let length = unsafe { DragQueryFileW(hdrop, 0, None) };
+    if length == 0 {
+        // SAFETY: Category 8 (FFI boundary). Releases the HDROP supplied by Windows.
+        unsafe { DragFinish(hdrop) };
+        return None;
+    }
+    let mut buffer = vec![0; length as usize + 1];
+    // SAFETY: Category 8 (FFI boundary). The buffer is writable and sized from the
+    // preceding query including room for a terminator.
+    let written = unsafe { DragQueryFileW(hdrop, 0, Some(&mut buffer)) };
+    // SAFETY: Category 8 (FFI boundary). Releases the HDROP supplied by Windows.
+    unsafe { DragFinish(hdrop) };
+    if written == 0 {
+        None
+    } else {
+        Some(String::from_utf16_lossy(&buffer[..written as usize]))
     }
 }
 

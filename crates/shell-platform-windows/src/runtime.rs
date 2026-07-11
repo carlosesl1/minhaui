@@ -42,6 +42,10 @@ impl RuntimeOrchestrator {
                 RuntimeAction::RepositionAndRebuild
             }
             PlatformEvent::DpiChanged(rect) => RuntimeAction::ResizeAndRebuild(rect),
+            PlatformEvent::DockPointer(_) | PlatformEvent::DockContextMenu { .. } => {
+                RuntimeAction::None
+            }
+            PlatformEvent::DockDrop { .. } => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,
         };

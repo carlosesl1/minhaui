@@ -2,6 +2,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod color;
+mod dock_layout;
+mod dock_scene;
 mod geometry;
 mod lifecycle;
 mod showcase_model;
@@ -32,6 +34,11 @@ mod native_device;
 mod native_showcase_dock;
 
 pub use color::{Rgba8, premultiply_srgb};
+pub use dock_layout::{DockLaidOutItem, DockLayout, layout_dock_scene};
+pub use dock_scene::{
+    DockAlignment, DockItemVisual, DockItemVisualKind, DockLayoutConfig, DockScene,
+    RunningIndicator,
+};
 pub use geometry::{
     DipPoint, DipRect, Dpi, PhysicalRect, ShellMetrics, apply_dpi_suggested_rect,
     dock_showcase_rect, physical_from_dip, rounded_content_hit, topbar_rect,

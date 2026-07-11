@@ -1,5 +1,6 @@
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, Ordering};
 
+use shell_core::{AppId, DockItem, DockItemId, ShellState};
 use shell_renderer::native::ShowcaseRole;
 use shell_renderer::{Dpi, PhysicalRect, ShellMetrics, dock_showcase_rect, topbar_rect};
 use windows::Win32::Foundation::{HINSTANCE, HWND};
@@ -7,6 +8,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetProcessDpiAwarenessContext,
 };
+use windows::Win32::UI::Shell::DragAcceptFiles;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, IsWindowVisible, RegisterClassExW,
     RegisterWindowMessageW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
@@ -15,15 +17,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-use crate::PlatformEvent;
 use crate::win32_owner::RuntimeSurfaces;
 use crate::win32_timer::TimerGuard;
 use crate::win32_windowing::{message_loop, primary_work_area, window_proc};
+use crate::{DockController, DockRuntimeConfig, PlatformEvent};
 
 const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.Window.v1");
 pub(super) const TIMER_ID: usize = 0x4D55;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
 pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);
+pub(super) static DOCK_DRAGGING: AtomicBool = AtomicBool::new(false);
 
 pub fn run_showcase(
     force_warp: bool,
@@ -47,7 +51,8 @@ pub fn run_showcase(
         Some(milliseconds) => Some(TimerGuard::start(topbar.hwnd, milliseconds)?),
         None => None,
     };
-    let mut runtime = RuntimeSurfaces::new(force_warp, &topbar, &dock)?;
+    let dock_controller = sample_dock_controller()?;
+    let mut runtime = RuntimeSurfaces::new(force_warp, &topbar, &dock, dock_controller)?;
     print_window(&topbar, runtime.device_kind());
     print_window(&dock, runtime.device_kind());
     if simulate_device_loss_once {
@@ -69,6 +74,27 @@ pub fn run_showcase(
     drop(topbar);
     drop(class);
     result
+}
+
+fn sample_dock_controller() -> Result<DockController> {
+    let items = vec![
+        DockItem::pinned(DockItemId::new(1), parse_app("notepad.exe")?),
+        DockItem::pinned(DockItemId::new(2), parse_app("calc.exe")?),
+        DockItem::pinned(DockItemId::new(3), parse_app("explorer.exe")?),
+    ];
+    DockController::new(
+        ShellState::default().with_dock_items(items),
+        DockRuntimeConfig::default(),
+    )
+    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
+}
+
+fn parse_app(value: &str) -> Result<AppId> {
+    AppId::parse(value).map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
+}
+
+const fn invalid_arg() -> windows::core::HRESULT {
+    windows::core::HRESULT(0x8007_0057_u32 as i32)
 }
 
 struct WindowClass {
@@ -141,6 +167,13 @@ impl OwnedWindow {
             )
         }?;
         LIVE_WINDOWS.fetch_add(1, Ordering::AcqRel);
+        if role == ShowcaseRole::Dock {
+            DOCK_WINDOW.store(hwnd.0 as isize, Ordering::Release);
+            // SAFETY: Category 8 (FFI boundary). The dock HWND is live and owned by
+            // this guard; enabling documented shell file-drop delivery is reversible
+            // on window destruction.
+            unsafe { DragAcceptFiles(hwnd, true) };
+        }
         // SAFETY: Category 8 (FFI boundary). `hwnd` was created successfully above
         // and therefore has a stable effective DPI on the primary monitor.
         let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
@@ -198,6 +231,10 @@ impl OwnedWindow {
             rect.bottom - rect.top,
         );
         Ok(())
+    }
+
+    pub(super) const fn dpi(&self) -> Dpi {
+        self.dpi
     }
 
     fn apply_rect(&self) -> Result<()> {

@@ -1,0 +1,3 @@
+﻿RESOURCE generation=1 renderer=warp
+WINDOW role=topbar hwnd=0x310acc title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32 dpi=96 visible=true renderer=warp
+WINDOW role=dock hwnd=0x100940 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=760,1248,1040,180 dpi=96 visible=true renderer=warp

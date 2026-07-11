@@ -8,8 +8,9 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::core::{Result, w};
 
+use crate::DockScene;
 use crate::native::ShowcaseRole;
-use crate::native_showcase_dock::draw_dock_states;
+use crate::native_showcase_dock::{draw_dock_states, draw_functional_dock};
 use crate::{Rgba8, ShowcaseTokens};
 
 pub(crate) fn draw_showcase(
@@ -18,6 +19,7 @@ pub(crate) fn draw_showcase(
     role: ShowcaseRole,
     width: f32,
     height: f32,
+    dock_scene: Option<&DockScene>,
 ) -> Result<()> {
     let tokens = ShowcaseTokens::obsidian_glass();
     let base = create_brush(context, tokens.surface_base)?;
@@ -60,6 +62,21 @@ pub(crate) fn draw_showcase(
                 bottom: height,
             },
             &primary,
+        );
+    } else if let Some(scene) = dock_scene {
+        draw_functional_dock(
+            context,
+            &text_format,
+            width,
+            height,
+            scene,
+            &raised,
+            &hover,
+            &selected,
+            &primary,
+            &secondary,
+            &accent,
+            tokens.control_radius,
         );
     } else {
         draw_dock_states(

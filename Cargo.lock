@@ -386,6 +386,7 @@ dependencies = [
 name = "shell-platform-windows"
 version = "0.1.0"
 dependencies = [
+ "shell-core",
  "shell-renderer",
  "windows",
 ]

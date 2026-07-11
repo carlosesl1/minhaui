@@ -3,6 +3,7 @@ use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrus
 use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 
 use crate::native_showcase::{draw_text, fill_round, rect};
+use crate::{DipRect, DockItemVisualKind, DockScene, RunningIndicator, layout_dock_scene};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_dock_states(
@@ -126,5 +127,85 @@ pub(crate) fn draw_dock_states(
             },
             primary,
         );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_functional_dock(
+    context: &ID2D1DeviceContext,
+    format: &IDWriteTextFormat,
+    width: f32,
+    height: f32,
+    scene: &DockScene,
+    raised: &ID2D1SolidColorBrush,
+    hover: &ID2D1SolidColorBrush,
+    selected: &ID2D1SolidColorBrush,
+    primary: &ID2D1SolidColorBrush,
+    secondary: &ID2D1SolidColorBrush,
+    accent: &ID2D1SolidColorBrush,
+    control_radius: f32,
+) {
+    let layout = layout_dock_scene(scene, DipRect::new(0.0, 0.0, width, height));
+    for item in layout.items() {
+        match item.kind() {
+            DockItemVisualKind::Separator => {
+                let bounds = item.bounds();
+                fill_round(
+                    context,
+                    rect(
+                        bounds.x + bounds.width * 0.35,
+                        bounds.y + 10.0,
+                        bounds.x + bounds.width * 0.65,
+                        bounds.y + bounds.height - 10.0,
+                        2.0,
+                    ),
+                    secondary,
+                );
+            }
+            DockItemVisualKind::App => {
+                let bounds = item.bounds();
+                let brush = match item.indicator() {
+                    RunningIndicator::Focused => selected,
+                    RunningIndicator::Running | RunningIndicator::Minimized => hover,
+                    RunningIndicator::Stopped => raised,
+                };
+                fill_round(
+                    context,
+                    rect(
+                        bounds.x,
+                        bounds.y,
+                        bounds.x + bounds.width,
+                        bounds.y + bounds.height,
+                        control_radius,
+                    ),
+                    brush,
+                );
+                draw_text(
+                    context,
+                    item.label(),
+                    format,
+                    D2D_RECT_F {
+                        left: bounds.x + 8.0,
+                        top: bounds.y + 8.0,
+                        right: bounds.x + bounds.width - 8.0,
+                        bottom: bounds.y + bounds.height - 8.0,
+                    },
+                    primary,
+                );
+                if item.indicator() != RunningIndicator::Stopped {
+                    fill_round(
+                        context,
+                        rect(
+                            bounds.x + bounds.width * 0.35,
+                            bounds.y + bounds.height - 6.0,
+                            bounds.x + bounds.width * 0.65,
+                            bounds.y + bounds.height - 3.0,
+                            1.5,
+                        ),
+                        accent,
+                    );
+                }
+            }
+        }
     }
 }
