@@ -111,14 +111,14 @@ Tokens are logical roles. Implementations may convert the values to the platform
 
 | Token | Size / line | Weight | Tracking | Use |
 |---|---:|---:|---:|---|
-| `type.display` | 28 / 36 | 600 | `-0.01em` | Rare settings empty state or onboarding title. |
-| `type.title` | 20 / 28 | 600 | `-0.005em` | Popover/settings page title. |
+| `type.display` | 28 / 36 | 600 | `0` | Rare settings empty state or onboarding title. |
+| `type.title` | 20 / 28 | 600 | `0` | Popover/settings page title. |
 | `type.subtitle` | 16 / 24 | 600 | `0` | Section title, app/window title. |
 | `type.body` | 14 / 20 | 400 | `0` | Default UI copy. |
 | `type.body.strong` | 14 / 20 | 600 | `0` | Selected item, primary value. |
-| `type.caption` | 12 / 16 | 400 | `0.01em` | Metadata, secondary value. |
-| `type.label` | 12 / 16 | 600 | `0.01em` | Compact control label. |
-| `type.metric` | 24 / 28 | 600 | `-0.01em` | Weather/volume hero value only. |
+| `type.caption` | 12 / 16 | 400 | `0` | Metadata, secondary value. |
+| `type.label` | 12 / 16 | 600 | `0` | Compact control label. |
+| `type.metric` | 24 / 28 | 600 | `0` | Weather/volume hero value only. |
 
 ### Typography rules
 

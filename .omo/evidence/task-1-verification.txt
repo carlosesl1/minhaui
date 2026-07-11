@@ -41,19 +41,21 @@ Result:
 Command class 4: cleanup and worktree integrity
 Exact operations:
   Get-ChildItem -LiteralPath .\.omo\evidence -File | Where-Object Name -match '(tmp|temp|montage|tile)'
-  git status --short
+  git status --porcelain=v1 --untracked-files=all
   git diff --check
 
 Results:
   PASS no temporary contact-sheet files remain. Contact sheet was rendered directly to its final path; no tile/montage intermediates were created.
   PASS git diff --check returned no whitespace errors.
-  OBSERVED dirty worktree before and after: `.omo/` was already untracked because `.omo/plans/windows-native-dock-v1.md` and `.omo/boulder.json` pre-existed. They are outside Task 1 ownership and were not modified or staged.
+  CHRONOLOGY: before Task 1 commit ccb3177, `.omo/plans/windows-native-dock-v1.md` and `.omo/boulder.json` were pre-existing untracked orchestration files. Task 1 did not modify or stage them. They were subsequently committed by orchestration commit d07250a (`chore(orchestration): register dock v1 work`).
+  CURRENT BASELINE BEFORE THIS GATE FIX: reran `git status --porcelain=v1 --untracked-files=all` after d07250a and before editing DESIGN.md or this receipt. Exact output was empty; the worktree was clean.
+  EXPECTED DURING THIS GATE FIX: the same status command reports only the scoped modifications to `DESIGN.md` and `.omo/evidence/task-1-verification.txt` until the follow-up commit is created.
 
 Adversarial verification:
   - Missing source: PASS. All eight source paths were checked before dereference; a missing source throws and aborts verification.
   - Stale copy: PASS. Every stable copy SHA-256 equals its corresponding source SHA-256.
   - Duplicate asset: PASS. Eight destination hashes are unique.
-  - Dirty worktree: PASS. Pre-existing out-of-scope `.omo` files were identified; only explicit scoped paths are eligible for staging.
+  - Dirty worktree chronology: PASS. The earlier untracked orchestration files are historical evidence, not the current state; d07250a committed them, and the fresh pre-edit porcelain status was empty.
   - Misleading success output: PASS. Success is coupled to terminating assertions and decoders, not copy command output alone.
   - Corrupt/zero-byte image: PASS. Positive byte length and independent System.Drawing decode confirmed for all nine PNG files.
   - Broken documentation link: PASS. All eight relative links resolve on disk.
@@ -63,4 +65,14 @@ Adversarial verification:
 Cleanup receipt:
   PASS no temporary contact-sheet files created or retained.
   PASS source clipboard files were read-only inputs and were not modified.
-  PASS out-of-scope .omo plan/boulder files were not modified.
+  PASS Task 1 did not modify the then-out-of-scope .omo plan/boulder files; orchestration later committed them separately in d07250a.
+
+Gate-fix rerun (after typography correction, before follow-up commit):
+  PASS all eight typography scale rows specify tracking exactly `0`; no negative or positive em tracking value remains in DESIGN.md.
+  PASS 8/8 source-copy SHA-256 pairs still match, all eight hashes are unique, and all eight stable PNGs decode.
+  PASS contact sheet still decodes at 1600x2400.
+  PASS all eight Markdown reference links resolve.
+  PASS `git diff --check` exits successfully with no whitespace errors.
+  EXPECTED porcelain output while the gate fix is uncommitted:
+   M .omo/evidence/task-1-verification.txt
+   M DESIGN.md
