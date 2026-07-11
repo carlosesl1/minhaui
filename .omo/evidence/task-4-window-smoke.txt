@@ -30,3 +30,9 @@ RESOURCE generation=4 renderer=hardware
 CASE_EXIT=0
 
 PROCESS_REMAINING=0
+
+FINAL_POST_REBUILD_PIXELS
+HARDWARE_LOSS offsets_ms=50,250,1000,2000 topbar_unique=30 topbar_bright=950 topbar_cyan=24 dock_unique=241 dock_bright=8844 dock_cyan=6296
+WARP_LOSS offsets_ms=50,250,1000,2000 topbar_unique=36 topbar_bright=950 topbar_cyan=24 dock_unique=266 dock_bright=8841 dock_cyan=6296
+LIFECYCLE offsets_ms=50,250,1000,2000 topbar_unique=30 topbar_bright=950 topbar_cyan=24 dock_unique=241 dock_bright=8844 dock_cyan=6296
+FINAL_CLEANUP hardware_process=false hardware_topbar=false hardware_dock=false warp_process=false warp_topbar=false warp_dock=false lifecycle_process=false lifecycle_topbar=false lifecycle_dock=false stderr_len=0

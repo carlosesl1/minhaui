@@ -23,6 +23,12 @@ Release runtime matrix:
 - display/power/taskbar lifecycle simulation: generation 1 -> 4, two visible HWNDs, exit 0
 - final shell-app process count: 0
 
+Task 4a final post-rebuild pixel matrix (exact HWND rectangles; samples at 50/250/1000/2000 ms were identical within each case):
+- hardware generation 1 -> 2: topbar unique=30 bright=950 cyan=24; dock unique=241 bright=8844 cyan=6296
+- forced-WARP generation 1 -> 2: topbar unique=36 bright=950 cyan=24; dock unique=266 bright=8841 cyan=6296
+- lifecycle hardware generation 1 -> 4: topbar unique=30 bright=950 cyan=24; dock unique=241 bright=8844 cyan=6296
+- every case: process=false, topbar IsWindow=false, dock IsWindow=false, stderr length=0 after exit
+
 External native evidence:
 - exact topbar HWND bounds: 10,32,2540,32
 - exact dock HWND bounds: 760,1248,1040,180

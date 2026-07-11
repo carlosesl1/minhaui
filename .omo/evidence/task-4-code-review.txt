@@ -2,6 +2,13 @@ Task 4 corrected code review
 
 Verdict: APPROVE after recovery and evidence corrections
 
+Task 4a rebuild-presentation correction:
+- Runtime instrumentation proved that generation-2 `create_surface` Presents returned `S_OK` and exposed nonblank pixels before `handle_event` performed its unconditional follow-up Present.
+- That follow-up Present also returned `S_OK` but flipped each sequential swap chain to its untouched buffer, making both HWNDs uniform.
+- The minimal correction removes the unconditional `present_all` fall-through. Rebuild actions already draw and Present inside `create_surface`; no second Present is valid without another draw.
+- Skip/revert/restore runtime proof produced nonblank -> blank -> nonblank pixels at the exact topbar and dock HWNDs.
+- No enum predicate or source-mirroring unit test was retained: it would remain green if a second Present were reintroduced. The accepted regression channel is the real failing-first pixel matrix plus the skip/revert/restore proof.
+
 The earlier Task 4 review overstated confidence: a pure DeviceLifecycle enum test did not prove runtime recovery, native messages were consumed without rebuilding resources, and the first screenshot contained uncontrolled desktop pixels. Those claims are superseded by this receipt and the corrected artifacts.
 
 Recovery review:

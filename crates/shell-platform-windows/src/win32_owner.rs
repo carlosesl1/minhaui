@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 
 use shell_renderer::native::{
-    CompositionRenderer, DeviceKind, PresentOutcome, WindowSurface, is_recoverable_hresult,
+    CompositionRenderer, DeviceKind, WindowSurface, is_recoverable_hresult,
 };
 use windows::core::Result;
 
@@ -59,20 +59,7 @@ impl RuntimeSurfaces {
                 self.rebuild(topbar, dock)?;
             }
         }
-        if self.present_all()? {
-            self.orchestration.handle(PlatformEvent::DeviceLost);
-            self.rebuild(topbar, dock)?;
-        }
         Ok(true)
-    }
-
-    fn present_all(&self) -> Result<bool> {
-        for surface in [&self.topbar, &self.dock].into_iter().flatten() {
-            if matches!(surface.present()?, PresentOutcome::DeviceLost(_)) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     fn rebuild(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {
