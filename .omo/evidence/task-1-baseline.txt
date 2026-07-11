@@ -1,0 +1,12 @@
+Task 1 failing-first baseline
+Recorded: 2026-07-11 America/Sao_Paulo
+Working tree: C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1
+
+Exact check:
+  Test-Path -LiteralPath .\docs\references\mydockfinder
+  False
+  Test-Path -LiteralPath .\.omo\evidence\task-1-reference-contact-sheet.png
+  False
+
+Observable precondition: neither the stable reference directory nor the documentation QA contact sheet existed before preservation began.
+Worktree note: `git status --short` reported `?? .omo/`; inspection showed pre-existing `.omo/plans/windows-native-dock-v1.md` and `.omo/boulder.json`. Those files are outside task-1 ownership and were not modified.

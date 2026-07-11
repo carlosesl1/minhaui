@@ -1,0 +1,66 @@
+Task 1 verification receipt
+Recorded: 2026-07-11 America/Sao_Paulo
+Working tree: C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1
+
+Command class 1: source/copy existence, byte size, SHA-256 equality, uniqueness, and System.Drawing decode
+Exact operations:
+  Test-Path -LiteralPath <each source and stable destination>
+  Get-Item -LiteralPath <destination>
+  Get-FileHash -LiteralPath <source|destination> -Algorithm SHA256
+  [System.Drawing.Image]::FromFile(<destination>)
+  ($destHashes | Select-Object -Unique).Count -eq 8
+
+Results:
+  PASS 01-dock-previews.png bytes=81466 dimensions=1092x375 sha256=16DE56649A2AA103544D04D5A41B41E740D77583225DA37690539600E2510726
+  PASS 02-topbar-network.png bytes=101738 dimensions=2559x392 sha256=4334C15B6CADB749621BF61CE0E41BE9D619AB4658EB33C7B3CC24A97D890E0D
+  PASS 03-weather-popover.png bytes=36630 dimensions=399x347 sha256=44111AEAD1362CABE017BC99786CA87EF5834B60D9F309550B120A0AB52D70EB
+  PASS 04-audio-media.png bytes=44166 dimensions=348x512 sha256=D3BC5DF189732FB32AE07D87A8463FE05EFEA60C5E29936D34AD94833708D8C8
+  PASS 05-tray-visual-reference-only.png bytes=25493 dimensions=275x206 sha256=7E166D86E8280F501CC1FC0E1931A6B7A0BB55F9D7DCB9275C3600A4EE739B2E
+  PASS 06-control-center.png bytes=38903 dimensions=360x456 sha256=F48677823A76CE5BB1C757C0E7524ED05DD80E52BF4201F1D7B73B92A4DB825D
+  PASS 07-calendar.png bytes=26670 dimensions=348x347 sha256=EEDADDF7FB34CB81A0AB957A05AB4CE0829CCBFADAE85D500C40F111136E7D56
+  PASS 08-system-menu.png bytes=24048 dimensions=262x342 sha256=AF1653949B65C64F6F1B9657981ED33E947BA010A63977A21C044D8CE33EF149
+  PASS 8/8 unique hashes; no missing, zero-byte, stale, mismatched, or duplicate asset.
+
+Command class 2: contact-sheet existence and decode
+Exact operations:
+  Get-Item -LiteralPath .\.omo\evidence\task-1-reference-contact-sheet.png
+  [System.Drawing.Image]::FromFile('.\.omo\evidence\task-1-reference-contact-sheet.png')
+
+Result:
+  PASS bytes=687663 dimensions=1600x2400 PNG format GUID=b96b3caf-0728-11d3-9d7b-0000f81ef32e.
+  MANUAL QA PASS: viewed the original-resolution contact sheet. It contains eight labeled references; both wide captures remain contextually readable and the six compact popover/menu captures preserve defining structure without accidental crop. This artifact is documentation QA only.
+
+Command class 3: Markdown relative-link resolution
+Exact operation:
+  Parse Markdown targets with regex \[[^\]]+\]\(([^)]+)\), resolve each non-URL/non-anchor target relative to its Markdown file, then Test-Path -LiteralPath <resolved target>.
+
+Result:
+  PASS 8 links resolved from docs/reference-annex.md to the eight stable files.
+  PASS DESIGN.md and .omo/frontend-design/state.md contain no unresolved Markdown link targets.
+
+Command class 4: cleanup and worktree integrity
+Exact operations:
+  Get-ChildItem -LiteralPath .\.omo\evidence -File | Where-Object Name -match '(tmp|temp|montage|tile)'
+  git status --short
+  git diff --check
+
+Results:
+  PASS no temporary contact-sheet files remain. Contact sheet was rendered directly to its final path; no tile/montage intermediates were created.
+  PASS git diff --check returned no whitespace errors.
+  OBSERVED dirty worktree before and after: `.omo/` was already untracked because `.omo/plans/windows-native-dock-v1.md` and `.omo/boulder.json` pre-existed. They are outside Task 1 ownership and were not modified or staged.
+
+Adversarial verification:
+  - Missing source: PASS. All eight source paths were checked before dereference; a missing source throws and aborts verification.
+  - Stale copy: PASS. Every stable copy SHA-256 equals its corresponding source SHA-256.
+  - Duplicate asset: PASS. Eight destination hashes are unique.
+  - Dirty worktree: PASS. Pre-existing out-of-scope `.omo` files were identified; only explicit scoped paths are eligible for staging.
+  - Misleading success output: PASS. Success is coupled to terminating assertions and decoders, not copy command output alone.
+  - Corrupt/zero-byte image: PASS. Positive byte length and independent System.Drawing decode confirmed for all nine PNG files.
+  - Broken documentation link: PASS. All eight relative links resolve on disk.
+  - Temporary-artifact leakage: PASS. No contact-sheet intermediates remain.
+  - Other ultraqa classes (runtime interaction, network fault injection, concurrency/race, permissions/elevation, installer/package contents, mixed-DPI rendering, keyboard/screen reader, reduced motion, high contrast): N/A for this documentation-only task; they are explicitly deferred to the implementation verification matrix and DD-05 in DESIGN.md/state.md.
+
+Cleanup receipt:
+  PASS no temporary contact-sheet files created or retained.
+  PASS source clipboard files were read-only inputs and were not modified.
+  PASS out-of-scope .omo plan/boulder files were not modified.
