@@ -19,7 +19,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
 
 ## TODOs
 
-- [ ] 1. Preserve product references and define the design contract
+- [x] 1. Preserve product references and define the design contract
   - Files: `docs/references/mydockfinder/*.png`, `docs/reference-annex.md`, `DESIGN.md`, `.omo/frontend-design/state.md`.
   - Copy all eight supplied screenshots into documentation-only assets; map dock/previews, topbar/network, weather, audio/media, tray reference, control center, calendar, and system menu. Record that they are reference-only and not shipped.
   - Define original visual tokens, typography (Windows-native), spacing, glass/elevation, primitives/states, motion/reduced-motion, DPI rules, keyboard/focus behavior, personas, and accepted debt.
