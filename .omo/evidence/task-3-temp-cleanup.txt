@@ -19,3 +19,30 @@ After:
 - Removed target: C:\Users\Carlos\AppData\Local\Temp\shell-config-backup-34060
 - Target exists: False
 - No other temp directory was enumerated or removed.
+
+## Final RED-run fixture cleanup
+
+Requested fixture labels: `backup-temp-window-32092` and `temp-only-window-32092`.
+The test helper prefixes fixture directories with `shell-config-`; a read-only `*32092` lookup found exactly these corresponding directories:
+
+- `C:\Users\Carlos\AppData\Local\Temp\shell-config-backup-temp-window-32092`
+- `C:\Users\Carlos\AppData\Local\Temp\shell-config-temp-only-window-32092`
+
+For each resolved path:
+
+- TEMP root resolved to `C:\Users\Carlos\AppData\Local\Temp`.
+- The target was verified as a strict child of that root using an ordinal-ignore-case absolute-path prefix check.
+- The target was also required to equal `Join-Path $tempRoot $name` before recursive removal.
+
+Before:
+
+- `shell-config-backup-temp-window-32092/settings.json` | 7 bytes | 2026-07-11T21:45:22.2749721Z
+- `shell-config-backup-temp-window-32092/settings.json.bak.tmp` | 557 bytes | 2026-07-11T21:45:22.2689703Z
+- `shell-config-temp-only-window-32092/settings.json` | 7 bytes | 2026-07-11T21:45:22.2789701Z
+
+After literal-path cleanup:
+
+- `shell-config-backup-temp-window-32092` exists: False
+- `shell-config-temp-only-window-32092` exists: False
+- Cargo/rustc/Clippy/rustfmt/config_matrix processes: none (`PROCESS_CLEANUP=PASS`).
+- No production or test file was changed.
