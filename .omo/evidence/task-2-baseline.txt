@@ -1,0 +1,52 @@
+Task 2 toolchain baseline
+Captured: 2026-07-11T18:06:31.3671777-03:00
+Working directory: C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1
+
+Precondition probes
+-------------------
+> where.exe rustc
+INFO: Could not find files for the given pattern(s).
+Exit code: 1
+
+> rustc --version --verbose
+rustc: The term 'rustc' is not recognized as the name of a cmdlet, function,
+script file, or executable program.
+Exit code: command not found
+
+> where.exe cargo
+INFO: Could not find files for the given pattern(s).
+Exit code: 1
+
+> cargo --version --verbose
+cargo: The term 'cargo' is not recognized as the name of a cmdlet, function,
+script file, or executable program.
+Exit code: command not found
+
+> where.exe rustup
+INFO: Could not find files for the given pattern(s).
+Exit code: 1
+
+> rustup --version
+rustup: The term 'rustup' is not recognized as the name of a cmdlet, function,
+script file, or executable program.
+Exit code: command not found
+
+MSVC prerequisite probe
+-----------------------
+Visual Studio Community 2022 17.11.4
+Installation: C:\Program Files\Microsoft Visual Studio\2022\Community
+VC.Tools.x86.x64 workload query: satisfied
+
+Installer result
+----------------
+> winget install --id Rustlang.Rustup --exact --scope user --silent ...
+No applicable installer found.
+Exit code: 1
+
+Fallback, still official per-user Rustup distribution:
+> winget install --id Rustlang.Rustup --exact --silent ...
+Rustup package 1.29.0 downloaded from static.rust-lang.org.
+SHA-256 verified by winget: 86478e53f769379d7f0ebfa7c9aa97cb76ca92233f79aa2cc0dbee2efaac73c7
+Installed successfully under the current user's C:\Users\Carlos\.cargo and
+C:\Users\Carlos\.rustup directories.
+Exit code: 0
