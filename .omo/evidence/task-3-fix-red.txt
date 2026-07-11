@@ -1,0 +1,17 @@
+Task 3 gate-fix TDD RED evidence
+Date: 2026-07-11 America/Sao_Paulo
+
+Command:
+$env:PATH="$env:USERPROFILE\.cargo\bin;$env:PATH"; cargo test -p shell-config --test persistence -- --nocapture
+
+Exit code: 101
+Result: 4 passed; 2 failed
+
+missing_primary_reconciles_completed_backup_candidate:
+assertion failed: recovered source was Defaults, expected Backup.
+
+staged_temp_is_promoted_when_it_is_the_only_valid_candidate:
+assertion failed: recovery returned the replacement/default config, expected the valid staged autohide=true config.
+
+Why this is the expected RED failure:
+The current writer deletes `.tmp` before determining whether it is the only usable config and ignores `.bak.tmp` when the primary is missing. The focused tests stage those real crash windows and demonstrate loss of the last valid recovery candidate.

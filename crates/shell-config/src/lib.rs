@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod persistence;
+mod recovery;
 mod schema;
 mod theme;
 

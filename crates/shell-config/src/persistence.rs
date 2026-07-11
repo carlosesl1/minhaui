@@ -4,18 +4,17 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::{
-    ConfigLoad, RecoveryKind, RecoveryReport, ShellConfigV1, decode_config, encode_config,
-};
+use crate::recovery::{read_valid, reconcile_staging};
+use crate::{ConfigLoad, RecoveryKind, RecoveryReport, ShellConfigV1, encode_config};
 
 /// Same-directory paths participating in a replace operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicPaths {
-    destination: PathBuf,
-    temporary: PathBuf,
-    backup: PathBuf,
-    backup_temporary: PathBuf,
-    rollback: PathBuf,
+    pub(crate) destination: PathBuf,
+    pub(crate) temporary: PathBuf,
+    pub(crate) backup: PathBuf,
+    pub(crate) backup_temporary: PathBuf,
+    pub(crate) rollback: PathBuf,
 }
 
 impl AtomicPaths {
@@ -60,6 +59,7 @@ impl AtomicWriter for StdAtomicWriter {
         if let Some(parent) = paths.destination.parent() {
             fs::create_dir_all(parent)?;
         }
+        reconcile_staging(paths)?;
         remove_if_exists(&paths.temporary)?;
         write_synced(&paths.temporary, contents)?;
         if paths.destination.exists() {
@@ -198,19 +198,6 @@ impl ConfigStore {
     }
 }
 
-fn read_valid(path: &Path) -> Option<ConfigLoad> {
-    let metadata = fs::metadata(path).ok()?;
-    let size = usize::try_from(metadata.len()).ok()?;
-    if size > crate::MAX_CONFIG_BYTES {
-        return None;
-    }
-    let bytes = fs::read(path).ok()?;
-    match decode_config(&bytes) {
-        load @ (ConfigLoad::Current(_) | ConfigLoad::Migrated { .. }) => Some(load),
-        ConfigLoad::Recovered { .. } => None,
-    }
-}
-
 fn report_of(load: &ConfigLoad) -> Option<RecoveryReport> {
     match load {
         ConfigLoad::Current(_) => None,
@@ -246,7 +233,7 @@ fn sync_file(path: &Path) -> io::Result<()> {
         .sync_all()
 }
 
-fn remove_if_exists(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_if_exists(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

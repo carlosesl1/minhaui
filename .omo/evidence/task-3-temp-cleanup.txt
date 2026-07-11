@@ -1,0 +1,21 @@
+Task 3 stale QA directory cleanup receipt
+Date: 2026-07-11 America/Sao_Paulo
+
+Requested target: %TEMP%\shell-config-backup-34060
+Resolved TEMP root: C:\Users\Carlos\AppData\Local\Temp
+Resolved target: C:\Users\Carlos\AppData\Local\Temp\shell-config-backup-34060
+Verified strict child of TEMP: True
+Existed before cleanup: True
+
+Before:
+- settings.json | 557 bytes | 2026-07-11T21:30:09.0596591Z
+- settings.json.bak.tmp | 557 bytes | 2026-07-11T21:30:09.0596591Z
+- settings.json.tmp | 556 bytes | 2026-07-11T21:30:09.0636560Z
+
+Cleanup operation:
+PowerShell `Remove-Item -LiteralPath $candidate -Recurse -Force` after checking the resolved path was exactly `Join-Path $tempRoot 'shell-config-backup-34060'` and strictly below the resolved TEMP root.
+
+After:
+- Removed target: C:\Users\Carlos\AppData\Local\Temp\shell-config-backup-34060
+- Target exists: False
+- No other temp directory was enumerated or removed.
