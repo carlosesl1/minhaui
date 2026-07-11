@@ -1,30 +1,35 @@
-Task 4 verification receipt
-
-Environment: Windows x86_64-pc-windows-msvc, Rust/Cargo 1.97.0
+Task 4 corrected verification receipt
 
 PASS cargo fmt --all -- --check
 PASS cargo clippy --workspace --all-targets --all-features -- -D warnings
-PASS cargo test --workspace --all-targets --all-features (50 passed, 0 failed)
-PASS cargo test --workspace --all-targets --all-features (fresh second run: 50 passed, 0 failed)
+PASS cargo test --workspace --all-targets --all-features (54 passed, 0 failed)
+PASS cargo test --workspace --all-targets --all-features (second fresh run: 54 passed, 0 failed)
 PASS cargo build --workspace --release --all-features
-PASS cargo deny check
-  advisories ok; bans ok; licenses ok; sources ok
-  non-failing warnings: five configured license allowances were not encountered
+PASS cargo deny check: advisories, bans, licenses, sources ok
 PASS git diff --check
-PASS release hardware window smoke, exit 0
-PASS release forced-WARP window smoke, exit 0
-PASS post-smoke cleanup, zero shell-app processes remaining
 
-Focused coverage:
-- shell-renderer native_slice: 9 passed
-- shell-platform-windows native_slice: 5 passed
-- shell-app showcase_args: 2 passed
-- DIP conversion covers DPI 96, 120, 144, and 192
-- placement covers offset high-DPI and signed secondary work areas
-- lifecycle mapping covers TaskbarCreated, DPI, display, power, timer, close, and destroy
+Focused RED/GREEN coverage:
+- App QA flags: one-shot device loss and lifecycle simulation
+- HRESULT classification: success, DXGI removed/reset, D2D recreate-target
+- Runtime orchestration: generation increments for device loss, display, power resume, TaskbarCreated, and DPI resize
+- DESIGN tokens: exact surface/accent/error values and dock radius 18.0
+- Visible model: seven required states and five representative primitives
+- Geometry: 96/120/144/192 DPI plus signed and offset work areas
 
-Native module line audit after refactor:
-- shell-renderer/src/native.rs: 231
-- shell-renderer/src/native_showcase.rs: 128
-- shell-platform-windows/src/win32.rs: 226
-- shell-platform-windows/src/win32_windowing.rs: 149
+Release runtime matrix:
+- normal hardware: generation 1, two visible HWNDs, exit 0
+- hardware simulated loss: generation 1 -> 2, two visible HWNDs, exit 0
+- forced-WARP simulated loss: generation 1 -> 2, two visible HWNDs, exit 0
+- display/power/taskbar lifecycle simulation: generation 1 -> 4, two visible HWNDs, exit 0
+- final shell-app process count: 0
+
+External native evidence:
+- exact topbar HWND bounds: 10,32,2540,32
+- exact dock HWND bounds: 760,1248,1040,180
+- topbar: 23 sampled unique colors and 5070 non-neutral samples
+- dock: 110 sampled unique colors and 11681 non-neutral samples
+- privacy backdrop HWND after cleanup: 0
+- temporary capture scripts after cleanup: 0
+
+Source-size audit: every Rust source file is <=211 pure LOC; required SAFETY comments are excluded from that measure.
+Unsafe audit classification: Windows FFI/COM Category 8 only; every unsafe block has a local SAFETY contract.

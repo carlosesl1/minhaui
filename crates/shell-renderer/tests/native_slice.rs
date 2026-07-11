@@ -1,8 +1,16 @@
+#[cfg(windows)]
+use shell_renderer::native::{DeviceLossKind, PresentOutcome, classify_present_hresult};
 use shell_renderer::{
-    DeviceEvent, DeviceLifecycle, DipPoint, DipRect, Dpi, PhysicalRect, Rgba8, ShellMetrics,
-    apply_dpi_suggested_rect, dock_showcase_rect, physical_from_dip, premultiply_srgb,
-    rounded_content_hit, topbar_rect,
+    DipPoint, DipRect, Dpi, PhysicalRect, Rgba8, ShellMetrics, ShowcasePrimitive, ShowcaseState,
+    ShowcaseTokens, apply_dpi_suggested_rect, dock_showcase_rect, physical_from_dip,
+    premultiply_srgb, rounded_content_hit, showcase_primitives, topbar_rect,
 };
+#[cfg(windows)]
+use windows::Win32::Foundation::D2DERR_RECREATE_TARGET;
+#[cfg(windows)]
+use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET};
+#[cfg(windows)]
+use windows::core::HRESULT;
 
 #[test]
 fn converts_dip_to_physical_when_monitor_uses_fractional_scale() {
@@ -29,7 +37,7 @@ fn places_shells_in_signed_secondary_work_area() {
     );
     assert_eq!(
         dock_showcase_rect(work, Dpi::from_raw(96), metrics),
-        PhysicalRect::new(-1247, -84, 574, 72)
+        PhysicalRect::new(-1480, -192, 1040, 180)
     );
 }
 
@@ -43,7 +51,7 @@ fn places_shells_in_offset_high_dpi_work_area() {
     );
     assert_eq!(
         dock_showcase_rect(work, Dpi::from_raw(192), metrics),
-        PhysicalRect::new(4065, 832, 1149, 144)
+        PhysicalRect::new(3600, 616, 2080, 360)
     );
 }
 
@@ -55,7 +63,7 @@ fn places_topbar_and_dock_inside_primary_work_area_when_scaled() {
     let topbar = topbar_rect(primary_work_area, monitor_scale, metrics);
     let dock = dock_showcase_rect(primary_work_area, monitor_scale, metrics);
     assert_eq!(topbar, PhysicalRect::new(12, 10, 1896, 40));
-    assert_eq!(dock, PhysicalRect::new(601, 935, 718, 90));
+    assert_eq!(dock, PhysicalRect::new(310, 800, 1300, 225));
 }
 
 #[test]
@@ -81,12 +89,45 @@ fn rejects_points_outside_rounded_content_mask_when_window_is_transparent() {
 }
 
 #[test]
-fn lifecycle_rebuilds_device_resources_after_device_removed() {
-    let ready_lifecycle = DeviceLifecycle::ready();
-    let rebuilding_lifecycle = ready_lifecycle.transition(DeviceEvent::DeviceRemoved);
-    let recovered_lifecycle = rebuilding_lifecycle.transition(DeviceEvent::ResourcesRebuilt);
-    assert_eq!(rebuilding_lifecycle, DeviceLifecycle::Rebuilding);
-    assert_eq!(recovered_lifecycle, DeviceLifecycle::Ready);
+fn showcase_tokens_match_design_contract() {
+    let tokens = ShowcaseTokens::obsidian_glass();
+    assert_eq!(tokens.dock_radius, 18.0);
+    assert_eq!(tokens.surface_base, Rgba8::new(0x11, 0x15, 0x1B, 0xEF));
+    assert_eq!(tokens.accent, Rgba8::new(0x4C, 0x9A, 0xFF, 0xFF));
+    assert_eq!(tokens.error, Rgba8::new(0xFF, 0x73, 0x73, 0xFF));
+}
+
+#[test]
+fn showcase_model_covers_required_states_and_primitives() {
+    let primitives = showcase_primitives();
+    for state in [
+        ShowcaseState::Rest,
+        ShowcaseState::Hover,
+        ShowcaseState::Pressed,
+        ShowcaseState::Active,
+        ShowcaseState::FocusVisible,
+        ShowcaseState::Unavailable,
+        ShowcaseState::Error,
+    ] {
+        assert!(
+            primitives
+                .iter()
+                .any(|primitive| primitive.state() == state)
+        );
+    }
+    for expected in [
+        ShowcasePrimitive::Button,
+        ShowcasePrimitive::Slider,
+        ShowcasePrimitive::DeviceRow,
+        ShowcasePrimitive::CalendarCell,
+        ShowcasePrimitive::Popover,
+    ] {
+        assert!(
+            primitives
+                .iter()
+                .any(|primitive| primitive.kind() == expected)
+        );
+    }
 }
 
 #[test]
@@ -94,4 +135,25 @@ fn premultiplies_tokens_before_rendering_to_composition_swapchain() {
     let surface_token = Rgba8::new(0x11, 0x15, 0x1B, 0xEF);
     let premultiplied_token = premultiply_srgb(surface_token);
     assert_eq!(premultiplied_token, Rgba8::new(0x10, 0x14, 0x19, 0xEF));
+}
+
+#[cfg(windows)]
+#[test]
+fn classifies_present_hresult_for_success_and_recoverable_loss() {
+    assert_eq!(
+        classify_present_hresult(HRESULT(0)),
+        PresentOutcome::Presented
+    );
+    assert_eq!(
+        classify_present_hresult(DXGI_ERROR_DEVICE_REMOVED),
+        PresentOutcome::DeviceLost(DeviceLossKind::Removed)
+    );
+    assert_eq!(
+        classify_present_hresult(DXGI_ERROR_DEVICE_RESET),
+        PresentOutcome::DeviceLost(DeviceLossKind::Reset)
+    );
+    assert_eq!(
+        classify_present_hresult(D2DERR_RECREATE_TARGET),
+        PresentOutcome::DeviceLost(DeviceLossKind::RecreateTarget)
+    );
 }

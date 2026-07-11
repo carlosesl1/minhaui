@@ -1,16 +1,24 @@
-Task 4 native window capture metadata
+Task 4 corrected native-window capture metadata
 
 Artifact: .omo/evidence/task-4-native-window.png
-PNG dimensions: 1200 x 128
-SHA-256: 0434286AD427291EBDB88A1505BD0E4883843D4C9667D2689CC681320CE81FAB
-Captured surface: real Windows DirectComposition topbar and dock showcase after compositor settle
-Visible content: rounded graphite alpha surfaces, cyan indicators, DirectWrite labels
-Topbar label: MINHA UI / SYSTEM READY
-Dock label: LAUNCH SEARCH SPACES CONTROL
-Renderer path at capture: D3D11 hardware, DXGI premultiplied-alpha composition swap chains, Direct2D, DirectWrite, DirectComposition
+Dimensions: 2540 x 260 PNG
+SHA-256: 3978BD5EFF7027E84BC8514F49C1C1CDFFDDCB322BD67642CC0CC70292BF1020
+Capture: exact 2540x32 topbar and 1040x180 dock HWND bounds, composited unscaled on a neutral #20242A canvas
+App pixels: real DirectComposition surfaces captured from the desktop; no app pixel was recreated or rasterized by code
 
-Independent HWND enumeration while the process was alive found exactly two class-matched windows:
-- Minha UI Dock; class MinhaUi.NativeShell.Window.v1; rect 993,1356,574,72; dpi 96; visible true
-- Minha UI Topbar; class MinhaUi.NativeShell.Window.v1; rect 10,32,2540,32; dpi 96; visible true
+Privacy procedure:
+- started a temporary neutral full-screen WinForms backdrop in a separately tracked PowerShell PID
+- raised the backdrop, then the two WS_EX_TOPMOST app HWNDs
+- captured only exact app HWND rectangles with CopyFromScreen
+- stopped the exact app and backdrop PIDs in finally cleanup
+- removed both temporary capture scripts
+- verified the titled backdrop HWND was 0 and shell-app process count was 0
+- visually inspected the final PNG: no personal, browser, terminal, or Codex text is visible
 
-The capture is a crop containing both native surfaces; it is not a mockup or screenshot-backed UI.
+Visual inspection:
+- topbar: Obsidian Glass / Native shell / Resource ready
+- dock radius: exactly 18 DIP
+- states: Rest, Hover, Pressed, Active, Focus visible, Unavailable, Error
+- primitives: Button, Slider, Device row, Calendar cell, Popover
+- topbar pixel probe: 23 sampled unique colors, 5070 non-neutral samples
+- dock pixel probe: 110 sampled unique colors, 11681 non-neutral samples

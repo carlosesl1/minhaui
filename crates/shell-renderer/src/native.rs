@@ -1,4 +1,4 @@
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -7,12 +7,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory,
     ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Factory1,
 };
-use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
-};
-use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
-};
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
@@ -23,12 +18,19 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
 };
 use windows::core::{Interface, Result};
 
+use crate::native_device::create_d3d_device;
+use crate::native_present::present_swap_chain;
 use crate::native_showcase::draw_showcase;
+
+pub use crate::native_present::{
+    DeviceLossKind, PresentOutcome, classify_present_hresult, device_loss_hresult,
+    is_recoverable_hresult,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceKind {
@@ -52,6 +54,7 @@ pub struct CompositionRenderer {
 
 pub struct WindowSurface {
     swap_chain: IDXGISwapChain1,
+    device: ID3D11Device,
     _bitmap: ID2D1Bitmap1,
     _target: IDCompositionTarget,
     _visual: IDCompositionVisual,
@@ -175,19 +178,23 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). All pending operations reference live
         // resources retained in this renderer/surface pair.
         unsafe { self.dcomp.Commit() }?;
-        // SAFETY: Category 8 (FFI boundary). The initialized swap chain is committed
-        // to a live visual and default presentation flags require no extra pointers.
-        let result = unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) };
-        result.ok()?;
-
-        Ok(WindowSurface {
+        let surface = WindowSurface {
             swap_chain,
+            device: self._d3d.clone(),
             _bitmap: bitmap,
             _target: target,
             _visual: visual,
             width,
             height,
-        })
+        };
+        match surface.present()? {
+            PresentOutcome::Presented => Ok(surface),
+            PresentOutcome::DeviceLost(kind) => Err(windows::core::Error::new(
+                device_loss_hresult(kind),
+                format!("recoverable device loss during initial present: {kind:?}"),
+            )),
+            PresentOutcome::Failed(code) => Err(windows::core::Error::from_hresult(code)),
+        }
     }
 }
 
@@ -197,53 +204,7 @@ impl WindowSurface {
         (self.width, self.height)
     }
 
-    pub fn present(&self) -> Result<()> {
-        // SAFETY: Category 8 (FFI boundary). The swap chain is live and the flags are
-        // the documented default presentation mode.
-        unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) }.ok()
+    pub fn present(&self) -> Result<PresentOutcome> {
+        present_swap_chain(&self.swap_chain, &self.device)
     }
-}
-
-fn create_d3d_device(force_warp: bool) -> Result<(ID3D11Device, DeviceKind)> {
-    let requested = if force_warp {
-        DeviceKind::Warp
-    } else {
-        DeviceKind::Hardware
-    };
-    match try_create_d3d(requested) {
-        Ok(device) => Ok((device, requested)),
-        Err(_) if requested == DeviceKind::Hardware => {
-            try_create_d3d(DeviceKind::Warp).map(|device| (device, DeviceKind::Warp))
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn try_create_d3d(kind: DeviceKind) -> Result<ID3D11Device> {
-    let mut device = None;
-    let driver = match kind {
-        DeviceKind::Hardware => D3D_DRIVER_TYPE_HARDWARE,
-        DeviceKind::Warp => D3D_DRIVER_TYPE_WARP,
-    };
-    // SAFETY: Category 8 (FFI boundary). Output storage is valid for the duration of
-    // the call; no adapter/software module is supplied for hardware or WARP drivers.
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            driver,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            None,
-        )
-    }?;
-    device.ok_or_else(|| {
-        windows::core::Error::new(
-            windows::core::HRESULT(-2_147_467_259),
-            "D3D11 returned no device",
-        )
-    })
 }

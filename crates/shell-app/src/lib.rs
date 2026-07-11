@@ -5,6 +5,8 @@ pub struct AppConfig {
     pub mode: AppMode,
     pub qa_exit: Option<QaExit>,
     pub force_warp: bool,
+    pub simulate_device_loss_once: bool,
+    pub simulate_lifecycle_events: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +43,8 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
     let mut mode = AppMode::Bootstrap;
     let mut qa_exit = None;
     let mut force_warp = false;
+    let mut simulate_device_loss_once = false;
+    let mut simulate_lifecycle_events = false;
     let mut index = 1;
 
     while index < args.len() {
@@ -48,6 +52,8 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
             "--showcase" => mode = AppMode::Showcase,
             "--window-smoke" => mode = AppMode::WindowSmoke,
             "--force-warp" => force_warp = true,
+            "--simulate-device-loss-once" => simulate_device_loss_once = true,
+            "--simulate-lifecycle-events" => simulate_lifecycle_events = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -66,6 +72,8 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
         mode,
         qa_exit,
         force_warp,
+        simulate_device_loss_once,
+        simulate_lifecycle_events,
     }
 }
 
@@ -80,6 +88,8 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
     let mut mode = AppMode::Bootstrap;
     let mut qa_exit = None;
     let mut force_warp = false;
+    let mut simulate_device_loss_once = false;
+    let mut simulate_lifecycle_events = false;
     let mut index = 1;
 
     while index < args.len() {
@@ -87,6 +97,8 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
             "--showcase" => mode = AppMode::Showcase,
             "--window-smoke" => mode = AppMode::WindowSmoke,
             "--force-warp" => force_warp = true,
+            "--simulate-device-loss-once" => simulate_device_loss_once = true,
+            "--simulate-lifecycle-events" => simulate_lifecycle_events = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -105,5 +117,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
         mode,
         qa_exit,
         force_warp,
+        simulate_device_loss_once,
+        simulate_lifecycle_events,
     }
 }

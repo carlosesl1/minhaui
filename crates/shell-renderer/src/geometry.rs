@@ -91,8 +91,8 @@ impl Default for ShellMetrics {
             topbar_margin_x_dip: 9.6,
             topbar_margin_top_dip: 8.0,
             topbar_height_dip: 32.0,
-            dock_width_dip: 574.4,
-            dock_height_dip: 72.0,
+            dock_width_dip: 1040.0,
+            dock_height_dip: 180.0,
             dock_margin_bottom_dip: 12.0,
         }
     }

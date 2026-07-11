@@ -1,31 +1,31 @@
-Task 4 scoped code review
+Task 4 corrected code review
 
-Verdict: APPROVE
+Verdict: APPROVE after recovery and evidence corrections
 
-Reviewed scope:
-- shell-app native showcase/window-smoke argument routing
-- shell-platform-windows HWND ownership, styles, placement, DPI, hit testing, lifecycle, timer, and cleanup
-- shell-renderer D3D11 hardware/WARP device creation, DXGI premultiplied-alpha swap chains, Direct2D/DirectWrite drawing, and DirectComposition ownership
-- Task 4 tests and evidence
+The earlier Task 4 review overstated confidence: a pure DeviceLifecycle enum test did not prove runtime recovery, native messages were consumed without rebuilding resources, and the first screenshot contained uncontrolled desktop pixels. Those claims are superseded by this receipt and the corrected artifacts.
 
-Correctness findings:
-- Two independent WS_POPUP HWNDs are created with TOPMOST, TOOLWINDOW, and NOACTIVATE styles.
-- Effective per-window DPI drives DIP-to-physical placement; WM_DPICHANGED accepts the Windows recommended rectangle exactly once.
-- Transparent rounded corners return HTTRANSPARENT and visible surface content returns HTCLIENT.
-- COM resources and HWND/class/timer resources use RAII ownership; the bounded QA path returns through owners instead of terminating the process abruptly.
-- Device creation attempts hardware first and falls back to WARP; forced WARP is separately smoke-tested.
-- DirectComposition content uses BGRA8 premultiplied alpha and flip-sequential composition swap chains.
+Recovery review:
+- WindowSurface::present classifies success, DXGI device removed/reset, and unexpected HRESULTs.
+- D2DERR_RECREATE_TARGET is classified as recoverable at the shared HRESULT boundary.
+- GetDeviceRemovedReason emits only error kind and hexadecimal HRESULT, never user or adapter data.
+- RuntimeSurfaces owns renderer and both HWND-bound surfaces with Options, drops surfaces before renderer, recreates both, redraws, recommits, and continues the message loop.
+- Window callbacks queue typed values through Mutex<VecDeque<PlatformEvent>>; no raw owner pointer, self-reference, or mutable global object is used.
+- Device loss, DPI change, display change, power resume, and TaskbarCreated converge on the same RuntimeOrchestrator rebuild actions.
+- Simulated device loss proves generation 1 to 2 on hardware and WARP. Lifecycle simulation proves generation 1 to 4.
 
-Safety findings:
-- 55 unsafe blocks and 55 local SAFETY comments.
-- All unsafe operations are Category 8 Windows FFI/COM boundaries.
-- No unsafe public API, unsafe impl, unwrap, expect, panic, todo, or unimplemented construct was found in Task 4 crates.
-- Miri is not applicable to Win32 COM/DirectX FFI; strict Clippy plus live hardware and WARP execution provide the practical validation path.
+Visual/design review:
+- ShowcaseTokens is a focused transcription of DESIGN.md semantic colors and geometry.
+- Dock radius is exactly 18.0; raw showcase colors and the earlier 22.0 radius were removed.
+- The dock visibly covers rest, hover, pressed, active, focus-visible, unavailable, and error.
+- Button, slider, device-row, calendar-cell, and popover primitives are represented without nested glass-card material.
+- The corrected native screenshot uses a neutral privacy backdrop and contains no personal text.
 
-Maintainability findings:
-- All native Rust modules are below 250 lines.
-- Renderer showcase drawing is isolated behind a replacement seam from device/surface creation.
-- Callback-heavy Win32 message plumbing is isolated from HWND/resource ownership.
+Remove-ai-slops/overfit review:
+- Tests target public behavior and shared orchestration state, not implementation source text.
+- No deletion-only, tautological, duplicate, or exact-source-mirroring test was added.
+- Recovery uses one event/action path instead of event-specific fake counters or QA-only renderer code.
+- Simulation flags enter the same production rebuild functions as real events and are bounded to explicit QA launches.
+- All Rust source files remain at or below 211 pure LOC; the largest physical file is 255 lines because required local SAFETY contracts are retained.
 
 Residual risk:
-- The smoke environment reported DPI 96 on the active monitor; higher and signed-coordinate placements are verified by deterministic pure tests, not a live multi-monitor hardware rig in this run.
+- Live monitor verification was 96 DPI; DPI 120/144/192 and signed/offset work areas remain deterministic tests.

@@ -4,6 +4,7 @@
 mod color;
 mod geometry;
 mod lifecycle;
+mod showcase_model;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 COM calls are isolated in this module")]
@@ -16,12 +17,29 @@ pub mod native;
 )]
 mod native_showcase;
 
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "DXGI presentation and device-loss diagnostics are isolated here"
+)]
+mod native_present;
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "D3D11 device creation is isolated here")]
+mod native_device;
+
+#[cfg(windows)]
+mod native_showcase_dock;
+
 pub use color::{Rgba8, premultiply_srgb};
 pub use geometry::{
     DipPoint, DipRect, Dpi, PhysicalRect, ShellMetrics, apply_dpi_suggested_rect,
     dock_showcase_rect, physical_from_dip, rounded_content_hit, topbar_rect,
 };
 pub use lifecycle::{DeviceEvent, DeviceLifecycle};
+pub use showcase_model::{
+    ShowcaseItem, ShowcasePrimitive, ShowcaseState, ShowcaseTokens, showcase_primitives,
+};
 
 #[must_use]
 pub const fn crate_identity() -> &'static str {

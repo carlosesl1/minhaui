@@ -1,4 +1,6 @@
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, OnceLock};
 
 use shell_renderer::{
     DipPoint, DipRect, Dpi, PhysicalRect, physical_from_dip, rounded_content_hit,
@@ -9,14 +11,30 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetWindowRect, HTCLIENT,
-    HTTRANSPARENT, MSG, PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
+    DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowRect, HTCLIENT, HTTRANSPARENT, MSG,
+    PBT_APMRESUMEAUTOMATIC, PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
     TranslateMessage, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_NCHITTEST,
     WM_POWERBROADCAST, WM_TIMER,
 };
 use windows::core::Result;
 
+use crate::PlatformEvent;
 use crate::win32::{LIVE_WINDOWS, TASKBAR_CREATED, TIMER_ID};
+
+static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
+
+fn queue_event(event: PlatformEvent) {
+    let queue = EVENT_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()));
+    if let Ok(mut events) = queue.lock() {
+        events.push_back(event);
+    }
+}
+
+fn next_event() -> Option<PlatformEvent> {
+    EVENT_QUEUE
+        .get()
+        .and_then(|queue| queue.lock().ok()?.pop_front())
+}
 
 pub(super) fn primary_work_area() -> Result<PhysicalRect> {
     // SAFETY: Category 8 (FFI boundary). The default-primary flag guarantees a valid
@@ -34,7 +52,9 @@ pub(super) fn primary_work_area() -> Result<PhysicalRect> {
     Ok(rect_from_win32(info.rcWork))
 }
 
-pub(super) fn message_loop() -> Result<()> {
+pub(super) fn message_loop(
+    mut handle_event: impl FnMut(PlatformEvent) -> Result<bool>,
+) -> Result<()> {
     let mut message = MSG::default();
     loop {
         // SAFETY: Category 8 (FFI boundary). `message` is writable for the call and
@@ -50,6 +70,11 @@ pub(super) fn message_loop() -> Result<()> {
                 // SAFETY: Category 8 (FFI boundary). Same initialized-message
                 // invariant; dispatch synchronously invokes the registered callback.
                 unsafe { DispatchMessageW(&message) };
+                while let Some(event) = next_event() {
+                    if !handle_event(event)? {
+                        return Ok(());
+                    }
+                }
             }
         }
     }
@@ -71,6 +96,7 @@ pub(super) unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if message == TASKBAR_CREATED.load(Ordering::Acquire) {
+        queue_event(PlatformEvent::TaskbarCreated);
         return LRESULT(0);
     }
     match message {
@@ -92,19 +118,23 @@ pub(super) unsafe extern "system" fn window_proc(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )
             };
+            queue_event(PlatformEvent::DpiChanged(rect_from_win32(recommended)));
             LRESULT(0)
         }
-        WM_DISPLAYCHANGE | WM_POWERBROADCAST => LRESULT(0),
+        WM_DISPLAYCHANGE => {
+            queue_event(PlatformEvent::DisplayChanged);
+            LRESULT(0)
+        }
+        WM_POWERBROADCAST if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC => {
+            queue_event(PlatformEvent::PowerResumed);
+            LRESULT(1)
+        }
         WM_TIMER if wparam.0 == TIMER_ID => {
-            // SAFETY: Category 8 (FFI boundary). The bounded QA timer is owned by
-            // this thread; posting quit returns control to the RAII owner for cleanup.
-            unsafe { PostQuitMessage(0) };
+            queue_event(PlatformEvent::QaExitRequested);
             LRESULT(0)
         }
         WM_CLOSE => {
-            // SAFETY: Category 8 (FFI boundary). WM_CLOSE supplies the live target
-            // HWND and this is its documented destruction path.
-            let _ = unsafe { DestroyWindow(hwnd) };
+            queue_event(PlatformEvent::CloseRequested);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -113,6 +143,7 @@ pub(super) unsafe extern "system" fn window_proc(
                 // destroyed, so posting quit deterministically terminates this loop.
                 unsafe { PostQuitMessage(0) };
             }
+            queue_event(PlatformEvent::Destroyed);
             LRESULT(0)
         }
         _ => {

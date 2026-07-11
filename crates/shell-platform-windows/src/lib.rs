@@ -15,16 +15,27 @@ mod win32;
 mod win32_windowing;
 
 #[cfg(windows)]
+mod win32_owner;
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 QA timer ownership is isolated here")]
+mod win32_timer;
+
+mod runtime;
+
+pub use runtime::{RuntimeAction, RuntimeOrchestrator};
+#[cfg(windows)]
 pub use win32::run_showcase;
 
-use shell_renderer::{DipPoint, DipRect, rounded_content_hit};
+use shell_renderer::{DipPoint, DipRect, PhysicalRect, rounded_content_hit};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlatformEvent {
     TaskbarCreated,
-    DpiChanged,
+    DpiChanged(PhysicalRect),
     DisplayChanged,
-    PowerBroadcast,
+    PowerResumed,
+    DeviceLost,
     QaExitRequested,
     CloseRequested,
     Destroyed,
@@ -33,9 +44,9 @@ pub enum PlatformEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LifecycleMessage {
     TaskbarCreated(u32),
-    DpiChanged,
+    DpiChanged(PhysicalRect),
     DisplayChanged,
-    PowerBroadcast,
+    PowerResumed,
     Timer,
     Close,
     Destroy,
@@ -62,9 +73,9 @@ pub const fn translate_lifecycle_message(
             Some(PlatformEvent::TaskbarCreated)
         }
         LifecycleMessage::TaskbarCreated(_) => None,
-        LifecycleMessage::DpiChanged => Some(PlatformEvent::DpiChanged),
+        LifecycleMessage::DpiChanged(rect) => Some(PlatformEvent::DpiChanged(rect)),
         LifecycleMessage::DisplayChanged => Some(PlatformEvent::DisplayChanged),
-        LifecycleMessage::PowerBroadcast => Some(PlatformEvent::PowerBroadcast),
+        LifecycleMessage::PowerResumed => Some(PlatformEvent::PowerResumed),
         LifecycleMessage::Timer => Some(PlatformEvent::QaExitRequested),
         LifecycleMessage::Close => Some(PlatformEvent::CloseRequested),
         LifecycleMessage::Destroy => Some(PlatformEvent::Destroyed),

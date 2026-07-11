@@ -13,7 +13,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|value| value.millis().clamp(100, 60_000))
                 .map(u32::try_from)
                 .transpose()?;
-            shell_platform_windows::run_showcase(config.force_warp, qa_exit)?;
+            shell_platform_windows::run_showcase(
+                config.force_warp,
+                qa_exit,
+                config.simulate_device_loss_once,
+                config.simulate_lifecycle_events,
+            )?;
             Ok(())
         }
     }
