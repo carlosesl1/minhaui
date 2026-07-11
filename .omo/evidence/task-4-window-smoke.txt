@@ -1,0 +1,13 @@
+Task 4 release HWND smoke
+
+Command: target\x86_64-pc-windows-msvc\release\shell-app.exe --window-smoke --qa-exit-ms 1200
+WINDOW role=topbar hwnd=0x33f07e6 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32 dpi=96 visible=true renderer=hardware
+WINDOW role=dock hwnd=0x55c08c6 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=993,1356,574,72 dpi=96 visible=true renderer=hardware
+HARDWARE_EXIT=0
+
+Command: target\x86_64-pc-windows-msvc\release\shell-app.exe --window-smoke --force-warp --qa-exit-ms 1200
+WINDOW role=topbar hwnd=0x55d08c6 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32 dpi=96 visible=true renderer=warp
+WINDOW role=dock hwnd=0x34007e6 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=993,1356,574,72 dpi=96 visible=true renderer=warp
+WARP_EXIT=0
+
+Post-smoke process count: PROCESS_REMAINING=0

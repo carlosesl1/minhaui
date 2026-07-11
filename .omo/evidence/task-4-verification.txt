@@ -1,0 +1,30 @@
+Task 4 verification receipt
+
+Environment: Windows x86_64-pc-windows-msvc, Rust/Cargo 1.97.0
+
+PASS cargo fmt --all -- --check
+PASS cargo clippy --workspace --all-targets --all-features -- -D warnings
+PASS cargo test --workspace --all-targets --all-features (50 passed, 0 failed)
+PASS cargo test --workspace --all-targets --all-features (fresh second run: 50 passed, 0 failed)
+PASS cargo build --workspace --release --all-features
+PASS cargo deny check
+  advisories ok; bans ok; licenses ok; sources ok
+  non-failing warnings: five configured license allowances were not encountered
+PASS git diff --check
+PASS release hardware window smoke, exit 0
+PASS release forced-WARP window smoke, exit 0
+PASS post-smoke cleanup, zero shell-app processes remaining
+
+Focused coverage:
+- shell-renderer native_slice: 9 passed
+- shell-platform-windows native_slice: 5 passed
+- shell-app showcase_args: 2 passed
+- DIP conversion covers DPI 96, 120, 144, and 192
+- placement covers offset high-DPI and signed secondary work areas
+- lifecycle mapping covers TaskbarCreated, DPI, display, power, timer, close, and destroy
+
+Native module line audit after refactor:
+- shell-renderer/src/native.rs: 231
+- shell-renderer/src/native_showcase.rs: 128
+- shell-platform-windows/src/win32.rs: 226
+- shell-platform-windows/src/win32_windowing.rs: 149

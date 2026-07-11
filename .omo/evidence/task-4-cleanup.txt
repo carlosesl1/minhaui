@@ -1,0 +1,9 @@
+Task 4 cleanup receipt
+
+Hardware release smoke exit: 0
+Forced-WARP release smoke exit: 0
+shell-app processes after both bounded runs: 0
+QA timer lifecycle: PostQuitMessage returns control to NativeOwner
+Drop order: surfaces, renderer, timer, topbar HWND, dock HWND, window class
+Temporary or crash fixture directories created by Task 4: none
+Outstanding native window handles after process exit: none

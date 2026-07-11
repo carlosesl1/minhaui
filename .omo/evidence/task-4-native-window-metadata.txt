@@ -1,0 +1,16 @@
+Task 4 native window capture metadata
+
+Artifact: .omo/evidence/task-4-native-window.png
+PNG dimensions: 1200 x 128
+SHA-256: 0434286AD427291EBDB88A1505BD0E4883843D4C9667D2689CC681320CE81FAB
+Captured surface: real Windows DirectComposition topbar and dock showcase after compositor settle
+Visible content: rounded graphite alpha surfaces, cyan indicators, DirectWrite labels
+Topbar label: MINHA UI / SYSTEM READY
+Dock label: LAUNCH SEARCH SPACES CONTROL
+Renderer path at capture: D3D11 hardware, DXGI premultiplied-alpha composition swap chains, Direct2D, DirectWrite, DirectComposition
+
+Independent HWND enumeration while the process was alive found exactly two class-matched windows:
+- Minha UI Dock; class MinhaUi.NativeShell.Window.v1; rect 993,1356,574,72; dpi 96; visible true
+- Minha UI Topbar; class MinhaUi.NativeShell.Window.v1; rect 10,32,2540,32; dpi 96; visible true
+
+The capture is a crop containing both native surfaces; it is not a mockup or screenshot-backed UI.

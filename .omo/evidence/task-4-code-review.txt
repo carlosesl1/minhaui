@@ -1,0 +1,31 @@
+Task 4 scoped code review
+
+Verdict: APPROVE
+
+Reviewed scope:
+- shell-app native showcase/window-smoke argument routing
+- shell-platform-windows HWND ownership, styles, placement, DPI, hit testing, lifecycle, timer, and cleanup
+- shell-renderer D3D11 hardware/WARP device creation, DXGI premultiplied-alpha swap chains, Direct2D/DirectWrite drawing, and DirectComposition ownership
+- Task 4 tests and evidence
+
+Correctness findings:
+- Two independent WS_POPUP HWNDs are created with TOPMOST, TOOLWINDOW, and NOACTIVATE styles.
+- Effective per-window DPI drives DIP-to-physical placement; WM_DPICHANGED accepts the Windows recommended rectangle exactly once.
+- Transparent rounded corners return HTTRANSPARENT and visible surface content returns HTCLIENT.
+- COM resources and HWND/class/timer resources use RAII ownership; the bounded QA path returns through owners instead of terminating the process abruptly.
+- Device creation attempts hardware first and falls back to WARP; forced WARP is separately smoke-tested.
+- DirectComposition content uses BGRA8 premultiplied alpha and flip-sequential composition swap chains.
+
+Safety findings:
+- 55 unsafe blocks and 55 local SAFETY comments.
+- All unsafe operations are Category 8 Windows FFI/COM boundaries.
+- No unsafe public API, unsafe impl, unwrap, expect, panic, todo, or unimplemented construct was found in Task 4 crates.
+- Miri is not applicable to Win32 COM/DirectX FFI; strict Clippy plus live hardware and WARP execution provide the practical validation path.
+
+Maintainability findings:
+- All native Rust modules are below 250 lines.
+- Renderer showcase drawing is isolated behind a replacement seam from device/surface creation.
+- Callback-heavy Win32 message plumbing is isolated from HWND/resource ownership.
+
+Residual risk:
+- The smoke environment reported DPI 96 on the active monitor; higher and signed-coordinate placements are verified by deterministic pure tests, not a live multi-monitor hardware rig in this run.
