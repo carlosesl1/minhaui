@@ -35,7 +35,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Model monitors, dock items, running indicators, topbar modules, popovers, autohide, taskbar policy, accessibility and performance presets. Use atomic writes, schema migrations, validation, safe defaults, and checksum-aware local theme import/export.
   - Verify malformed/truncated/old/future configs recover without panic; round trips and migrations pass. Manual QA: CLI fixture report `.omo/evidence/task-3-config-matrix.txt`.
 
-- [ ] 4. Prove a native transparent shell window and renderer vertical slice
+- [x] 4. Prove a native transparent shell window and renderer vertical slice
   - Depends on: 2, 3. Files: `crates/shell-renderer/**`, `crates/shell-platform-windows/src/windowing/**`, `crates/shell-app/**`.
   - Create per-monitor DPI-aware, click-correct transparent dock/topbar windows using documented Win32 plus D3D11/DirectComposition; handle device loss, display changes, Explorer restart, sleep/resume, and software-safe fallback.
   - Render a token-driven primitive showcase before feature UI. Verify unit seams plus Windows integration build. Manual QA via real desktop: `.omo/evidence/task-4-native-window.png` and metadata.
