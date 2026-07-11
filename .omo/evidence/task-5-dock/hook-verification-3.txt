@@ -1,0 +1,390 @@
+Hook verification 3 for Task 5 partial claim
+Started: 2026-07-11T20:59:39.7918030-03:00
+
+===== git-head =====
+COMMAND: git.exe rev-parse --short HEAD
+--- stdout ---
+7675e67
+
+EXIT_CODE: 0
+
+===== git-log =====
+COMMAND: git.exe log --oneline -4
+--- stdout ---
+7675e67 chore(dock): record second hook verification evidence
+10004a5 chore(dock): record hook verification evidence
+2c0dbca docs(dock): record task 5 evidence limits
+ab37683 feat(dock): wire functional native dock loop
+
+EXIT_CODE: 0
+
+===== git-status-before =====
+COMMAND: git.exe status --short
+--- stdout ---
+?? .omo/evidence/task-5-dock/hook-verification-3.txt
+
+EXIT_CODE: 0
+
+===== fmt-check =====
+COMMAND: C:\Users\Carlos\.cargo\bin\cargo.exe fmt --all -- --check
+EXIT_CODE: 0
+
+===== clippy =====
+COMMAND: C:\Users\Carlos\.cargo\bin\cargo.exe clippy --workspace --all-targets -- -D warnings
+--- stderr ---
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+
+EXIT_CODE: 0
+
+===== workspace-tests =====
+COMMAND: C:\Users\Carlos\.cargo\bin\cargo.exe test --workspace
+--- stdout ---
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crate_reports_identity_when_queried ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test parses_forced_warp_showcase ... ok
+test parses_lifecycle_event_simulation ... ok
+test parses_showcase_with_bounded_qa_exit ... ok
+test parses_one_shot_device_loss_simulation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test defaults_are_safe_and_valid ... ok
+test future_schema_is_rejected_explicitly ... ok
+test malformed_and_truncated_input_recovers_to_safe_defaults ... ok
+test oversized_input_is_rejected_before_json_parsing ... ok
+test v0_fixture_migrates_to_v1 ... ok
+test current_schema_roundtrips ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crate_reports_identity_when_queried ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test interrupted_atomic_write_preserves_previous_valid_config ... ok
+test missing_primary_reconciles_completed_backup_candidate ... ok
+test missing_primary_restores_previous_before_next_persist ... ok
+test staged_temp_is_promoted_when_it_is_the_only_valid_candidate ... ok
+test corrupt_primary_recovers_from_preserved_backup ... ok
+test existing_primary_wins_over_stale_rollback_and_cleans_staging ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 2 tests
+test arbitrary_valid_configs_roundtrip ... ok
+test arbitrary_valid_themes_roundtrip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 4 tests
+test oversized_theme_is_rejected ... ok
+test traversal_and_external_asset_references_are_rejected ... ok
+test checksum_tampering_is_rejected ... ok
+test theme_export_import_roundtrips ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crate_reports_identity_when_queried ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test arbitrary_event_sequences_never_break_state_invariants ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+
+running 8 tests
+test defaults_are_safe_when_state_is_created ... ok
+test display_change_and_safe_mode_choose_a_primary_surface ... ok
+test launch_focus_minimize_sequence_emits_typed_intents ... ok
+test empty_display_change_is_rejected_without_mutating_state ... ok
+test pin_reorder_unpin_sequence_preserves_unique_order ... ok
+test unknown_dock_item_is_an_error ... ok
+test repeated_hide_is_an_explicit_noop ... ok
+test opening_a_popover_replaces_the_previous_popover ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test dragging_an_item_reorders_the_persisted_state ... ok
+test autohide_reveal_zone_and_alignment_are_runtime_configurable ... ok
+test context_menu_and_file_drop_pin_existing_windows_without_private_shell_hooks ... ok
+test primary_click_queues_launch_focus_or_minimize_without_waiting_for_animation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crate_reports_identity_when_queried ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test classifies_transparent_rounded_corners_as_click_through ... ok
+test classifies_visible_shell_content_as_interactive ... ok
+test translates_taskbarcreated_to_typed_lifecycle_event ... ok
+test maps_native_lifecycle_messages_to_typed_events ... ok
+test runtime_orchestrator_increments_generation_for_real_rebuild_triggers ... ok
+test leaves_unknown_messages_at_win32_boundary ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test alignment_changes_the_visual_origin_inside_the_same_surface ... ok
+test lays_out_apps_separators_and_running_indicators_when_center_aligned ... ok
+test magnifies_only_the_hover_neighborhood_without_changing_input_order ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crate_reports_identity_when_queried ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test applies_wm_dpichanged_suggested_rect_without_rescaling_twice ... ok
+test classifies_present_hresult_for_success_and_recoverable_loss ... ok
+test converts_dip_to_physical_at_supported_dpi_scales ... ok
+test converts_dip_to_physical_when_monitor_uses_fractional_scale ... ok
+test places_shells_in_offset_high_dpi_work_area ... ok
+test places_shells_in_signed_secondary_work_area ... ok
+test places_topbar_and_dock_inside_primary_work_area_when_scaled ... ok
+test premultiplies_tokens_before_rendering_to_composition_swapchain ... ok
+test rejects_points_outside_rounded_content_mask_when_window_is_transparent ... ok
+test showcase_model_covers_required_states_and_primitives ... ok
+test showcase_tokens_match_design_contract ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crate_reports_identity_when_queried ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+--- stderr ---
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+[1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_app-d9b6485562761e60.exe)
+[1m[92m     Running[0m unittests src\main.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_app-470d4a5969347ec5.exe)
+[1m[92m     Running[0m tests\identity.rs (target\x86_64-pc-windows-msvc\debug\deps\identity-b2d928c0e53a8161.exe)
+[1m[92m     Running[0m tests\showcase_args.rs (target\x86_64-pc-windows-msvc\debug\deps\showcase_args-129e9e718762cdcf.exe)
+[1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_config-7f3b3da1a70644d7.exe)
+[1m[92m     Running[0m tests\config.rs (target\x86_64-pc-windows-msvc\debug\deps\config-694ac1a593631d52.exe)
+[1m[92m     Running[0m tests\identity.rs (target\x86_64-pc-windows-msvc\debug\deps\identity-f0408e866a3c5de0.exe)
+[1m[92m     Running[0m tests\persistence.rs (target\x86_64-pc-windows-msvc\debug\deps\persistence-86b73bf59d2f6a75.exe)
+[1m[92m     Running[0m tests\properties.rs (target\x86_64-pc-windows-msvc\debug\deps\properties-0be616d63e350158.exe)
+[1m[92m     Running[0m tests\theme.rs (target\x86_64-pc-windows-msvc\debug\deps\theme-a15a22d3433ec074.exe)
+[1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_core-1c095d657421828e.exe)
+[1m[92m     Running[0m tests\identity.rs (target\x86_64-pc-windows-msvc\debug\deps\identity-a5b7158c6600604a.exe)
+[1m[92m     Running[0m tests\properties.rs (target\x86_64-pc-windows-msvc\debug\deps\properties-e4bc317c9f8edb2d.exe)
+[1m[92m     Running[0m tests\reducer.rs (target\x86_64-pc-windows-msvc\debug\deps\reducer-df07b88f14e27725.exe)
+[1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_platform_windows-e1152dc8387d1f4f.exe)
+[1m[92m     Running[0m tests\dock_controller.rs (target\x86_64-pc-windows-msvc\debug\deps\dock_controller-4b9596974ecef42e.exe)
+[1m[92m     Running[0m tests\identity.rs (target\x86_64-pc-windows-msvc\debug\deps\identity-7253e728ad3447f9.exe)
+[1m[92m     Running[0m tests\native_slice.rs (target\x86_64-pc-windows-msvc\debug\deps\native_slice-b303cd903b979eb5.exe)
+[1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_renderer-a06b1c8099a728b3.exe)
+[1m[92m     Running[0m tests\dock_scene.rs (target\x86_64-pc-windows-msvc\debug\deps\dock_scene-190f1f62f726e7e6.exe)
+[1m[92m     Running[0m tests\identity.rs (target\x86_64-pc-windows-msvc\debug\deps\identity-2e76cc8b8282fdd3.exe)
+[1m[92m     Running[0m tests\native_slice.rs (target\x86_64-pc-windows-msvc\debug\deps\native_slice-2b056784d955dedb.exe)
+[1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_watchdog-9f36d07e67e85b37.exe)
+[1m[92m     Running[0m unittests src\main.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_watchdog-26e1155e54200225.exe)
+[1m[92m     Running[0m tests\identity.rs (target\x86_64-pc-windows-msvc\debug\deps\identity-bf3624027fe783e7.exe)
+[1m[92m   Doc-tests[0m shell_app
+[1m[92m   Doc-tests[0m shell_config
+[1m[92m   Doc-tests[0m shell_core
+[1m[92m   Doc-tests[0m shell_platform_windows
+[1m[92m   Doc-tests[0m shell_renderer
+[1m[92m   Doc-tests[0m shell_watchdog
+
+EXIT_CODE: 0
+
+===== release-build =====
+COMMAND: C:\Users\Carlos\.cargo\bin\cargo.exe build --workspace --release
+--- stderr ---
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 0.11s
+
+EXIT_CODE: 0
+
+===== manual-qa-metadata =====
+COMMAND: powershell -NoProfile -Command Get-Content .omo\evidence\task-5-dock\manual-qa-metadata.json
+{
+    "scenario":  "release shell-app --showcase --force-warp --qa-exit-ms 2500; crop topbar/dock window rects only after functional dock labels fix",
+    "exe":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\target\\x86_64-pc-windows-msvc\\release\\shell-app.exe",
+    "processId":  8044,
+    "exitCode":  0,
+    "processAliveAfterExit":  false,
+    "windows":  [
+                    {
+                        "role":  "dock",
+                        "hwnd":  "0x100940",
+                        "x":  760,
+                        "y":  1248,
+                        "w":  1040,
+                        "h":  180
+                    },
+                    {
+                        "role":  "topbar",
+                        "hwnd":  "0x310acc",
+                        "x":  10,
+                        "y":  32,
+                        "w":  2540,
+                        "h":  32
+                    }
+                ],
+    "hwndCleanup":  [
+                        {
+                            "role":  "dock",
+                            "hwnd":  "0x100940",
+                            "isWindowAfterExit":  false
+                        },
+                        {
+                            "role":  "topbar",
+                            "hwnd":  "0x310acc",
+                            "isWindowAfterExit":  false
+                        }
+                    ],
+    "artifacts":  [
+                      "topbar-functional.png",
+                      "dock-functional.png",
+                      "manual-qa-stdout.txt",
+                      "manual-qa-stderr.txt",
+                      "manual-qa-metadata.json"
+                  ]
+}
+
+EXIT_CODE: 0
+
+===== doneclaim-limitations =====
+COMMAND: powershell -NoProfile -Command Get-Content .omo\evidence\task-5-dock\doneclaim.md | Select-String -Pattern "Status:|Known limitations|Running-window|Autohide|Context menu|Manual QA" -Context 0,1 | ForEach-Object { $_.Line }
+Status: partial, not full Task 5 completion.
+- Pure `DockController` for click activation, drag reorder, context command, file drop pinning, autohide/reveal state, and detached `DockAnimator`.
+- Manual QA invocation: `target\x86_64-pc-windows-msvc\release\shell-app.exe --showcase --force-warp --qa-exit-ms 2500`.
+- Manual QA artifacts: `dock-functional.png`, `topbar-functional.png`, `manual-qa-stdout.txt`, `manual-qa-stderr.txt`, `manual-qa-metadata.json`.
+Known limitations blocking full Task 5 completion:
+- Running-window discovery/synchronization is not implemented; dock running indicators do not yet track external process/window lifecycle.
+- Autohide currently updates reducer/controller state but does not physically shrink/reposition/hide the HWND into a reveal-zone-only surface.
+- Context menu path is a right-click command bridge, not a native popup menu with selectable commands.
+- Manual QA covered deterministic launch/render/cleanup screenshots, not scripted real mouse/drag/drop interaction playback.
+
+EXIT_CODE: 0
+
+===== evidence-inventory =====
+COMMAND: powershell -NoProfile -Command Get-ChildItem .omo\evidence\task-5-dock | Select-Object Name,Length | Format-Table -AutoSize
+
+Name                    Length
+----                    ------
+dock-functional.png       3488
+doneclaim.md              2110
+hook-verification-1.txt  12637
+hook-verification-2.txt  14033
+hook-verification-3.txt  15216
+manual-qa-metadata.json   1738
+manual-qa-stderr.txt         5
+manual-qa-stdout.txt       338
+topbar-functional.png     2769
+
+
+
+EXIT_CODE: 0
+
+===== process-clean-check =====
+COMMAND: powershell -NoProfile -Command Get-Process shell-app,shell-watchdog,cargo,rustc,clippy-driver -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path | Format-Table -AutoSize
+
+EXIT_CODE: 0
+
+JUDGMENT: verification passed for the partial Task 5 claim only. Full Task 5 remains blocked by limitations listed in doneclaim.md.
+Finished: 2026-07-11T20:59:43.1914045-03:00
