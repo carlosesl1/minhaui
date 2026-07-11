@@ -1,0 +1,7 @@
+{
+  "version": 0,
+  "autohide": true,
+  "taskbar": "auto_hide",
+  "reduced_motion": true,
+  "performance": "battery_saver"
+}

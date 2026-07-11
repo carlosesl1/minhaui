@@ -1,0 +1,30 @@
+Task 3 TDD RED evidence
+Date: 2026-07-11 America/Sao_Paulo
+Worktree: C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1
+
+Command:
+$env:PATH="$env:USERPROFILE\.cargo\bin;$env:PATH"; cargo test -p shell-core --test reducer -p shell-config --test config
+
+Exit code: 101
+
+Observed failure (ANSI removed, excerpt preserving compiler diagnostics):
+Compiling shell-core v0.1.0 (...\crates\shell-core)
+Compiling shell-config v0.1.0 (...\crates\shell-config)
+error[E0432]: unresolved imports `shell_core::reduce`, `shell_core::AppId`, `shell_core::DockItem`, `shell_core::DockItemId`, `shell_core::Effect`, `shell_core::Monitor`, `shell_core::MonitorId`, `shell_core::NoOpReason`, `shell_core::Popover`, `shell_core::RunningState`, `shell_core::ShellEvent`, `shell_core::ShellState`, `shell_core::TaskbarPolicy`, `shell_core::TransitionError`, `shell_core::TransitionOutcome`, `shell_core::WindowId`
+ --> crates\shell-core\tests\reducer.rs:2:5
+  |
+2 |     reduce, AppId, DockItem, DockItemId, Effect, Monitor, MonitorId, NoOpReason, Popover,
+  |     ^^^^^^  ^^^^^  ^^^^^^^^  ^^^^^^^^^^  ^^^^^^  ^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^ no `Popover` in the root
+
+error[E0432]: unresolved imports `shell_config::decode_config`, `shell_config::encode_config`, `shell_config::ConfigLoad`, `shell_config::PerformancePreset`, `shell_config::RecoveryKind`, `shell_config::ShellConfigV1`, `shell_config::MAX_CONFIG_BYTES`
+ --> crates\shell-config\tests\config.rs:2:5
+  |
+2 |     decode_config, encode_config, ConfigLoad, PerformancePreset, RecoveryKind, ShellConfigV1,
+  |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^ no `ShellConfigV1` in the root
+
+error: could not compile `shell-core` (test "reducer") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `shell-config` (test "config") due to 2 previous errors
+
+Why this is the expected RED failure:
+The behavioral tests compile against the intended public domain/config APIs, but the baseline crates expose only `crate_identity`. The compiler therefore fails specifically because the requested state reducer and versioned configuration behavior do not exist yet; dependency resolution and both crate baselines compiled successfully first.

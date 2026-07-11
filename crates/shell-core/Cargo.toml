@@ -5,5 +5,12 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
