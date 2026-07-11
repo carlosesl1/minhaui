@@ -25,7 +25,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Define original visual tokens, typography (Windows-native), spacing, glass/elevation, primitives/states, motion/reduced-motion, DPI rules, keyboard/focus behavior, personas, and accepted debt.
   - Verify: links resolve and design-token/state tables are complete. Manual QA: contact sheet at `.omo/evidence/task-1-reference-contact-sheet.png`.
 
-- [ ] 2. Bootstrap reproducible Rust workspace and quality gates
+- [x] 2. Bootstrap reproducible Rust workspace and quality gates
   - Depends on: 1. Files: `Cargo.toml`, `rust-toolchain.toml`, `.cargo/config.toml`, `rustfmt.toml`, `clippy.toml`, `.gitignore`, `README.md`, `crates/*/Cargo.toml`, `.github/workflows/ci.yml`.
   - Pin stable Rust/MSVC target; deny warnings; configure format, clippy, tests, dependency/license audit, panic/crash policy, and Win10 minimum contract.
   - Verify: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. Manual QA: toolchain transcript `.omo/evidence/task-2-toolchain.txt`.
