@@ -22,12 +22,14 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
             NativeWindowId::new(100),
             NativeWindowId::new(101),
             NativeWindowId::new(102),
+            NativeWindowId::new(103),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
             NativeWindowId::new(200),
             NativeWindowId::new(201),
             NativeWindowId::new(202),
+            NativeWindowId::new(203),
         ),
     ];
     let mut first = DockController::new(state("first.exe")?, DockRuntimeConfig::default())?;
@@ -66,18 +68,26 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
             NativeWindowId::new(100),
             NativeWindowId::new(101),
             NativeWindowId::new(102),
+            NativeWindowId::new(103),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
             NativeWindowId::new(200),
             NativeWindowId::new(201),
             NativeWindowId::new(202),
+            NativeWindowId::new(203),
         ),
     ];
 
     // When: Windows sends a global display-change style event.
     let route = route_native_event_to_slot(&slots, NativeEventTarget::Broadcast);
+    let settings_route =
+        route_native_event_to_slot(&slots, NativeEventTarget::Window(NativeWindowId::new(203)));
 
     // Then: the shell manager handles it as a broadcast instead of slot mutation.
     assert_eq!(route, NativeRouteDecision::Broadcast);
+    assert_eq!(
+        settings_route,
+        NativeRouteDecision::Slot(MonitorId::new(20))
+    );
 }

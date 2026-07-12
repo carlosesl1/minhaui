@@ -1,7 +1,7 @@
 use shell_core::Popover;
 use shell_platform_windows::{
-    DefaultPopoverDataProvider, PopoverController, PopoverDataError, PopoverDataProvider,
-    PopoverKey, PopoverPayload, QueuedPopoverAction, SessionAction,
+    DefaultPopoverDataProvider, PopoverAction, PopoverController, PopoverDataError,
+    PopoverDataProvider, PopoverKey, PopoverPayload, QueuedPopoverAction, SessionAction,
 };
 use shell_renderer::{
     DipRect, Dpi, PhysicalRect, PopoverContentState, layout_popover_scene, popover_anchor_rect,
@@ -34,6 +34,27 @@ fn popover_keyboard_navigation_and_confirmation_are_shared_across_modules()
         second,
         vec![QueuedPopoverAction::TypedIntent(
             shell_platform_windows::PopoverAction::ConfirmSession(SessionAction::SignOut)
+        )]
+    );
+    Ok(())
+}
+
+#[test]
+fn system_menu_settings_activation_emits_open_settings_intent()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: the system menu is opened through the default provider.
+    let provider = DefaultPopoverDataProvider::offline();
+    let mut controller = PopoverController::new();
+    controller.open(Popover::SystemMenu, &provider)?;
+
+    // When: the focused settings row is activated.
+    let actions = controller.handle_key(PopoverKey::Activate);
+
+    // Then: the native action layer can open the settings surface.
+    assert_eq!(
+        actions,
+        vec![QueuedPopoverAction::TypedIntent(
+            PopoverAction::OpenSettings
         )]
     );
     Ok(())

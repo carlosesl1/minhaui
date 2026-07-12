@@ -12,6 +12,7 @@ pub enum PopoverKey {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PopoverAction {
+    OpenSettings,
     SetVolume(u8),
     SelectAudioDevice(String),
     MediaPrevious,

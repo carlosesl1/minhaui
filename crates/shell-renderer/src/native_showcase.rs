@@ -11,6 +11,7 @@ use windows::core::{Result, w};
 use crate::native::{ShellScenes, ShowcaseRole};
 use crate::native_showcase_dock::{draw_dock_states, draw_functional_dock};
 use crate::native_showcase_popover::{PopoverBrushes, draw_functional_popover};
+use crate::native_showcase_settings::{SettingsBrushes, draw_functional_settings};
 use crate::native_showcase_topbar::{TopbarBrushes, draw_functional_topbar};
 use crate::{Rgba8, ShowcaseTokens};
 
@@ -39,6 +40,7 @@ pub(crate) fn draw_showcase(
         ShowcaseRole::Dock => tokens.dock_radius,
         ShowcaseRole::Topbar => 12.0,
         ShowcaseRole::Popover => tokens.popover_radius,
+        ShowcaseRole::Settings => tokens.popover_radius,
     };
     // SAFETY: Category 8 (FFI boundary). A live target is installed and all draw
     // calls finish before the owned brushes are dropped.
@@ -97,6 +99,23 @@ pub(crate) fn draw_showcase(
                     secondary: &secondary,
                     accent: &accent,
                     error: &error,
+                },
+            );
+        }
+    } else if role == ShowcaseRole::Settings {
+        if let Some(scene) = scenes.settings {
+            draw_functional_settings(
+                context,
+                &text_format,
+                width,
+                scene,
+                SettingsBrushes {
+                    raised: &raised,
+                    hover: &hover,
+                    selected: &selected,
+                    primary: &primary,
+                    secondary: &secondary,
+                    accent: &accent,
                 },
             );
         }

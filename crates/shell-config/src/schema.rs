@@ -7,7 +7,10 @@ use shell_core::{
 };
 use thiserror::Error;
 
-use crate::MAX_CONFIG_BYTES;
+use crate::{
+    AdvancedSettings, AppearanceSettings, BehaviorSettings, DockSettings, MAX_CONFIG_BYTES,
+    TopbarSettings,
+};
 
 const SCHEMA_VERSION: u16 = 1;
 
@@ -22,6 +25,16 @@ pub struct ShellConfigV1 {
     performance: PerformancePreset,
     dock_items: Vec<DockItem>,
     topbar_modules: Vec<TopbarModule>,
+    #[serde(default)]
+    dock: DockSettings,
+    #[serde(default)]
+    topbar: TopbarSettings,
+    #[serde(default)]
+    behavior: BehaviorSettings,
+    #[serde(default)]
+    appearance: AppearanceSettings,
+    #[serde(default)]
+    advanced: AdvancedSettings,
 }
 
 impl Default for ShellConfigV1 {
@@ -34,6 +47,11 @@ impl Default for ShellConfigV1 {
             performance: PerformancePreset::Balanced,
             dock_items: Vec::new(),
             topbar_modules: default_topbar(),
+            dock: DockSettings::default(),
+            topbar: TopbarSettings::default(),
+            behavior: BehaviorSettings::default(),
+            appearance: AppearanceSettings::default(),
+            advanced: AdvancedSettings::default(),
         }
     }
 }
@@ -53,6 +71,9 @@ impl ShellConfigV1 {
         if !all_unique(self.topbar_modules.iter().map(|module| module.kind())) {
             return Err(ConfigError::DuplicateTopbarModule);
         }
+        if !self.dock.validate() || !self.appearance.validate() {
+            return Err(ConfigError::InvalidSettings);
+        }
         Ok(())
     }
 
@@ -61,6 +82,20 @@ impl ShellConfigV1 {
     pub fn with_autohide(&self, enabled: bool) -> Self {
         let mut config = self.clone();
         config.autohide = enabled;
+        config
+    }
+
+    #[must_use]
+    pub fn with_dock(&self, dock: DockSettings) -> Self {
+        let mut config = self.clone();
+        config.dock = dock;
+        config
+    }
+
+    #[must_use]
+    pub fn with_appearance(&self, appearance: AppearanceSettings) -> Self {
+        let mut config = self.clone();
+        config.appearance = appearance;
         config
     }
 
@@ -93,6 +128,26 @@ impl ShellConfigV1 {
     #[must_use]
     pub fn topbar_modules(&self) -> &[TopbarModule] {
         &self.topbar_modules
+    }
+    #[must_use]
+    pub const fn dock(&self) -> &DockSettings {
+        &self.dock
+    }
+    #[must_use]
+    pub const fn topbar(&self) -> &TopbarSettings {
+        &self.topbar
+    }
+    #[must_use]
+    pub const fn behavior(&self) -> BehaviorSettings {
+        self.behavior
+    }
+    #[must_use]
+    pub const fn appearance(&self) -> &AppearanceSettings {
+        &self.appearance
+    }
+    #[must_use]
+    pub const fn advanced(&self) -> AdvancedSettings {
+        self.advanced
     }
 }
 
@@ -235,6 +290,11 @@ impl ConfigV0 {
             performance: self.performance,
             dock_items: Vec::new(),
             topbar_modules: default_topbar(),
+            dock: DockSettings::default(),
+            topbar: TopbarSettings::default(),
+            behavior: BehaviorSettings::default(),
+            appearance: AppearanceSettings::default(),
+            advanced: AdvancedSettings::default(),
         }
     }
 }
@@ -276,6 +336,8 @@ pub enum ConfigError {
     /// Top-bar module kinds were not unique.
     #[error("topbar module kinds must be unique")]
     DuplicateTopbarModule,
+    #[error("settings value is outside supported bounds")]
+    InvalidSettings,
     /// JSON encoding failed.
     #[error("configuration JSON error: {0}")]
     Json(serde_json::Error),

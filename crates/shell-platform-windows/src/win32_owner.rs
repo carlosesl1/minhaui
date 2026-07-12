@@ -16,7 +16,7 @@ use crate::win32_window::OwnedWindow;
 use crate::win32_windowing::window_work_area;
 use crate::{
     DefaultPopoverDataProvider, DockController, PlatformEvent, PopoverController, RuntimeAction,
-    RuntimeOrchestrator, TopbarController,
+    RuntimeOrchestrator, SettingsController, TopbarController,
 };
 
 pub(super) struct RuntimeSurfaces {
@@ -25,23 +25,30 @@ pub(super) struct RuntimeSurfaces {
     pub(super) topbar: Option<WindowSurface>,
     pub(super) dock: Option<WindowSurface>,
     pub(super) popover: Option<WindowSurface>,
+    pub(super) settings: Option<WindowSurface>,
     preview_thumbnail: Option<DwmPreviewThumbnail>,
     pub(super) fullscreen_suppressed: bool,
     orchestration: RuntimeOrchestrator,
     pub(super) dock_controller: DockController,
     pub(super) topbar_controller: TopbarController,
     pub(super) popover_controller: PopoverController,
+    pub(super) settings_controller: SettingsController,
     pub(super) popover_provider: DefaultPopoverDataProvider<crate::OfflineWeatherProvider>,
     pub(super) topbar_status: TopbarStatusReader,
     pub(super) last_topbar_poll_ms: u64,
 }
 
+pub(super) struct SurfaceWindows<'a> {
+    pub(super) topbar: &'a OwnedWindow,
+    pub(super) dock: &'a OwnedWindow,
+    pub(super) popover: &'a OwnedWindow,
+    pub(super) settings: &'a OwnedWindow,
+}
+
 impl RuntimeSurfaces {
     pub(super) fn new(
         force_warp: bool,
-        topbar: &OwnedWindow,
-        dock: &OwnedWindow,
-        popover: &OwnedWindow,
+        windows: SurfaceWindows<'_>,
         dock_controller: DockController,
         topbar_controller: TopbarController,
     ) -> Result<Self> {
@@ -51,17 +58,24 @@ impl RuntimeSurfaces {
             topbar: None,
             dock: None,
             popover: None,
+            settings: None,
             preview_thumbnail: None,
             fullscreen_suppressed: false,
             orchestration: RuntimeOrchestrator::new(),
             dock_controller,
             topbar_controller,
             popover_controller: PopoverController::new(),
+            settings_controller: SettingsController::new(shell_config::ShellConfigV1::default()),
             popover_provider: DefaultPopoverDataProvider::offline(),
             topbar_status: TopbarStatusReader::default(),
             last_topbar_poll_ms: 0,
         };
-        runtime.build(topbar, dock, popover)?;
+        runtime.build(
+            windows.topbar,
+            windows.dock,
+            windows.popover,
+            windows.settings,
+        )?;
         Ok(runtime)
     }
 
@@ -77,6 +91,7 @@ impl RuntimeSurfaces {
         topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
         popover: &mut OwnedWindow,
+        settings: &mut OwnedWindow,
     ) -> Result<bool> {
         match &event {
             PlatformEvent::DockPointer(sample) => {
@@ -95,6 +110,7 @@ impl RuntimeSurfaces {
                     topbar,
                     dock,
                     popover,
+                    settings,
                 )?;
                 return Ok(true);
             }
@@ -114,6 +130,7 @@ impl RuntimeSurfaces {
                     topbar,
                     dock,
                     popover,
+                    settings,
                 )?;
                 return Ok(true);
             }
@@ -133,6 +150,7 @@ impl RuntimeSurfaces {
                     topbar,
                     dock,
                     popover,
+                    settings,
                 )?;
                 return Ok(true);
             }
@@ -141,17 +159,27 @@ impl RuntimeSurfaces {
                     .topbar_controller
                     .handle_pointer(*sample)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
-                self.apply_topbar_actions(&actions, topbar, dock, popover)?;
-                self.redraw_topbar(topbar, dock, popover)?;
+                self.apply_topbar_actions(&actions, topbar, dock, popover, settings)?;
+                self.redraw_topbar(topbar, dock, popover, settings)?;
                 return Ok(true);
             }
             PlatformEvent::PopoverKey(key) => {
                 let actions = self.popover_controller.handle_key(*key);
-                self.apply_popover_actions(&actions, topbar, dock, popover)?;
+                self.apply_popover_actions(&actions, topbar, dock, popover, settings)?;
+                return Ok(true);
+            }
+            PlatformEvent::SettingsKey(key) => {
+                match key {
+                    crate::PopoverKey::Next => self.settings_controller.focus_next(),
+                    crate::PopoverKey::Previous => self.settings_controller.focus_previous(),
+                    crate::PopoverKey::Activate => {}
+                    crate::PopoverKey::Escape => settings.hide(),
+                }
+                self.redraw_settings(topbar, dock, popover, settings)?;
                 return Ok(true);
             }
             PlatformEvent::SyncWindows => {
-                self.refresh_topbar_status(topbar, dock, popover)?;
+                self.refresh_topbar_status(topbar, dock, popover, settings)?;
                 let before = self.dock_controller.state().clone();
                 let visual_before = self.dock_controller.visual_generation();
                 let mut observed =
@@ -171,6 +199,7 @@ impl RuntimeSurfaces {
                     topbar,
                     dock,
                     popover,
+                    settings,
                 )?;
                 return Ok(true);
             }
@@ -187,7 +216,7 @@ impl RuntimeSurfaces {
         match action {
             RuntimeAction::None => {}
             RuntimeAction::Quit => return Ok(false),
-            RuntimeAction::Rebuild => self.rebuild(topbar, dock, popover)?,
+            RuntimeAction::Rebuild => self.rebuild(topbar, dock, popover, settings)?,
             RuntimeAction::RepositionAndRebuild => {
                 let work = window_work_area(dock.hwnd)?;
                 topbar.reposition(work)?;
@@ -199,13 +228,14 @@ impl RuntimeSurfaces {
                 if self.popover_controller.active_kind().is_some() {
                     popover.place_popover(work, topbar.rect)?;
                 }
-                self.rebuild(topbar, dock, popover)?;
+                self.rebuild(topbar, dock, popover, settings)?;
             }
             RuntimeAction::ResizeAndRebuild(_) => {
                 topbar.refresh_rect()?;
                 dock.refresh_rect()?;
                 popover.refresh_rect()?;
-                self.rebuild(topbar, dock, popover)?;
+                settings.refresh_rect()?;
+                self.rebuild(topbar, dock, popover, settings)?;
             }
         }
         Ok(true)
@@ -216,13 +246,15 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
         self.topbar = None;
         self.dock = None;
         self.popover = None;
+        self.settings = None;
         self.renderer = None;
         self.preview_thumbnail = None;
-        self.build(topbar, dock, popover)
+        self.build(topbar, dock, popover, settings)
     }
 
     fn build(
@@ -230,14 +262,16 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
-        match self.build_once(topbar, dock, popover) {
+        match self.build_once(topbar, dock, popover, settings) {
             Err(error) if is_recoverable_hresult(error.code()) => {
                 self.topbar = None;
                 self.dock = None;
                 self.popover = None;
+                self.settings = None;
                 self.renderer = None;
-                self.build_once(topbar, dock, popover)
+                self.build_once(topbar, dock, popover, settings)
             }
             result => result,
         }
@@ -248,6 +282,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
         let renderer = CompositionRenderer::new(self.force_warp)?;
         self.topbar_controller
@@ -265,6 +300,7 @@ impl RuntimeSurfaces {
                 topbar: Some(&topbar_scene),
                 dock: None,
                 popover: None,
+                settings: None,
             },
         )?;
         self.dock_controller.update_surface(dip_surface(dock));
@@ -278,6 +314,7 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: Some(&dock_scene),
                 popover: None,
+                settings: None,
             },
         )?;
         let popover_scene = self.popover_controller.scene();
@@ -290,12 +327,27 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: None,
                 popover: popover_scene.as_ref(),
+                settings: None,
+            },
+        )?;
+        let settings_scene = self.settings_controller.scene();
+        let settings_surface = renderer.create_surface(
+            settings.hwnd,
+            settings.role,
+            settings.rect.width.max(1) as u32,
+            settings.rect.height.max(1) as u32,
+            ShellScenes {
+                topbar: None,
+                dock: None,
+                popover: None,
+                settings: Some(&settings_scene),
             },
         )?;
         self.renderer = Some(renderer);
         self.topbar = Some(topbar_surface);
         self.dock = Some(dock_surface);
         self.popover = Some(popover_surface);
+        self.settings = Some(settings_surface);
         self.update_preview_thumbnail(dock, &dock_scene);
         if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
             println!("{}", self.dock_controller.qa_trace_line());

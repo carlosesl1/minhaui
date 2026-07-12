@@ -166,6 +166,15 @@ pub(super) unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_KEYDOWN if is_settings_window(hwnd) => {
+            if let Some(key) = popover_key(wparam) {
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::SettingsKey(key),
+                ));
+            }
+            LRESULT(0)
+        }
         WM_RBUTTONUP if is_dock_window(hwnd) => {
             let point = client_point(hwnd, lparam);
             set_last_context_point(point);
@@ -283,6 +292,10 @@ fn is_topbar_window(hwnd: HWND) -> bool {
 
 fn is_popover_window(hwnd: HWND) -> bool {
     crate::win32::is_popover_window(hwnd)
+}
+
+fn is_settings_window(hwnd: HWND) -> bool {
+    crate::win32::is_settings_window(hwnd)
 }
 
 fn queue_topbar_pointer(hwnd: HWND, phase: TopbarPointerPhase, point: DipPoint) {

@@ -94,7 +94,12 @@ impl<W: WeatherProvider> DefaultPopoverDataProvider<W> {
 
 fn system_rows() -> Vec<PopoverItem> {
     vec![
-        PopoverItem::new("Settings", "Open intent", true, None),
+        PopoverItem::new(
+            "Settings",
+            "Open preferences",
+            true,
+            Some(PopoverAction::OpenSettings),
+        ),
         PopoverItem::new("Control Center", "Status toggles", true, None),
         PopoverItem::new(
             "Lock",

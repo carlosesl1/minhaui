@@ -23,6 +23,7 @@ pub struct NativeWindowSlot {
     topbar: NativeWindowId,
     dock: NativeWindowId,
     popover: NativeWindowId,
+    settings: NativeWindowId,
 }
 
 impl NativeWindowSlot {
@@ -32,12 +33,14 @@ impl NativeWindowSlot {
         topbar: NativeWindowId,
         dock: NativeWindowId,
         popover: NativeWindowId,
+        settings: NativeWindowId,
     ) -> Self {
         Self {
             monitor,
             topbar,
             dock,
             popover,
+            settings,
         }
     }
 }
@@ -64,7 +67,12 @@ pub fn route_native_event_to_slot(
         NativeEventTarget::Broadcast => NativeRouteDecision::Broadcast,
         NativeEventTarget::Window(window) => slots
             .iter()
-            .find(|slot| slot.topbar == window || slot.dock == window || slot.popover == window)
+            .find(|slot| {
+                slot.topbar == window
+                    || slot.dock == window
+                    || slot.popover == window
+                    || slot.settings == window
+            })
             .map_or(NativeRouteDecision::UnknownWindow, |slot| {
                 NativeRouteDecision::Slot(slot.monitor)
             }),

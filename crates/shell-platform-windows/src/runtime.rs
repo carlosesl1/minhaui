@@ -73,6 +73,7 @@ impl RuntimeOrchestrator {
             }
             PlatformEvent::TopbarPointer(_) => RuntimeAction::None,
             PlatformEvent::PopoverKey(_) => RuntimeAction::None,
+            PlatformEvent::SettingsKey(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. } | PlatformEvent::SyncWindows => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,

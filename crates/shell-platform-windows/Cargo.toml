@@ -6,6 +6,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+shell-config = { path = "../shell-config", version = "0.1.0" }
 shell-core = { path = "../shell-core", version = "0.1.0" }
 shell-renderer = { path = "../shell-renderer", version = "0.1.0" }
 thiserror.workspace = true

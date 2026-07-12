@@ -3,6 +3,7 @@
 mod persistence;
 mod recovery;
 mod schema;
+mod settings;
 mod theme;
 
 pub use persistence::{
@@ -11,6 +12,10 @@ pub use persistence::{
 pub use schema::{
     ConfigError, ConfigLoad, RecoveryKind, RecoveryReport, ShellConfigV1, decode_config,
     encode_config,
+};
+pub use settings::{
+    AdvancedSettings, AppearanceSettings, BehaviorSettings, DockAlignmentPreference, DockSettings,
+    TopbarDensityPreference, TopbarSettings,
 };
 pub use shell_core::{Accessibility, PerformancePreset};
 pub use theme::{

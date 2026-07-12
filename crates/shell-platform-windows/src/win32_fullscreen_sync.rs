@@ -32,6 +32,7 @@ impl RuntimeSurfaces {
             self.dock_controller.config().with_autohide(true),
             suppressed,
         )?;
-        self.rebuild(topbar, dock, popover)
+        let _ = (topbar, popover);
+        Ok(())
     }
 }

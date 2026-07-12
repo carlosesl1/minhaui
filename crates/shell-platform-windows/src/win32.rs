@@ -23,9 +23,11 @@ pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static TOPBAR_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static POPOVER_WINDOW: AtomicIsize = AtomicIsize::new(0);
+pub(super) static SETTINGS_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static DOCK_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static TOPBAR_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static POPOVER_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
+static SETTINGS_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 
 pub fn run_showcase(
     force_warp: bool,
@@ -103,6 +105,14 @@ pub(super) fn unregister_popover_window(hwnd: HWND) {
     unregister_window(hwnd, &POPOVER_WINDOWS, &POPOVER_WINDOW);
 }
 
+pub(super) fn register_settings_window(hwnd: HWND) {
+    register_window(hwnd, &SETTINGS_WINDOWS, &SETTINGS_WINDOW);
+}
+
+pub(super) fn unregister_settings_window(hwnd: HWND) {
+    unregister_window(hwnd, &SETTINGS_WINDOWS, &SETTINGS_WINDOW);
+}
+
 pub(super) fn is_dock_window(hwnd: HWND) -> bool {
     contains_window(hwnd, &DOCK_WINDOWS, &DOCK_WINDOW)
 }
@@ -113,6 +123,10 @@ pub(super) fn is_topbar_window(hwnd: HWND) -> bool {
 
 pub(super) fn is_popover_window(hwnd: HWND) -> bool {
     contains_window(hwnd, &POPOVER_WINDOWS, &POPOVER_WINDOW)
+}
+
+pub(super) fn is_settings_window(hwnd: HWND) -> bool {
+    contains_window(hwnd, &SETTINGS_WINDOWS, &SETTINGS_WINDOW)
 }
 
 fn register_window(

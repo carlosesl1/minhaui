@@ -37,6 +37,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &mut OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
         let current = self.dock_controller.state();
         let render_action = classify_dock_render_action(DockRenderChange {
@@ -47,10 +48,10 @@ impl RuntimeSurfaces {
         });
         match render_action {
             DockRenderAction::None => Ok(()),
-            DockRenderAction::RedrawDock => self.redraw_dock(topbar, dock, popover),
+            DockRenderAction::RedrawDock => self.redraw_dock(topbar, dock, popover, settings),
             DockRenderAction::RebuildSurfaces => {
                 self.apply_dock_visibility(dock)?;
-                self.rebuild(topbar, dock, popover)
+                self.redraw_dock(topbar, dock, popover, settings)
             }
         }
     }
@@ -69,6 +70,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
         self.dock_controller.update_surface(dip_surface(dock));
         let dock_scene = self.dock_controller.scene();
@@ -81,9 +83,10 @@ impl RuntimeSurfaces {
                     topbar: None,
                     dock: Some(&dock_scene),
                     popover: None,
+                    settings: None,
                 },
             ),
-            (None, _) | (_, None) => return self.rebuild(topbar, dock, popover),
+            (None, _) | (_, None) => return self.rebuild(topbar, dock, popover, settings),
         };
         match outcome {
             Ok(PresentOutcome::Presented) => {
@@ -97,15 +100,11 @@ impl RuntimeSurfaces {
                     device_loss_hresult(kind),
                     format!("recoverable device loss during dock redraw: {kind:?}"),
                 );
-                if is_recoverable_hresult(error.code()) {
-                    self.rebuild(topbar, dock, popover)
-                } else {
-                    Err(error)
-                }
+                self.rebuild(topbar, dock, popover, settings)
             }
             Ok(PresentOutcome::Failed(code)) => Err(windows::core::Error::from_hresult(code)),
             Err(error) if is_recoverable_hresult(error.code()) => {
-                self.rebuild(topbar, dock, popover)
+                self.rebuild(topbar, dock, popover, settings)
             }
             Err(error) => Err(error),
         }
@@ -116,6 +115,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
         let now = now_ms();
         let budget = PollBudget::new(self.last_topbar_poll_ms, 1_000);
@@ -125,7 +125,7 @@ impl RuntimeSurfaces {
                 self.last_topbar_poll_ms = now;
                 let snapshot = self.topbar_status.snapshot(now);
                 self.topbar_controller.update_snapshot(snapshot);
-                self.redraw_topbar(topbar, dock, popover)
+                self.redraw_topbar(topbar, dock, popover, settings)
             }
         }
     }
@@ -135,6 +135,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        settings: &OwnedWindow,
     ) -> Result<()> {
         self.topbar_controller.update_surface(dip_surface(topbar));
         let scene = self.topbar_controller.scene();
@@ -146,11 +147,12 @@ impl RuntimeSurfaces {
                     topbar: Some(&scene),
                     dock: None,
                     popover: None,
+                    settings: None,
                 },
             ),
-            (None, _) | (_, None) => return self.rebuild(topbar, dock, popover),
+            (None, _) | (_, None) => return self.rebuild(topbar, dock, popover, settings),
         };
-        handle_present(outcome, self, topbar, dock, popover, "topbar")
+        handle_present(outcome, self, topbar, dock, popover, settings, "topbar")
     }
 }
 
@@ -176,6 +178,7 @@ pub(super) fn handle_present(
     topbar: &OwnedWindow,
     dock: &OwnedWindow,
     popover: &OwnedWindow,
+    settings: &OwnedWindow,
     role: &str,
 ) -> Result<()> {
     match outcome {
@@ -185,15 +188,11 @@ pub(super) fn handle_present(
                 device_loss_hresult(kind),
                 format!("recoverable device loss during {role} redraw: {kind:?}"),
             );
-            if is_recoverable_hresult(error.code()) {
-                runtime.rebuild(topbar, dock, popover)
-            } else {
-                Err(error)
-            }
+            runtime.rebuild(topbar, dock, popover, settings)
         }
         Ok(PresentOutcome::Failed(code)) => Err(windows::core::Error::from_hresult(code)),
         Err(error) if is_recoverable_hresult(error.code()) => {
-            runtime.rebuild(topbar, dock, popover)
+            runtime.rebuild(topbar, dock, popover, settings)
         }
         Err(error) => Err(error),
     }

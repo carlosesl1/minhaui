@@ -98,6 +98,7 @@ mod popover_adapters;
 mod popover_controller;
 mod popover_types;
 mod runtime;
+mod settings_controller;
 mod topbar_controller;
 mod topbar_types;
 mod window_preview;
@@ -128,6 +129,7 @@ pub use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
 };
+pub use settings_controller::{SettingsController, SettingsEdit, SettingsError};
 pub use topbar_controller::{TopbarController, TopbarControllerError};
 pub use topbar_types::{
     NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, ThroughputLabel,
@@ -159,6 +161,7 @@ pub enum PlatformEvent {
         path: String,
     },
     PopoverKey(PopoverKey),
+    SettingsKey(PopoverKey),
     SyncWindows,
     QaExitRequested,
     CloseRequested,

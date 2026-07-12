@@ -4,7 +4,7 @@ use shell_core::MonitorId;
 use windows::core::Result;
 
 use crate::win32_event_queue::{RoutedPlatformEvent, native_window_id};
-use crate::win32_owner::RuntimeSurfaces;
+use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows};
 use crate::win32_sample_state::{sample_dock_controller, sample_topbar_controller};
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{OwnedWindow, WindowClass, print_window};
@@ -22,18 +22,25 @@ pub(super) struct ShellSlot {
     topbar: OwnedWindow,
     dock: OwnedWindow,
     popover: OwnedWindow,
+    settings: OwnedWindow,
 }
 
 impl ShellSlot {
     pub(super) fn handle_event(&mut self, event: PlatformEvent) -> Result<bool> {
-        self.runtime
-            .handle_event(event, &mut self.topbar, &mut self.dock, &mut self.popover)
+        self.runtime.handle_event(
+            event,
+            &mut self.topbar,
+            &mut self.dock,
+            &mut self.popover,
+            &mut self.settings,
+        )
     }
 
     pub(super) fn print_windows(&self) {
         print_window(&self.topbar, self.runtime.device_kind());
         print_window(&self.dock, self.runtime.device_kind());
         print_window(&self.popover, self.runtime.device_kind());
+        print_window(&self.settings, self.runtime.device_kind());
     }
 
     pub(super) const fn topbar_hwnd(&self) -> windows::Win32::Foundation::HWND {
@@ -46,6 +53,7 @@ impl ShellSlot {
             native_window_id(self.topbar.hwnd),
             native_window_id(self.dock.hwnd),
             native_window_id(self.popover.hwnd),
+            native_window_id(self.settings.hwnd),
         )
     }
 
@@ -58,8 +66,9 @@ impl ShellSlot {
             false,
         )?;
         self.popover.reposition(monitor.work_area())?;
+        self.settings.reposition(monitor.work_area())?;
         self.runtime
-            .rebuild(&self.topbar, &self.dock, &self.popover)
+            .rebuild(&self.topbar, &self.dock, &self.popover, &self.settings)
     }
 }
 
@@ -172,13 +181,21 @@ fn create_slot(
         shell_renderer::native::ShowcaseRole::Popover,
         monitor.work_area(),
     )?;
+    let settings = OwnedWindow::create(
+        class,
+        shell_renderer::native::ShowcaseRole::Settings,
+        monitor.work_area(),
+    )?;
     let dock_controller = sample_dock_controller()?;
     let topbar_controller = sample_topbar_controller(topbar.rect.width)?;
     let runtime = RuntimeSurfaces::new(
         force_warp,
-        &topbar,
-        &dock,
-        &popover,
+        SurfaceWindows {
+            topbar: &topbar,
+            dock: &dock,
+            popover: &popover,
+            settings: &settings,
+        },
         dock_controller,
         topbar_controller,
     )?;
@@ -190,6 +207,7 @@ fn create_slot(
         topbar,
         dock,
         popover,
+        settings,
     })
 }
 
