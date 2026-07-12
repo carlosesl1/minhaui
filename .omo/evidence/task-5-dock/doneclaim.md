@@ -5,6 +5,8 @@ Status: full Task 5 completion for the functional native dock loop.
 Production commits covered:
 - `55880af chore(dock): record canonical task 5 evidence`
 - `a103caf fix(dock): redraw hover without surface rebuild`
+- `4955cee chore(dock): record redraw evidence pack`
+- Final hygiene commit in this pack: splits the oversized dock controller test target and records formal code/slop review receipts.
 
 Implemented behavior covered by this claim:
 - Win32 running-window discovery/sync adds external running apps as unpinned dock items and updates focused/minimized/running state.
@@ -64,3 +66,12 @@ Final verification:
 - Changed source file size review: `.omo/evidence/task-5-dock/final-changed-file-review.txt`, exit code 0; touched source files are below 250 pure LOC.
 - Cleanup observable: `.omo/evidence/task-5-dock/final-cleanup-process-scan.txt` is `[]` with exit code 0.
 - Evidence inventory: `.omo/evidence/task-5-dock/final-evidence-inventory.txt`.
+
+Final hygiene review:
+- Oversized test split: `crates/shell-platform-windows/tests/dock_controller.rs` is split into `dock_controller.rs`, `dock_controller_interactions.rs`, and `dock_controller_config.rs`; all preserve existing test names and semantics.
+- Formal code/slop review: `.omo/evidence/task-5-dock/final-code-slop-review.md`, conclusion `CLEAR`.
+- Fresh hygiene `cargo fmt --all --check`: `.omo/evidence/task-5-dock/hygiene-fmt-check.txt`, exit code 0.
+- Fresh hygiene `cargo clippy --workspace --all-targets --all-features -- -D warnings`: `.omo/evidence/task-5-dock/hygiene-clippy-all-targets-all-features.txt`, exit code 0.
+- Fresh hygiene `cargo test --workspace --all-targets --all-features`: `.omo/evidence/task-5-dock/hygiene-test-all-targets-all-features.txt`, exit code 0.
+- Fresh hygiene `cargo build --workspace --all-targets --all-features --release`: `.omo/evidence/task-5-dock/hygiene-build-release-all-targets-all-features.txt`, exit code 0.
+- Diff/LOC/artifact check: `.omo/evidence/task-5-dock/hygiene-diff-checks.txt`, exit code 0; all Task 5 changed Rust files are <=250 pure LOC and `.omo/evidence/task-5-dock/hook-verification-redraw-1.txt` is absent.

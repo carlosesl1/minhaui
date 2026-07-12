@@ -1,0 +1,51 @@
+Hygiene diff checks 2026-07-11T22:41:37.6546606-03:00
+## git diff --check
+git : warning: in the working copy of '.omo/evidence/task-5-dock/doneclaim.md', LF will be replaced by CRLF the next 
+time Git touches it
+No linha:5 caractere:1
++ git diff --check 2>&1 | Out-String | Add-Content -LiteralPath $out
++ ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: in the... Git touches it:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+EXIT_CODE=0
+
+## Rust pure LOC for Task 5 changed files
+crates/shell-renderer/src/native.rs pure_loc=184
+crates/shell-platform-windows/src/lib.rs pure_loc=130
+crates/shell-platform-windows/src/runtime.rs pure_loc=77
+crates/shell-platform-windows/src/win32_owner.rs pure_loc=192
+crates/shell-platform-windows/src/win32_dock_render.rs pure_loc=89
+crates/shell-platform-windows/tests/native_slice.rs pure_loc=115
+crates/shell-platform-windows/tests/dock_controller.rs pure_loc=126
+crates/shell-platform-windows/tests/dock_controller_interactions.rs pure_loc=195
+crates/shell-platform-windows/tests/dock_controller_config.rs pure_loc=71
+
+## delayed hook artifact removal
+hook-verification-redraw-1 exists=False
+
+## review report
+
+FullName                                                                                                               
+--------                                                                                                               
+C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\.omo\evidence\task-5-dock\final-code-s...
+
+
+
+
+## git status --short --branch
+## feature/windows-native-dock-v1
+ M .omo/evidence/task-5-dock/doneclaim.md
+ M .omo/evidence/task-5-dock/final-evidence-inventory.txt
+ M crates/shell-platform-windows/tests/dock_controller.rs
+?? .omo/evidence/task-5-dock/final-code-slop-review.md
+?? .omo/evidence/task-5-dock/hygiene-build-release-all-targets-all-features.txt
+?? .omo/evidence/task-5-dock/hygiene-clippy-all-targets-all-features.txt
+?? .omo/evidence/task-5-dock/hygiene-diff-checks.txt
+?? .omo/evidence/task-5-dock/hygiene-fmt-check.txt
+?? .omo/evidence/task-5-dock/hygiene-test-all-targets-all-features.txt
+?? crates/shell-platform-windows/tests/dock_controller_config.rs
+?? crates/shell-platform-windows/tests/dock_controller_interactions.rs
+
+EXIT_CODE=0
