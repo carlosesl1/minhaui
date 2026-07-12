@@ -1,7 +1,7 @@
 use shell_core::{
     AppId, DockItem, DockItemId, Effect, Monitor, MonitorId, NoOpReason, PinState, Popover,
-    RunningState, ShellEvent, ShellState, TaskbarPolicy, TransitionError, TransitionOutcome,
-    WindowId, reduce,
+    RunningState, ShellEvent, ShellState, TaskbarPolicy, TopbarModuleKind, TransitionError,
+    TransitionOutcome, WindowId, reduce,
 };
 
 fn app(value: &str) -> Result<AppId, Box<dyn std::error::Error>> {
@@ -216,6 +216,35 @@ fn opening_a_popover_replaces_the_previous_popover() -> Result<(), Box<dyn std::
 
     // Then: exactly the volume popover remains active.
     assert_eq!(transition.state.active_popover(), Some(Popover::Volume));
+    Ok(())
+}
+
+#[test]
+fn topbar_system_menu_and_visibility_emit_typed_intents() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Given: the default ordered top bar.
+    let state = ShellState::default();
+
+    // When: the system menu entry point is opened and the network module is hidden.
+    let opened = reduce(&state, ShellEvent::OpenPopover(Popover::SystemMenu))?;
+    let hidden = reduce(
+        &opened.state,
+        ShellEvent::SetTopbarVisibility {
+            module: TopbarModuleKind::Network,
+            visible: false,
+        },
+    )?;
+
+    // Then: the reducer tracks the typed system menu intent and persists visibility.
+    assert_eq!(opened.state.active_popover(), Some(Popover::SystemMenu));
+    assert_eq!(hidden.effects, vec![Effect::PersistConfiguration]);
+    assert!(
+        hidden
+            .state
+            .topbar_modules()
+            .iter()
+            .any(|module| module.kind() == TopbarModuleKind::Network && !module.visible())
+    );
     Ok(())
 }
 

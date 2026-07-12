@@ -23,10 +23,10 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{Interface, Result};
 
-use crate::DockScene;
 use crate::native_device::create_d3d_device;
 use crate::native_present::present_swap_chain;
 use crate::native_showcase::draw_showcase;
+use crate::{DockScene, TopbarScene};
 
 pub use crate::native_present::{
     DeviceLossKind, PresentOutcome, classify_present_hresult, device_loss_hresult,
@@ -43,6 +43,12 @@ pub enum DeviceKind {
 pub enum ShowcaseRole {
     Topbar,
     Dock,
+}
+
+#[derive(Clone, Copy)]
+pub struct ShellScenes<'a> {
+    pub topbar: Option<&'a TopbarScene>,
+    pub dock: Option<&'a DockScene>,
 }
 
 pub struct CompositionRenderer {
@@ -106,7 +112,7 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         width: u32,
         height: u32,
-        dock_scene: Option<&DockScene>,
+        scenes: ShellScenes<'_>,
     ) -> Result<WindowSurface> {
         let dxgi_device: IDXGIDevice = self._d3d.cast()?;
         // SAFETY: Category 8 (FFI boundary). `dxgi_device` is live and its adapter
@@ -163,7 +169,7 @@ impl CompositionRenderer {
             role,
             width as f32,
             height as f32,
-            dock_scene,
+            scenes,
         )?;
 
         // SAFETY: Category 8 (FFI boundary). `hwnd` is a live top-level window owned
@@ -204,7 +210,7 @@ impl CompositionRenderer {
         &self,
         surface: &WindowSurface,
         role: ShowcaseRole,
-        dock_scene: Option<&DockScene>,
+        scenes: ShellScenes<'_>,
     ) -> Result<PresentOutcome> {
         // SAFETY: Category 8 (FFI boundary). The retained bitmap was created from
         // this renderer's D2D device and remains owned by the live surface.
@@ -215,7 +221,7 @@ impl CompositionRenderer {
             role,
             surface.width as f32,
             surface.height as f32,
-            dock_scene,
+            scenes,
         )?;
         surface.present()
     }

@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 
 use shell_renderer::native::{
-    CompositionRenderer, DeviceKind, WindowSurface, is_recoverable_hresult,
+    CompositionRenderer, DeviceKind, ShellScenes, WindowSurface, is_recoverable_hresult,
 };
 use windows::core::Result;
 
@@ -10,19 +10,24 @@ use crate::win32_discovery::discover_running_windows;
 use crate::win32_dock_render::dip_surface;
 use crate::win32_preview::DwmPreviewThumbnail;
 use crate::win32_preview_qa::seed_restricted_preview_for_qa;
+use crate::win32_sample_state::density_for_width;
+use crate::win32_topbar_status::TopbarStatusReader;
 use crate::win32_window::OwnedWindow;
-use crate::win32_windowing::{monitor_placement_inputs, window_monitor_id, window_work_area};
-use crate::{DockController, FullscreenPolicy, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
+use crate::win32_windowing::window_work_area;
+use crate::{DockController, PlatformEvent, RuntimeAction, RuntimeOrchestrator, TopbarController};
 
 pub(super) struct RuntimeSurfaces {
     force_warp: bool,
     pub(super) renderer: Option<CompositionRenderer>,
-    topbar: Option<WindowSurface>,
+    pub(super) topbar: Option<WindowSurface>,
     pub(super) dock: Option<WindowSurface>,
     preview_thumbnail: Option<DwmPreviewThumbnail>,
-    fullscreen_suppressed: bool,
+    pub(super) fullscreen_suppressed: bool,
     orchestration: RuntimeOrchestrator,
     pub(super) dock_controller: DockController,
+    pub(super) topbar_controller: TopbarController,
+    pub(super) topbar_status: TopbarStatusReader,
+    pub(super) last_topbar_poll_ms: u64,
 }
 
 impl RuntimeSurfaces {
@@ -31,6 +36,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         dock_controller: DockController,
+        topbar_controller: TopbarController,
     ) -> Result<Self> {
         let mut runtime = Self {
             force_warp,
@@ -41,6 +47,9 @@ impl RuntimeSurfaces {
             fullscreen_suppressed: false,
             orchestration: RuntimeOrchestrator::new(),
             dock_controller,
+            topbar_controller,
+            topbar_status: TopbarStatusReader::default(),
+            last_topbar_poll_ms: 0,
         };
         runtime.build(topbar, dock)?;
         Ok(runtime)
@@ -98,7 +107,15 @@ impl RuntimeSurfaces {
                 self.render_dock_change(&before, visual_before, &actions, topbar, dock)?;
                 return Ok(true);
             }
+            PlatformEvent::TopbarPointer(sample) => {
+                self.topbar_controller
+                    .handle_pointer(*sample)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                self.redraw_topbar(topbar, dock)?;
+                return Ok(true);
+            }
             PlatformEvent::SyncWindows => {
+                self.refresh_topbar_status(topbar, dock)?;
                 let before = self.dock_controller.state().clone();
                 let visual_before = self.dock_controller.visual_generation();
                 let mut observed =
@@ -170,12 +187,21 @@ impl RuntimeSurfaces {
 
     fn build_once(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {
         let renderer = CompositionRenderer::new(self.force_warp)?;
+        self.topbar_controller
+            .update_density(density_for_width(topbar.rect.width));
+        self.topbar_controller.update_surface(dip_surface(topbar));
+        self.topbar_controller
+            .update_snapshot(self.topbar_status.snapshot(now_ms()));
+        let topbar_scene = self.topbar_controller.scene();
         let topbar_surface = renderer.create_surface(
             topbar.hwnd,
             topbar.role,
             topbar.rect.width.max(1) as u32,
             topbar.rect.height.max(1) as u32,
-            None,
+            ShellScenes {
+                topbar: Some(&topbar_scene),
+                dock: None,
+            },
         )?;
         self.dock_controller.update_surface(dip_surface(dock));
         let dock_scene = self.dock_controller.scene();
@@ -184,7 +210,10 @@ impl RuntimeSurfaces {
             dock.role,
             dock.rect.width.max(1) as u32,
             dock.rect.height.max(1) as u32,
-            Some(&dock_scene),
+            ShellScenes {
+                topbar: None,
+                dock: Some(&dock_scene),
+            },
         )?;
         self.renderer = Some(renderer);
         self.topbar = Some(topbar_surface);
@@ -229,34 +258,16 @@ impl RuntimeSurfaces {
         self.preview_thumbnail =
             DwmPreviewThumbnail::show(dock.hwnd, preview, destination).unwrap_or(None);
     }
-
-    fn sync_fullscreen_suppression(
-        &mut self,
-        observed: &[crate::ObservedWindow],
-        topbar: &OwnedWindow,
-        dock: &mut OwnedWindow,
-    ) -> Result<()> {
-        let fullscreen = observed
-            .iter()
-            .filter_map(crate::ObservedWindow::fullscreen)
-            .collect::<Vec<_>>();
-        let monitors = monitor_placement_inputs()?;
-        let policy = FullscreenPolicy::hide_for_fullscreen(&fullscreen, &monitors);
-        let suppressed = policy.suppresses(window_monitor_id(dock.hwnd));
-        if suppressed == self.fullscreen_suppressed {
-            return Ok(());
-        }
-        self.fullscreen_suppressed = suppressed;
-        let work = window_work_area(dock.hwnd)?;
-        dock.apply_dock_visibility(
-            work,
-            self.dock_controller.config().with_autohide(true),
-            suppressed,
-        )?;
-        self.rebuild(topbar, dock)
-    }
 }
 
 const fn invalid_arg() -> windows::core::HRESULT {
     windows::core::HRESULT(0x8007_0057_u32 as i32)
+}
+
+pub(super) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }

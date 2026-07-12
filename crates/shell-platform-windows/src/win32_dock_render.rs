@@ -3,13 +3,17 @@
 use shell_core::{Effect, ShellState};
 use shell_renderer::DipRect;
 use shell_renderer::native::{
-    PresentOutcome, ShowcaseRole, device_loss_hresult, is_recoverable_hresult,
+    PresentOutcome, ShellScenes, ShowcaseRole, device_loss_hresult, is_recoverable_hresult,
 };
 use windows::core::Result;
 
 use crate::win32_owner::RuntimeSurfaces;
+use crate::win32_owner::now_ms;
 use crate::win32_window::OwnedWindow;
-use crate::{DockRenderAction, DockRenderChange, QueuedDockAction, classify_dock_render_action};
+use crate::{
+    DockRenderAction, DockRenderChange, PollBudget, QueuedDockAction, QueuedTopbarAction,
+    classify_dock_render_action,
+};
 
 impl RuntimeSurfaces {
     pub(super) fn render_dock_change(
@@ -51,9 +55,14 @@ impl RuntimeSurfaces {
         let dock_scene = self.dock_controller.scene();
         self.update_preview_thumbnail(dock, &dock_scene);
         let outcome = match (self.renderer.as_ref(), self.dock.as_ref()) {
-            (Some(renderer), Some(surface)) => {
-                renderer.redraw_surface(surface, ShowcaseRole::Dock, Some(&dock_scene))
-            }
+            (Some(renderer), Some(surface)) => renderer.redraw_surface(
+                surface,
+                ShowcaseRole::Dock,
+                ShellScenes {
+                    topbar: None,
+                    dock: Some(&dock_scene),
+                },
+            ),
             (None, _) | (_, None) => return self.rebuild(topbar, dock),
         };
         match outcome {
@@ -79,6 +88,41 @@ impl RuntimeSurfaces {
             Err(error) => Err(error),
         }
     }
+
+    pub(super) fn refresh_topbar_status(
+        &mut self,
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+    ) -> Result<()> {
+        let now = now_ms();
+        let budget = PollBudget::new(self.last_topbar_poll_ms, 1_000);
+        match self.topbar_controller.refresh_status(budget, now) {
+            QueuedTopbarAction::PollDeferred => Ok(()),
+            QueuedTopbarAction::OpenPopover(_) | QueuedTopbarAction::RedrawTopbar => {
+                self.last_topbar_poll_ms = now;
+                let snapshot = self.topbar_status.snapshot(now);
+                self.topbar_controller.update_snapshot(snapshot);
+                self.redraw_topbar(topbar, dock)
+            }
+        }
+    }
+
+    pub(super) fn redraw_topbar(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {
+        self.topbar_controller.update_surface(dip_surface(topbar));
+        let scene = self.topbar_controller.scene();
+        let outcome = match (self.renderer.as_ref(), self.topbar.as_ref()) {
+            (Some(renderer), Some(surface)) => renderer.redraw_surface(
+                surface,
+                ShowcaseRole::Topbar,
+                ShellScenes {
+                    topbar: Some(&scene),
+                    dock: None,
+                },
+            ),
+            (None, _) | (_, None) => return self.rebuild(topbar, dock),
+        };
+        handle_present(outcome, self, topbar, dock, "topbar")
+    }
 }
 
 pub(super) fn dip_surface(window: &OwnedWindow) -> DipRect {
@@ -95,4 +139,30 @@ fn actions_require_rebuild(actions: &[QueuedDockAction]) -> bool {
     actions
         .iter()
         .any(|action| matches!(action, QueuedDockAction::Effect(Effect::RebuildSurfaces)))
+}
+
+fn handle_present(
+    outcome: Result<PresentOutcome>,
+    runtime: &mut RuntimeSurfaces,
+    topbar: &OwnedWindow,
+    dock: &OwnedWindow,
+    role: &str,
+) -> Result<()> {
+    match outcome {
+        Ok(PresentOutcome::Presented) => Ok(()),
+        Ok(PresentOutcome::DeviceLost(kind)) => {
+            let error = windows::core::Error::new(
+                device_loss_hresult(kind),
+                format!("recoverable device loss during {role} redraw: {kind:?}"),
+            );
+            if is_recoverable_hresult(error.code()) {
+                runtime.rebuild(topbar, dock)
+            } else {
+                Err(error)
+            }
+        }
+        Ok(PresentOutcome::Failed(code)) => Err(windows::core::Error::from_hresult(code)),
+        Err(error) if is_recoverable_hresult(error.code()) => runtime.rebuild(topbar, dock),
+        Err(error) => Err(error),
+    }
 }

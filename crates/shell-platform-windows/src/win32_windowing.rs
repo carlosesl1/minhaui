@@ -25,7 +25,10 @@ use crate::win32_pointer::{
 pub(super) use crate::win32_work_area::{
     monitor_placement_inputs, window_monitor_id, window_work_area,
 };
-use crate::{ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent};
+use crate::{
+    ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent, TopbarPointerPhase,
+    TopbarPointerSample,
+};
 
 pub(super) fn message_loop(
     mut handle_event: impl FnMut(RoutedPlatformEvent) -> Result<bool>,
@@ -124,6 +127,31 @@ pub(super) unsafe extern "system" fn window_proc(
                     client_point(hwnd, lparam),
                 )),
             ));
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE if is_topbar_window(hwnd) => {
+            track_mouse_leave(hwnd);
+            queue_topbar_pointer(hwnd, TopbarPointerPhase::Moved, client_point(hwnd, lparam));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE if is_topbar_window(hwnd) => {
+            queue_topbar_pointer(hwnd, TopbarPointerPhase::Exited, DipPoint::new(-1.0, -1.0));
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN if is_topbar_window(hwnd) => {
+            queue_topbar_pointer(
+                hwnd,
+                TopbarPointerPhase::Pressed,
+                client_point(hwnd, lparam),
+            );
+            LRESULT(0)
+        }
+        WM_LBUTTONUP if is_topbar_window(hwnd) => {
+            queue_topbar_pointer(
+                hwnd,
+                TopbarPointerPhase::Released,
+                client_point(hwnd, lparam),
+            );
             LRESULT(0)
         }
         WM_RBUTTONUP if is_dock_window(hwnd) => {
@@ -235,4 +263,15 @@ pub(super) unsafe extern "system" fn window_proc(
 
 fn is_dock_window(hwnd: HWND) -> bool {
     crate::win32::is_dock_window(hwnd)
+}
+
+fn is_topbar_window(hwnd: HWND) -> bool {
+    crate::win32::is_topbar_window(hwnd)
+}
+
+fn queue_topbar_pointer(hwnd: HWND, phase: TopbarPointerPhase, point: DipPoint) {
+    queue_event(RoutedPlatformEvent::window(
+        hwnd,
+        PlatformEvent::TopbarPointer(TopbarPointerSample::new(phase, point)),
+    ));
 }

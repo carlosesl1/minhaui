@@ -241,6 +241,7 @@ impl ConfigV0 {
 
 fn default_topbar() -> Vec<TopbarModule> {
     [
+        TopbarModuleKind::SystemMenu,
         TopbarModuleKind::Clock,
         TopbarModuleKind::Network,
         TopbarModuleKind::Volume,

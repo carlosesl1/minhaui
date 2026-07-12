@@ -46,6 +46,9 @@ mod win32_dock_render;
 mod win32_event_queue;
 
 #[cfg(windows)]
+mod win32_fullscreen_sync;
+
+#[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 drop decoding is isolated here")]
 mod win32_drop;
 
@@ -56,6 +59,10 @@ mod win32_hit_test;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 QA timer ownership is isolated here")]
 mod win32_timer;
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 topbar status adapters are isolated here")]
+mod win32_topbar_status;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 HWND ownership is isolated here")]
@@ -72,6 +79,9 @@ mod win32_preview;
 #[cfg(windows)]
 mod win32_preview_qa;
 
+#[cfg(windows)]
+mod win32_sample_state;
+
 mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
@@ -82,6 +92,8 @@ mod dock_visuals;
 mod dock_window_sync;
 mod native_event_route;
 mod runtime;
+mod topbar_controller;
+mod topbar_types;
 mod window_preview;
 
 pub use dock_controller::DockController;
@@ -103,6 +115,11 @@ pub use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
 };
+pub use topbar_controller::{TopbarController, TopbarControllerError};
+pub use topbar_types::{
+    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, ThroughputLabel,
+    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot,
+};
 #[cfg(windows)]
 pub use win32::run_showcase;
 pub use window_preview::{
@@ -119,6 +136,7 @@ pub enum PlatformEvent {
     PowerResumed,
     DeviceLost,
     DockPointer(DockPointerSample),
+    TopbarPointer(TopbarPointerSample),
     DockContextMenu {
         point: DipPoint,
         command: ContextMenuCommand,

@@ -31,6 +31,7 @@ impl Default for ShellState {
             active_monitor: monitor.id(),
             dock_items: Vec::new(),
             topbar: vec![
+                TopbarModule::new(TopbarModuleKind::SystemMenu, true),
                 TopbarModule::new(TopbarModuleKind::Clock, true),
                 TopbarModule::new(TopbarModuleKind::Network, true),
                 TopbarModule::new(TopbarModuleKind::Volume, true),

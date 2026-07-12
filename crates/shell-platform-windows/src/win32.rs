@@ -21,7 +21,9 @@ pub(super) const SYNC_TIMER_ID: usize = 0x4D56;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
 pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);
+pub(super) static TOPBAR_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static DOCK_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
+static TOPBAR_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 
 pub fn run_showcase(
     force_warp: bool,
@@ -76,39 +78,75 @@ pub fn run_showcase(
 }
 
 pub(super) fn register_dock_window(hwnd: HWND) {
+    register_window(hwnd, &DOCK_WINDOWS, &DOCK_WINDOW);
+}
+
+pub(super) fn unregister_dock_window(hwnd: HWND) {
+    unregister_window(hwnd, &DOCK_WINDOWS, &DOCK_WINDOW);
+}
+
+pub(super) fn register_topbar_window(hwnd: HWND) {
+    register_window(hwnd, &TOPBAR_WINDOWS, &TOPBAR_WINDOW);
+}
+
+pub(super) fn unregister_topbar_window(hwnd: HWND) {
+    unregister_window(hwnd, &TOPBAR_WINDOWS, &TOPBAR_WINDOW);
+}
+
+pub(super) fn is_dock_window(hwnd: HWND) -> bool {
+    contains_window(hwnd, &DOCK_WINDOWS, &DOCK_WINDOW)
+}
+
+pub(super) fn is_topbar_window(hwnd: HWND) -> bool {
+    contains_window(hwnd, &TOPBAR_WINDOWS, &TOPBAR_WINDOW)
+}
+
+fn register_window(
+    hwnd: HWND,
+    registry: &'static OnceLock<Mutex<Vec<isize>>>,
+    latest: &'static AtomicIsize,
+) {
     let raw = hwnd.0 as isize;
-    let windows = DOCK_WINDOWS.get_or_init(|| Mutex::new(Vec::new()));
+    let windows = registry.get_or_init(|| Mutex::new(Vec::new()));
     if let Ok(mut values) = windows.lock()
         && !values.contains(&raw)
     {
         values.push(raw);
     }
-    DOCK_WINDOW.store(raw, Ordering::Release);
+    latest.store(raw, Ordering::Release);
 }
 
-pub(super) fn unregister_dock_window(hwnd: HWND) {
+fn unregister_window(
+    hwnd: HWND,
+    registry: &'static OnceLock<Mutex<Vec<isize>>>,
+    latest: &'static AtomicIsize,
+) {
     let raw = hwnd.0 as isize;
-    if let Some(windows) = DOCK_WINDOWS.get()
+    if let Some(windows) = registry.get()
         && let Ok(mut values) = windows.lock()
     {
         values.retain(|value| *value != raw);
-        if DOCK_WINDOW.load(Ordering::Acquire) == raw {
-            DOCK_WINDOW.store(
+        if latest.load(Ordering::Acquire) == raw {
+            latest.store(
                 values.last().copied().unwrap_or_default(),
                 Ordering::Release,
             );
         }
         return;
     }
-    if DOCK_WINDOW.load(Ordering::Acquire) == raw {
-        DOCK_WINDOW.store(0, Ordering::Release);
+    if latest.load(Ordering::Acquire) == raw {
+        latest.store(0, Ordering::Release);
     }
 }
 
-pub(super) fn is_dock_window(hwnd: HWND) -> bool {
+fn contains_window(
+    hwnd: HWND,
+    registry: &'static OnceLock<Mutex<Vec<isize>>>,
+    latest: &'static AtomicIsize,
+) -> bool {
     let raw = hwnd.0 as isize;
-    DOCK_WINDOW.load(Ordering::Acquire) == raw
-        || DOCK_WINDOWS
+    latest.load(Ordering::Acquire) == raw
+        || registry
             .get()
             .and_then(|windows| windows.lock().ok().map(|values| values.contains(&raw)))
             .unwrap_or(false)

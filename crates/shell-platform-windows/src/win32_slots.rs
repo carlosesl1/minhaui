@@ -1,17 +1,17 @@
 #![deny(unsafe_code)]
 
-use shell_core::{AppId, DockItem, DockItemId, MonitorId, ShellState, WindowId};
+use shell_core::MonitorId;
 use windows::core::Result;
 
 use crate::win32_event_queue::{RoutedPlatformEvent, native_window_id};
 use crate::win32_owner::RuntimeSurfaces;
+use crate::win32_sample_state::{sample_dock_controller, sample_topbar_controller};
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{OwnedWindow, WindowClass, print_window};
 use crate::win32_windowing::monitor_placement_inputs;
 use crate::{
-    DockController, DockRuntimeConfig, MonitorPlacementInput, NativeEventTarget,
-    NativeRouteDecision, NativeWindowSlot, ObservedWindow, PlatformEvent, PreviewCapture,
-    PreviewUnavailableReason, SlotReconcileAction, reconcile_monitor_slots,
+    DockRuntimeConfig, MonitorPlacementInput, NativeEventTarget, NativeRouteDecision,
+    NativeWindowSlot, PlatformEvent, SlotReconcileAction, reconcile_monitor_slots,
     route_native_event_to_slot,
 };
 
@@ -163,7 +163,14 @@ fn create_slot(
         monitor.work_area(),
     )?;
     let dock_controller = sample_dock_controller()?;
-    let runtime = RuntimeSurfaces::new(force_warp, &topbar, &dock, dock_controller)?;
+    let topbar_controller = sample_topbar_controller(topbar.rect.width)?;
+    let runtime = RuntimeSurfaces::new(
+        force_warp,
+        &topbar,
+        &dock,
+        dock_controller,
+        topbar_controller,
+    )?;
     let sync_timer = TimerGuard::start_sync(dock.hwnd)?;
     Ok(ShellSlot {
         _sync_timer: sync_timer,
@@ -240,38 +247,6 @@ fn monitor_input(
         .copied()
         .find(|input| input.monitor() == monitor)
         .ok_or_else(|| windows::core::Error::new(invalid_arg(), "monitor missing during reconcile"))
-}
-
-fn sample_dock_controller() -> Result<DockController> {
-    let items = vec![
-        DockItem::pinned(DockItemId::new(1), parse_app("notepad.exe")?),
-        DockItem::pinned(DockItemId::new(2), parse_app("calc.exe")?),
-        DockItem::pinned(DockItemId::new(3), parse_app("explorer.exe")?),
-    ];
-    let mut controller = DockController::new(
-        ShellState::default().with_dock_items(items),
-        DockRuntimeConfig::default().with_autohide(true),
-    )
-    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
-    if std::env::var_os("MINHA_UI_QA_RESTRICTED_PREVIEW").is_some() {
-        controller
-            .sync_running_windows_with_previews(&[ObservedWindow::new(
-                WindowId::new(1),
-                parse_app("notepad.exe")?,
-                true,
-                false,
-            )
-            .with_preview(PreviewCapture::restricted(
-                PreviewUnavailableReason::CaptureRestricted,
-            ))])
-            .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
-        controller.hovered_item = Some(DockItemId::new(1));
-    }
-    Ok(controller)
-}
-
-fn parse_app(value: &str) -> Result<AppId> {
-    AppId::parse(value).map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
 }
 
 const fn invalid_arg() -> windows::core::HRESULT {

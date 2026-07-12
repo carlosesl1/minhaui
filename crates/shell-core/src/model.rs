@@ -190,6 +190,8 @@ impl Monitor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TopbarModuleKind {
+    /// App and system menu entry point.
+    SystemMenu,
     /// Clock and calendar entry point.
     Clock,
     /// Network status.
@@ -233,6 +235,8 @@ impl TopbarModule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Popover {
+    /// App and system menu.
+    SystemMenu,
     /// Calendar popover.
     Calendar,
     /// Network details popover.

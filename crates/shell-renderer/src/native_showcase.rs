@@ -8,9 +8,9 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::core::{Result, w};
 
-use crate::DockScene;
-use crate::native::ShowcaseRole;
+use crate::native::{ShellScenes, ShowcaseRole};
 use crate::native_showcase_dock::{draw_dock_states, draw_functional_dock};
+use crate::native_showcase_topbar::{TopbarBrushes, draw_functional_topbar};
 use crate::{Rgba8, ShowcaseTokens};
 
 pub(crate) fn draw_showcase(
@@ -19,7 +19,7 @@ pub(crate) fn draw_showcase(
     role: ShowcaseRole,
     width: f32,
     height: f32,
-    dock_scene: Option<&DockScene>,
+    scenes: ShellScenes<'_>,
 ) -> Result<()> {
     let tokens = ShowcaseTokens::obsidian_glass();
     let base = create_brush(context, tokens.surface_base)?;
@@ -50,20 +50,38 @@ pub(crate) fn draw_showcase(
         &base,
     );
     if role == ShowcaseRole::Topbar {
-        fill_round(context, rect(16.0, 13.0, 22.0, 19.0, 3.0), &accent);
-        draw_text(
-            context,
-            "Obsidian Glass  /  Native shell  /  Resource ready",
-            &text_format,
-            D2D_RECT_F {
-                left: 32.0,
-                top: 0.0,
-                right: width - 16.0,
-                bottom: height,
-            },
-            &primary,
-        );
-    } else if let Some(scene) = dock_scene {
+        if let Some(scene) = scenes.topbar {
+            draw_functional_topbar(
+                context,
+                &text_format,
+                width,
+                height,
+                scene,
+                TopbarBrushes {
+                    raised: &raised,
+                    hover: &hover,
+                    primary: &primary,
+                    secondary: &secondary,
+                    accent: &accent,
+                    error: &error,
+                },
+            );
+        } else {
+            fill_round(context, rect(16.0, 13.0, 22.0, 19.0, 3.0), &accent);
+            draw_text(
+                context,
+                "Obsidian Glass  /  Native shell  /  Resource ready",
+                &text_format,
+                D2D_RECT_F {
+                    left: 32.0,
+                    top: 0.0,
+                    right: width - 16.0,
+                    bottom: height,
+                },
+                &primary,
+            );
+        }
+    } else if let Some(scene) = scenes.dock {
         draw_functional_dock(
             context,
             &text_format,

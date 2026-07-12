@@ -7,6 +7,8 @@ mod dock_scene;
 mod geometry;
 mod lifecycle;
 mod showcase_model;
+mod topbar_layout;
+mod topbar_scene;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 COM calls are isolated in this module")]
@@ -33,6 +35,9 @@ mod native_device;
 #[cfg(windows)]
 mod native_showcase_dock;
 
+#[cfg(windows)]
+mod native_showcase_topbar;
+
 pub use color::{Rgba8, premultiply_srgb};
 pub use dock_layout::{
     DockLaidOutItem, DockLayout, WindowPreviewLayout, WindowPreviewRenderKind, layout_dock_scene,
@@ -50,6 +55,8 @@ pub use lifecycle::{DeviceEvent, DeviceLifecycle};
 pub use showcase_model::{
     ShowcaseItem, ShowcasePrimitive, ShowcaseState, ShowcaseTokens, showcase_primitives,
 };
+pub use topbar_layout::{TopbarLaidOutItem, TopbarLayout, TopbarOverflow, layout_topbar_scene};
+pub use topbar_scene::{TopbarDensity, TopbarModuleStatus, TopbarModuleVisual, TopbarScene};
 
 #[must_use]
 pub const fn crate_identity() -> &'static str {

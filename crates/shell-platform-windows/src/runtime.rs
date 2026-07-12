@@ -71,6 +71,7 @@ impl RuntimeOrchestrator {
             PlatformEvent::DockPointer(_) | PlatformEvent::DockContextMenu { .. } => {
                 RuntimeAction::None
             }
+            PlatformEvent::TopbarPointer(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. } | PlatformEvent::SyncWindows => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,
