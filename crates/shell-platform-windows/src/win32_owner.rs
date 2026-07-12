@@ -7,7 +7,7 @@ use windows::core::Result;
 
 use crate::win32_actions::apply_dock_actions;
 use crate::win32_discovery::discover_running_windows;
-use crate::win32_dock_render::{DockRenderBaseline, dip_surface};
+use crate::win32_dock_render::{DockRenderBaseline, DockRenderWindows, dip_surface};
 use crate::win32_preview::DwmPreviewThumbnail;
 use crate::win32_preview_qa::seed_restricted_preview_for_qa;
 use crate::win32_sample_state::density_for_width;
@@ -107,10 +107,12 @@ impl RuntimeSurfaces {
                 self.render_dock_change(
                     DockRenderBaseline::new(&before, visual_before),
                     &actions,
-                    topbar,
-                    dock,
-                    popover,
-                    settings,
+                    DockRenderWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        settings,
+                    },
                 )?;
                 return Ok(true);
             }
@@ -127,10 +129,12 @@ impl RuntimeSurfaces {
                 self.render_dock_change(
                     DockRenderBaseline::new(&before, visual_before),
                     &actions,
-                    topbar,
-                    dock,
-                    popover,
-                    settings,
+                    DockRenderWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        settings,
+                    },
                 )?;
                 return Ok(true);
             }
@@ -147,10 +151,12 @@ impl RuntimeSurfaces {
                 self.render_dock_change(
                     DockRenderBaseline::new(&before, visual_before),
                     &actions,
-                    topbar,
-                    dock,
-                    popover,
-                    settings,
+                    DockRenderWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        settings,
+                    },
                 )?;
                 return Ok(true);
             }
@@ -196,10 +202,12 @@ impl RuntimeSurfaces {
                 self.render_dock_change(
                     DockRenderBaseline::new(&before, visual_before),
                     &actions,
-                    topbar,
-                    dock,
-                    popover,
-                    settings,
+                    DockRenderWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        settings,
+                    },
                 )?;
                 return Ok(true);
             }

@@ -4,7 +4,7 @@ use shell_renderer::native::{ShellScenes, ShowcaseRole};
 use windows::core::Result;
 
 use crate::win32_dock_render::handle_present;
-use crate::win32_owner::RuntimeSurfaces;
+use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows};
 use crate::win32_window::OwnedWindow;
 use crate::{PopoverAction, QueuedPopoverAction, QueuedTopbarAction};
 
@@ -83,7 +83,16 @@ impl RuntimeSurfaces {
             ),
             (None, _) | (_, None) => return self.rebuild(topbar, dock, popover, settings),
         };
-        handle_present(outcome, self, topbar, dock, popover, settings, "settings")
+        handle_present(
+            outcome,
+            self,
+            SurfaceWindows {
+                topbar,
+                dock,
+                popover,
+                settings,
+            },
+        )
     }
 
     fn redraw_popover(
@@ -107,7 +116,16 @@ impl RuntimeSurfaces {
             ),
             (None, _) | (_, None) => return self.rebuild(topbar, dock, popover, settings),
         };
-        handle_present(outcome, self, topbar, dock, popover, settings, "popover")
+        handle_present(
+            outcome,
+            self,
+            SurfaceWindows {
+                topbar,
+                dock,
+                popover,
+                settings,
+            },
+        )
     }
 }
 

@@ -2,13 +2,10 @@
 
 use shell_core::{Effect, ShellState};
 use shell_renderer::DipRect;
-use shell_renderer::native::{
-    PresentOutcome, ShellScenes, ShowcaseRole, device_loss_hresult, is_recoverable_hresult,
-};
+use shell_renderer::native::{PresentOutcome, ShellScenes, ShowcaseRole, is_recoverable_hresult};
 use windows::core::Result;
 
-use crate::win32_owner::RuntimeSurfaces;
-use crate::win32_owner::now_ms;
+use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows, now_ms};
 use crate::win32_window::OwnedWindow;
 use crate::{
     DockRenderAction, DockRenderChange, PollBudget, QueuedDockAction, QueuedTopbarAction,
@@ -29,15 +26,30 @@ impl<'a> DockRenderBaseline<'a> {
     }
 }
 
+pub(super) struct DockRenderWindows<'a> {
+    pub(super) topbar: &'a OwnedWindow,
+    pub(super) dock: &'a mut OwnedWindow,
+    pub(super) popover: &'a OwnedWindow,
+    pub(super) settings: &'a OwnedWindow,
+}
+
+impl DockRenderWindows<'_> {
+    fn surfaces(&self) -> SurfaceWindows<'_> {
+        SurfaceWindows {
+            topbar: self.topbar,
+            dock: &*self.dock,
+            popover: self.popover,
+            settings: self.settings,
+        }
+    }
+}
+
 impl RuntimeSurfaces {
     pub(super) fn render_dock_change(
         &mut self,
         baseline: DockRenderBaseline<'_>,
         actions: &[QueuedDockAction],
-        topbar: &OwnedWindow,
-        dock: &mut OwnedWindow,
-        popover: &OwnedWindow,
-        settings: &OwnedWindow,
+        windows: DockRenderWindows<'_>,
     ) -> Result<()> {
         let current = self.dock_controller.state();
         let render_action = classify_dock_render_action(DockRenderChange {
@@ -48,10 +60,10 @@ impl RuntimeSurfaces {
         });
         match render_action {
             DockRenderAction::None => Ok(()),
-            DockRenderAction::RedrawDock => self.redraw_dock(topbar, dock, popover, settings),
+            DockRenderAction::RedrawDock => self.redraw_dock(windows.surfaces()),
             DockRenderAction::RebuildSurfaces => {
-                self.apply_dock_visibility(dock)?;
-                self.redraw_dock(topbar, dock, popover, settings)
+                self.apply_dock_visibility(windows.dock)?;
+                self.redraw_dock(windows.surfaces())
             }
         }
     }
@@ -65,16 +77,11 @@ impl RuntimeSurfaces {
         )
     }
 
-    fn redraw_dock(
-        &mut self,
-        topbar: &OwnedWindow,
-        dock: &OwnedWindow,
-        popover: &OwnedWindow,
-        settings: &OwnedWindow,
-    ) -> Result<()> {
-        self.dock_controller.update_surface(dip_surface(dock));
+    fn redraw_dock(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
+        self.dock_controller
+            .update_surface(dip_surface(windows.dock));
         let dock_scene = self.dock_controller.scene();
-        self.update_preview_thumbnail(dock, &dock_scene);
+        self.update_preview_thumbnail(windows.dock, &dock_scene);
         let outcome = match (self.renderer.as_ref(), self.dock.as_ref()) {
             (Some(renderer), Some(surface)) => renderer.redraw_surface(
                 surface,
@@ -86,7 +93,14 @@ impl RuntimeSurfaces {
                     settings: None,
                 },
             ),
-            (None, _) | (_, None) => return self.rebuild(topbar, dock, popover, settings),
+            (None, _) | (_, None) => {
+                return self.rebuild(
+                    windows.topbar,
+                    windows.dock,
+                    windows.popover,
+                    windows.settings,
+                );
+            }
         };
         match outcome {
             Ok(PresentOutcome::Presented) => {
@@ -95,17 +109,19 @@ impl RuntimeSurfaces {
                 }
                 Ok(())
             }
-            Ok(PresentOutcome::DeviceLost(kind)) => {
-                let error = windows::core::Error::new(
-                    device_loss_hresult(kind),
-                    format!("recoverable device loss during dock redraw: {kind:?}"),
-                );
-                self.rebuild(topbar, dock, popover, settings)
-            }
+            Ok(PresentOutcome::DeviceLost(_)) => self.rebuild(
+                windows.topbar,
+                windows.dock,
+                windows.popover,
+                windows.settings,
+            ),
             Ok(PresentOutcome::Failed(code)) => Err(windows::core::Error::from_hresult(code)),
-            Err(error) if is_recoverable_hresult(error.code()) => {
-                self.rebuild(topbar, dock, popover, settings)
-            }
+            Err(error) if is_recoverable_hresult(error.code()) => self.rebuild(
+                windows.topbar,
+                windows.dock,
+                windows.popover,
+                windows.settings,
+            ),
             Err(error) => Err(error),
         }
     }
@@ -152,7 +168,16 @@ impl RuntimeSurfaces {
             ),
             (None, _) | (_, None) => return self.rebuild(topbar, dock, popover, settings),
         };
-        handle_present(outcome, self, topbar, dock, popover, settings, "topbar")
+        handle_present(
+            outcome,
+            self,
+            SurfaceWindows {
+                topbar,
+                dock,
+                popover,
+                settings,
+            },
+        )
     }
 }
 
@@ -175,25 +200,23 @@ fn actions_require_rebuild(actions: &[QueuedDockAction]) -> bool {
 pub(super) fn handle_present(
     outcome: Result<PresentOutcome>,
     runtime: &mut RuntimeSurfaces,
-    topbar: &OwnedWindow,
-    dock: &OwnedWindow,
-    popover: &OwnedWindow,
-    settings: &OwnedWindow,
-    role: &str,
+    windows: SurfaceWindows<'_>,
 ) -> Result<()> {
     match outcome {
         Ok(PresentOutcome::Presented) => Ok(()),
-        Ok(PresentOutcome::DeviceLost(kind)) => {
-            let error = windows::core::Error::new(
-                device_loss_hresult(kind),
-                format!("recoverable device loss during {role} redraw: {kind:?}"),
-            );
-            runtime.rebuild(topbar, dock, popover, settings)
-        }
+        Ok(PresentOutcome::DeviceLost(_)) => runtime.rebuild(
+            windows.topbar,
+            windows.dock,
+            windows.popover,
+            windows.settings,
+        ),
         Ok(PresentOutcome::Failed(code)) => Err(windows::core::Error::from_hresult(code)),
-        Err(error) if is_recoverable_hresult(error.code()) => {
-            runtime.rebuild(topbar, dock, popover, settings)
-        }
+        Err(error) if is_recoverable_hresult(error.code()) => runtime.rebuild(
+            windows.topbar,
+            windows.dock,
+            windows.popover,
+            windows.settings,
+        ),
         Err(error) => Err(error),
     }
 }
