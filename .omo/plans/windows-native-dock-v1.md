@@ -59,7 +59,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Every popover has keyboard navigation, loading/empty/error/offline states and cannot crash the host when an adapter fails.
   - Manual QA: reference comparison matrix and screenshots `.omo/evidence/task-8-popovers/`.
 
-- [ ] 9. Build the settings and live customization experience
+- [x] 9. Build the settings and live customization experience
   - Depends on: 5, 7, 8. Implement a native settings surface using the same renderer/tokens: dock, topbar, modules, behavior, performance, accessibility, startup, taskbar and advanced recovery.
   - Live preview changes are transactional with Apply/Cancel/Reset; invalid values never reach runtime state. Include original presets plus local theme import/export/share-by-file.
   - Manual QA: `.omo/evidence/task-9-settings/` including corrupt theme rejection and restart persistence.
