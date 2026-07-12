@@ -7,8 +7,16 @@ RESOURCE generation=1 renderer=warp
 DOCK_STATE [redacted]
 RESOURCE generation=1 renderer=warp
 DOCK_STATE [redacted]
-WINDOW role=topbar hwnd=0x47008a8 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32 dpi=96 visible=true renderer=warp
-WINDOW role=dock hwnd=0x54009bc title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=760,1420,1040,8 dpi=96 visible=true renderer=warp
+WINDOW role=topbar hwnd=0x2210744 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32 dpi=96 visible=true renderer=warp
+WINDOW role=dock hwnd=0xcd0284 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=760,1420,1040,8 dpi=96 visible=true renderer=warp
 DOCK_STATE [redacted]
-WINDOW role=topbar hwnd=0xa907a4 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=-1910,32,1900,32 dpi=96 visible=true renderer=warp
-WINDOW role=dock hwnd=0x3d07fc title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=-1480,888,1040,180 dpi=96 visible=true renderer=warp
+WINDOW role=topbar hwnd=0x190940 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=-1910,32,1900,32 dpi=96 visible=true renderer=warp
+WINDOW role=dock hwnd=0x1680372 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=-1480,888,1040,180 dpi=96 visible=true renderer=warp
+DOCK_STATE [redacted]
+DOCK_STATE [redacted]
+DOCK_STATE [redacted]
+DOCK_STATE [redacted]
+DOCK_STATE [redacted]
+DOCK_STATE [redacted]
+DOCK_STATE [redacted]
+RESOURCE generation=1 renderer=warp

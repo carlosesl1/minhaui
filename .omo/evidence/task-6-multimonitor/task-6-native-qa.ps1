@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $process = $null
-$fullscreen = $null
+$privacyBackdrop = $null
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -43,22 +43,30 @@ $captureDelayMs = switch ($Scenario) {
     "Lifecycle" { 1800 }
     default { 1100 }
 }
-$needsFullscreen = $Scenario -in @("Lifecycle", "Suppressed")
+
+function New-PrivacyBackdrop {
+    $bounds = [System.Drawing.Rectangle]::Empty
+    foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+        if ($bounds.IsEmpty) {
+            $bounds = $screen.Bounds
+        } else {
+            $bounds = [System.Drawing.Rectangle]::Union($bounds, $screen.Bounds)
+        }
+    }
+    $form = New-Object System.Windows.Forms.Form
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $form.ShowInTaskbar = $false
+    $form.TopMost = $true
+    $form.Bounds = $bounds
+    $form.BackColor = [System.Drawing.Color]::FromArgb(32, 36, 40)
+    $form.Show()
+    [System.Windows.Forms.Application]::DoEvents()
+    $form
+}
 
 try {
-    if ($needsFullscreen) {
-        $fullscreen = New-Object System.Windows.Forms.Form
-        $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-        $fullscreen.Text = "Task6SafeFullscreen"
-        $fullscreen.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-        $fullscreen.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-        $fullscreen.Bounds = $screen.Bounds
-        $fullscreen.TopMost = $true
-        $fullscreen.BackColor = [System.Drawing.Color]::Black
-        $fullscreen.ShowInTaskbar = $true
-        $fullscreen.Show()
-        [System.Windows.Forms.Application]::DoEvents()
-    }
+    $privacyBackdrop = New-PrivacyBackdrop
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = Join-Path $RepoRoot "target/x86_64-pc-windows-msvc/release/shell-app.exe"
@@ -130,9 +138,9 @@ try {
     $stderr | Set-Content -Encoding UTF8 $stderrPath
 }
 finally {
-    if ($fullscreen -ne $null) {
-        $fullscreen.Close()
-        $fullscreen.Dispose()
+    if ($privacyBackdrop -ne $null) {
+        $privacyBackdrop.Close()
+        $privacyBackdrop.Dispose()
     }
     if ($process -ne $null -and -not $process.HasExited) {
         $process.Kill()
