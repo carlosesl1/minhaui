@@ -147,6 +147,38 @@ fn running_unpinned_entries_can_be_pinned_without_losing_window_state()
 }
 
 #[test]
+fn pin_existing_unpinned_entry_updates_pin_without_duplicate()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: a running unpinned entry is already present in state.
+    let running = DockItem::running_unpinned(
+        DockItemId::new(44),
+        app("app.external")?,
+        WindowId::new(440),
+        false,
+        true,
+    );
+    let state = ShellState::default().with_dock_items(vec![running.clone()]);
+
+    // When: the user pins that exact discovered entry.
+    let pinned = reduce(&state, ShellEvent::Pin(running))?;
+
+    // Then: the item becomes pinned in place and keeps its window state.
+    assert_eq!(pinned.state.dock_items().len(), 1);
+    assert_eq!(pinned.state.dock_items()[0].id(), DockItemId::new(44));
+    assert_eq!(pinned.state.dock_items()[0].pin(), PinState::Pinned);
+    assert_eq!(
+        pinned.state.dock_items()[0].running(),
+        &RunningState::Running {
+            window: WindowId::new(440),
+            focused: false,
+            minimized: true,
+        }
+    );
+    assert_eq!(pinned.effects, vec![Effect::PersistConfiguration]);
+    Ok(())
+}
+
+#[test]
 fn pin_reorder_unpin_sequence_preserves_unique_order() -> Result<(), Box<dyn std::error::Error>> {
     // Given: two pinned applications.
     let state =

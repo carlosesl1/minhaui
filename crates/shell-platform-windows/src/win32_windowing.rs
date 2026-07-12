@@ -2,23 +2,16 @@ use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 
-use shell_renderer::{
-    DipPoint, DipRect, Dpi, PhysicalRect, physical_from_dip, rounded_content_hit,
-};
+use shell_renderer::{DipPoint, Dpi, PhysicalRect};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
-};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
-use windows::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowRect, HTCLIENT, HTTRANSPARENT, MSG,
-    PBT_APMRESUMEAUTOMATIC, PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-    TranslateMessage, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_TIMER,
+    DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PostQuitMessage,
+    SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::Result;
 
@@ -26,6 +19,9 @@ use crate::win32::{
     DOCK_DRAGGING, DOCK_WINDOW, LIVE_WINDOWS, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
 };
 use crate::win32_context_menu::track_dock_context_menu;
+use crate::win32_drop::first_drop_path;
+use crate::win32_hit_test::hit_test;
+pub(super) use crate::win32_work_area::primary_work_area;
 use crate::{DockPointerPhase, DockPointerSample, PlatformEvent};
 
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
@@ -41,22 +37,6 @@ fn next_event() -> Option<PlatformEvent> {
     EVENT_QUEUE
         .get()
         .and_then(|queue| queue.lock().ok()?.pop_front())
-}
-
-pub(super) fn primary_work_area() -> Result<PhysicalRect> {
-    // SAFETY: Category 8 (FFI boundary). The default-primary flag guarantees a valid
-    // monitor handle even when the origin is outside a monitor.
-    let monitor = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: Category 8 (FFI boundary). `info` has the required size field and is
-    // valid writable storage for the duration of the call.
-    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        return Err(windows::core::Error::from_thread());
-    }
-    Ok(rect_from_win32(info.rcWork))
 }
 
 pub(super) fn message_loop(
@@ -248,60 +228,5 @@ fn client_physical_point(lparam: LPARAM) -> POINT {
     POINT {
         x: (lparam.0 as u16) as i16 as i32,
         y: ((lparam.0 >> 16) as u16) as i16 as i32,
-    }
-}
-
-fn first_drop_path(wparam: WPARAM) -> Option<String> {
-    let hdrop = HDROP(wparam.0 as *mut std::ffi::c_void);
-    // SAFETY: Category 8 (FFI boundary). WM_DROPFILES supplies a valid HDROP until
-    // DragFinish is called below.
-    let length = unsafe { DragQueryFileW(hdrop, 0, None) };
-    if length == 0 {
-        // SAFETY: Category 8 (FFI boundary). Releases the HDROP supplied by Windows.
-        unsafe { DragFinish(hdrop) };
-        return None;
-    }
-    let mut buffer = vec![0; length as usize + 1];
-    // SAFETY: Category 8 (FFI boundary). The buffer is writable and sized from the
-    // preceding query including room for a terminator.
-    let written = unsafe { DragQueryFileW(hdrop, 0, Some(&mut buffer)) };
-    // SAFETY: Category 8 (FFI boundary). Releases the HDROP supplied by Windows.
-    unsafe { DragFinish(hdrop) };
-    if written == 0 {
-        None
-    } else {
-        Some(String::from_utf16_lossy(&buffer[..written as usize]))
-    }
-}
-
-fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
-    let mut rect = RECT::default();
-    // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND and `rect`
-    // is valid writable storage for the call.
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-        return LRESULT(HTTRANSPARENT as isize);
-    }
-    let screen_x = (lparam.0 as u16) as i16 as i32;
-    let screen_y = ((lparam.0 >> 16) as u16) as i16 as i32;
-    // SAFETY: Category 8 (FFI boundary). The window remains live during its callback,
-    // so querying its effective DPI is valid.
-    let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
-    let width = rect.right - rect.left;
-    let height = rect.bottom - rect.top;
-    let scale = dpi.scale();
-    let point = DipPoint::new(
-        (screen_x - rect.left) as f32 / scale,
-        (screen_y - rect.top) as f32 / scale,
-    );
-    let bounds = DipRect::new(0.0, 0.0, width as f32 / scale, height as f32 / scale);
-    let radius = if height <= physical_from_dip(40.0, dpi) {
-        12.0
-    } else {
-        22.0
-    };
-    if rounded_content_hit(bounds, radius, point) {
-        LRESULT(HTCLIENT as isize)
-    } else {
-        LRESULT(HTTRANSPARENT as isize)
     }
 }

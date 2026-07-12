@@ -6,9 +6,9 @@ use shell_renderer::native::{
 };
 use windows::core::Result;
 
-use crate::win32::OwnedWindow;
 use crate::win32_actions::apply_dock_actions;
 use crate::win32_discovery::discover_running_windows;
+use crate::win32_window::OwnedWindow;
 use crate::win32_windowing::primary_work_area;
 use crate::{DockController, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
 
@@ -55,6 +55,7 @@ impl RuntimeSurfaces {
         match &event {
             PlatformEvent::DockPointer(sample) => {
                 let before = self.dock_controller.state().clone();
+                let visual_before = self.dock_controller.visual_generation();
                 let actions = self
                     .dock_controller
                     .handle_pointer(*sample)
@@ -62,7 +63,10 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                if before != *self.dock_controller.state() || !actions.is_empty() {
+                if before != *self.dock_controller.state()
+                    || visual_before != self.dock_controller.visual_generation()
+                    || !actions.is_empty()
+                {
                     self.apply_dock_visibility(dock)?;
                     self.rebuild(topbar, dock)?;
                 }

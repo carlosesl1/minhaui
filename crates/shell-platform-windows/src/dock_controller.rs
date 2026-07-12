@@ -1,35 +1,36 @@
 #![deny(unsafe_code)]
 
-use std::path::Path;
+use std::collections::HashMap;
 
-use shell_core::{
-    AppId, DockItem, DockItemId, Effect, RunningState, ShellEvent, ShellState, reduce,
-};
-use shell_renderer::{
-    DipPoint, DipRect, DockItemVisual, DockLayout, DockScene, RunningIndicator, layout_dock_scene,
-};
+use shell_core::{DockItemId, ShellEvent, ShellState, reduce};
+use shell_renderer::{DipRect, DockScene};
 
-use crate::dock_window_sync::stable_item_id;
-use crate::{
-    ContextMenuCommand, DockAnimator, DockControllerError, DockPointerPhase, DockPointerSample,
-    DockRuntimeConfig, ObservedWindow, QueuedDockAction,
-};
+use crate::dock_launch::initial_launch_targets;
+use crate::dock_visuals::visual_items;
+use crate::{DockAnimator, DockControllerError, DockRuntimeConfig};
 
 pub struct DockController {
-    state: ShellState,
-    config: DockRuntimeConfig,
-    surface: DipRect,
-    pressed_item: Option<DockItemId>,
-    animator: DockAnimator,
+    pub(crate) state: ShellState,
+    pub(crate) config: DockRuntimeConfig,
+    pub(crate) surface: DipRect,
+    pub(crate) pressed_item: Option<DockItemId>,
+    pub(crate) hovered_item: Option<DockItemId>,
+    pub(crate) visual_generation: u64,
+    pub(crate) launch_targets: HashMap<DockItemId, String>,
+    pub(crate) animator: DockAnimator,
 }
 
 impl DockController {
     pub fn new(state: ShellState, config: DockRuntimeConfig) -> Result<Self, DockControllerError> {
+        let launch_targets = initial_launch_targets(&state);
         let mut controller = Self {
             state,
             config,
             surface: DipRect::new(0.0, 0.0, 1.0, 1.0),
             pressed_item: None,
+            hovered_item: None,
+            visual_generation: 0,
+            launch_targets,
             animator: DockAnimator::new(),
         };
         if config.autohide() {
@@ -53,243 +54,36 @@ impl DockController {
         self.animator
     }
 
+    #[must_use]
+    pub const fn visual_generation(&self) -> u64 {
+        self.visual_generation
+    }
+
+    #[must_use]
+    pub fn launch_target_for_item(&self, item: DockItemId) -> Option<&str> {
+        self.launch_targets.get(&item).map(String::as_str)
+    }
+
     pub const fn update_surface(&mut self, surface: DipRect) {
         self.surface = surface;
     }
 
-    pub fn handle_pointer(
-        &mut self,
-        sample: DockPointerSample,
-    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        match sample.phase {
-            DockPointerPhase::Pressed => {
-                self.pressed_item = self.layout().hit_test(sample.point).map(DockItemId::new);
-                Ok(Vec::new())
-            }
-            DockPointerPhase::Released => self.release(sample.point),
-            DockPointerPhase::Dragged => self.drag(sample.point),
-            DockPointerPhase::Exited => {
-                if self.config.autohide() {
-                    self.apply(ShellEvent::HideDock)
-                } else {
-                    Ok(Vec::new())
-                }
-            }
-            DockPointerPhase::Moved => self.reveal_if_needed(sample.point),
-        }
-    }
-
-    pub fn handle_context_menu(
-        &mut self,
-        point: DipPoint,
-        command: ContextMenuCommand,
-    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        let id = self.layout().hit_test(point).map(DockItemId::new);
-        match command {
-            ContextMenuCommand::Open => Ok(id.map_or_else(Vec::new, |item| {
-                self.window_for_item(item).map_or_else(Vec::new, |window| {
-                    vec![QueuedDockAction::Effect(Effect::FocusWindow(window))]
-                })
-            })),
-            ContextMenuCommand::Unpin => {
-                id.map_or(Ok(Vec::new()), |item| self.apply(ShellEvent::Unpin(item)))
-            }
-            ContextMenuCommand::Pin => Ok(Vec::new()),
-            ContextMenuCommand::Quit => Ok(vec![QueuedDockAction::Quit]),
-        }
-    }
-
-    pub fn handle_drop(
-        &mut self,
-        _point: DipPoint,
-        path: &str,
-    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        let file_name = Path::new(path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or(DockControllerError::MissingFileName)?;
-        let app = AppId::parse(file_name)?;
-        let id = self.next_item_id();
-        self.apply(ShellEvent::Pin(DockItem::pinned(id, app)))
-    }
-
-    pub fn sync_running_windows(
-        &mut self,
-        observed: &[ObservedWindow],
-    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        let mut actions = Vec::new();
-        for window in observed {
-            let item = if let Some(item) = self.item_for_app(window.app()) {
-                item
-            } else {
-                let item = self.stable_item_for_app(window.app());
-                let discovered = DockItem::running_unpinned(
-                    item,
-                    window.app().clone(),
-                    window.window(),
-                    window.foreground(),
-                    window.minimized(),
-                );
-                actions.extend(self.apply(ShellEvent::WindowDiscovered(discovered))?);
-                item
-            };
-            actions.extend(self.apply(ShellEvent::WindowChanged {
-                item,
-                window: window.window(),
-                focused: window.foreground(),
-                minimized: window.minimized(),
-            })?);
-        }
-        let stale_items = self.stale_running_items(observed);
-        for item in stale_items {
-            actions.extend(self.apply(ShellEvent::WindowClosed(item))?);
-        }
-        Ok(actions)
-    }
-
     #[must_use]
     pub fn scene(&self) -> DockScene {
-        DockScene::new(self.config.layout(), self.visual_items())
+        DockScene::new(self.config.layout(), visual_items(&self.state))
+            .with_hovered_item(self.hovered_item.map(DockItemId::value))
     }
 
-    fn release(&mut self, point: DipPoint) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        let released = self.layout().hit_test(point).map(DockItemId::new);
-        let pressed = self.pressed_item.take();
-        if let Some(released_item) = released
-            && pressed == Some(released_item)
-        {
-            self.apply(ShellEvent::ActivateDockItem(released_item))
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    fn drag(&mut self, point: DipPoint) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        let Some(item) = self.pressed_item else {
-            return Ok(Vec::new());
-        };
-        let before = self.before_item(point, item);
-        self.pressed_item = Some(item);
-        self.apply(ShellEvent::ReorderDockItem { item, before })
-    }
-
-    fn reveal_if_needed(
+    pub(crate) fn apply(
         &mut self,
-        point: DipPoint,
-    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
-        let threshold = self.surface.y + self.surface.height - self.config.reveal_zone_height();
-        if self.config.autohide() && point.y >= threshold {
-            self.apply(ShellEvent::RevealDock)
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    fn apply(&mut self, event: ShellEvent) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        event: ShellEvent,
+    ) -> Result<Vec<crate::QueuedDockAction>, DockControllerError> {
         let transition = reduce(&self.state, event)?;
         self.state = transition.state;
         Ok(transition
             .effects
             .into_iter()
-            .map(QueuedDockAction::Effect)
+            .map(crate::QueuedDockAction::Effect)
             .collect())
-    }
-
-    fn layout(&self) -> DockLayout {
-        layout_dock_scene(&self.scene(), self.surface)
-    }
-
-    fn before_item(&self, point: DipPoint, moving: DockItemId) -> Option<DockItemId> {
-        self.layout()
-            .items()
-            .iter()
-            .filter(|item| item.id() != moving.value())
-            .find(|item| point.x < item.bounds().x + item.bounds().width / 2.0)
-            .map(|item| DockItemId::new(item.id()))
-    }
-
-    fn visual_items(&self) -> Vec<DockItemVisual> {
-        self.state
-            .dock_items()
-            .iter()
-            .map(|item| DockItemVisual::app(item.id().value(), visual_label(item), indicator(item)))
-            .collect()
-    }
-
-    fn next_item_id(&self) -> DockItemId {
-        let value = self
-            .state
-            .dock_items()
-            .iter()
-            .map(|item| item.id().value())
-            .max()
-            .map_or(1, |value| value + 1);
-        DockItemId::new(value)
-    }
-
-    fn item_for_app(&self, app: &AppId) -> Option<DockItemId> {
-        self.state
-            .dock_items()
-            .iter()
-            .find(|item| item.app() == app)
-            .map(DockItem::id)
-    }
-
-    fn stable_item_for_app(&self, app: &AppId) -> DockItemId {
-        let mut id = stable_item_id(app);
-        while self.state.dock_items().iter().any(|item| item.id() == id) {
-            id = DockItemId::new(id.value().wrapping_add(1));
-        }
-        id
-    }
-
-    fn stale_running_items(&self, observed: &[ObservedWindow]) -> Vec<DockItemId> {
-        self.state
-            .dock_items()
-            .iter()
-            .filter_map(|item| match item.running() {
-                RunningState::Running { window, .. }
-                    if !observed.iter().any(|current| current.window() == *window) =>
-                {
-                    Some(item.id())
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn window_for_item(&self, id: DockItemId) -> Option<shell_core::WindowId> {
-        self.state
-            .dock_items()
-            .iter()
-            .find(|item| item.id() == id)
-            .and_then(|item| match item.running() {
-                shell_core::RunningState::Running { window, .. } => Some(*window),
-                shell_core::RunningState::Stopped => None,
-            })
-    }
-}
-
-fn indicator(item: &DockItem) -> RunningIndicator {
-    match item.running() {
-        shell_core::RunningState::Stopped => RunningIndicator::Stopped,
-        shell_core::RunningState::Running {
-            focused: true,
-            minimized: false,
-            ..
-        } => RunningIndicator::Focused,
-        shell_core::RunningState::Running {
-            minimized: true, ..
-        } => RunningIndicator::Minimized,
-        shell_core::RunningState::Running { .. } => RunningIndicator::Running,
-    }
-}
-
-fn visual_label(item: &DockItem) -> &str {
-    match item.app().as_str() {
-        "notepad.exe" | "app.notepad" => "Notes",
-        "calc.exe" | "app.calculator" => "Calc",
-        "explorer.exe" => "Files",
-        value => value.strip_suffix(".exe").unwrap_or(value),
     }
 }

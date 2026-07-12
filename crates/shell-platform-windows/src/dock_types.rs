@@ -129,6 +129,7 @@ impl ContextMenuCommand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedDockAction {
+    Launch(String),
     Effect(Effect),
     Quit,
 }

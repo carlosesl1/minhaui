@@ -30,12 +30,32 @@ mod win32_discovery;
 mod win32_owner;
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 drop decoding is isolated here")]
+mod win32_drop;
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 non-client hit testing is isolated here")]
+mod win32_hit_test;
+
+#[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 QA timer ownership is isolated here")]
 mod win32_timer;
 
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 HWND ownership is isolated here")]
+mod win32_window;
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 work-area lookup is isolated here")]
+mod win32_work_area;
+
 mod dock_controller;
+mod dock_controller_interaction;
+mod dock_controller_sync;
+mod dock_launch;
 mod dock_placement;
 mod dock_types;
+mod dock_visuals;
 mod dock_window_sync;
 mod runtime;
 

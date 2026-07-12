@@ -4,6 +4,7 @@ mod events;
 mod ids;
 mod model;
 mod reducer;
+mod reducer_dock;
 mod state;
 
 pub use events::{Effect, NoOpReason, ShellEvent, Transition, TransitionError, TransitionOutcome};

@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use shell_core::{AppId, Effect, WindowId};
+use shell_core::{Effect, WindowId};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -13,6 +13,7 @@ use crate::QueuedDockAction;
 pub(super) fn apply_dock_actions(actions: &[QueuedDockAction]) -> Result<bool> {
     for action in actions {
         match action {
+            QueuedDockAction::Launch(target) => launch(target)?,
             QueuedDockAction::Effect(effect) => apply_effect(effect)?,
             QueuedDockAction::Quit => return Ok(false),
         }
@@ -22,7 +23,7 @@ pub(super) fn apply_dock_actions(actions: &[QueuedDockAction]) -> Result<bool> {
 
 fn apply_effect(effect: &Effect) -> Result<()> {
     match effect {
-        Effect::Launch(app) => launch(app),
+        Effect::Launch(app) => launch(app.as_str()),
         Effect::FocusWindow(window) => {
             focus(*window);
             Ok(())
@@ -37,8 +38,8 @@ fn apply_effect(effect: &Effect) -> Result<()> {
     }
 }
 
-fn launch(app: &AppId) -> Result<()> {
-    let target = shell_target(app);
+fn launch(target: &str) -> Result<()> {
+    let target = shell_target(target);
     let wide = target.encode_utf16().chain([0]).collect::<Vec<_>>();
     // SAFETY: Category 8 (FFI boundary). Verb and show command are documented,
     // and the target buffer is null-terminated and live for the synchronous call.
@@ -79,8 +80,8 @@ fn minimize(window: WindowId) {
     let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
 }
 
-fn shell_target(app: &AppId) -> String {
-    match app.as_str() {
+fn shell_target(target: &str) -> String {
+    match target {
         "app.calculator" | "calculator" => "calc.exe".to_owned(),
         "app.notepad" | "notepad" => "notepad.exe".to_owned(),
         value => value.to_owned(),
