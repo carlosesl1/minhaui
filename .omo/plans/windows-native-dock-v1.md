@@ -74,7 +74,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Fuzz/negative-test config/theme parsing; reject traversal/oversized payloads and never execute imported theme content.
   - Manual QA: accessibility and long-command interruption artifacts `.omo/evidence/task-11-hardening/`.
 
-- [ ] 12. Package, update, license, and document the commercial V1
+- [x] 12. Package, update, license, and document the commercial V1
   - Depends on: 10, 11. Files: `packaging/msix/**`, `packaging/steam/**`, installer/uninstaller recovery hooks, licenses, privacy and support docs.
   - Produce signed-ready MSIX and Steam-friendly package layouts without embedding credentials; clean uninstall restores Windows state and preserves/export settings by explicit choice.
   - Manual QA: clean install/update/uninstall artifacts `.omo/evidence/task-12-packaging/` on Win10 and Win11 VMs.
