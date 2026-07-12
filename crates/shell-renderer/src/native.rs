@@ -56,7 +56,7 @@ pub struct CompositionRenderer {
 pub struct WindowSurface {
     swap_chain: IDXGISwapChain1,
     device: ID3D11Device,
-    _bitmap: ID2D1Bitmap1,
+    bitmap: ID2D1Bitmap1,
     _target: IDCompositionTarget,
     _visual: IDCompositionVisual,
     width: u32,
@@ -184,7 +184,7 @@ impl CompositionRenderer {
         let surface = WindowSurface {
             swap_chain,
             device: self._d3d.clone(),
-            _bitmap: bitmap,
+            bitmap,
             _target: target,
             _visual: visual,
             width,
@@ -198,6 +198,26 @@ impl CompositionRenderer {
             )),
             PresentOutcome::Failed(code) => Err(windows::core::Error::from_hresult(code)),
         }
+    }
+
+    pub fn redraw_surface(
+        &self,
+        surface: &WindowSurface,
+        role: ShowcaseRole,
+        dock_scene: Option<&DockScene>,
+    ) -> Result<PresentOutcome> {
+        // SAFETY: Category 8 (FFI boundary). The retained bitmap was created from
+        // this renderer's D2D device and remains owned by the live surface.
+        unsafe { self.d2d_context.SetTarget(&surface.bitmap) };
+        draw_showcase(
+            &self.d2d_context,
+            &self.dwrite,
+            role,
+            surface.width as f32,
+            surface.height as f32,
+            dock_scene,
+        )?;
+        surface.present()
     }
 }
 

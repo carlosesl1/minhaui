@@ -30,6 +30,9 @@ mod win32_discovery;
 mod win32_owner;
 
 #[cfg(windows)]
+mod win32_dock_render;
+
+#[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 drop decoding is isolated here")]
 mod win32_drop;
 
@@ -66,7 +69,10 @@ pub use dock_types::{
     DockRuntimeConfig, QueuedDockAction,
 };
 pub use dock_window_sync::ObservedWindow;
-pub use runtime::{RuntimeAction, RuntimeOrchestrator};
+pub use runtime::{
+    DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
+    classify_dock_render_action,
+};
 #[cfg(windows)]
 pub use win32::run_showcase;
 

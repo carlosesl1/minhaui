@@ -14,6 +14,32 @@ pub enum RuntimeAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DockRenderAction {
+    None,
+    RedrawDock,
+    RebuildSurfaces,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DockRenderChange {
+    pub state_changed: bool,
+    pub visual_changed: bool,
+    pub dock_visibility_changed: bool,
+    pub rebuild_requested: bool,
+}
+
+#[must_use]
+pub const fn classify_dock_render_action(change: DockRenderChange) -> DockRenderAction {
+    if change.rebuild_requested || change.dock_visibility_changed {
+        DockRenderAction::RebuildSurfaces
+    } else if change.state_changed || change.visual_changed {
+        DockRenderAction::RedrawDock
+    } else {
+        DockRenderAction::None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeOrchestrator {
     generation: u32,
 }

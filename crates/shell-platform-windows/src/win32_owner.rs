@@ -1,6 +1,5 @@
 #![deny(unsafe_code)]
 
-use shell_renderer::DipRect;
 use shell_renderer::native::{
     CompositionRenderer, DeviceKind, WindowSurface, is_recoverable_hresult,
 };
@@ -8,17 +7,18 @@ use windows::core::Result;
 
 use crate::win32_actions::apply_dock_actions;
 use crate::win32_discovery::discover_running_windows;
+use crate::win32_dock_render::dip_surface;
 use crate::win32_window::OwnedWindow;
 use crate::win32_windowing::primary_work_area;
 use crate::{DockController, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
 
 pub(super) struct RuntimeSurfaces {
     force_warp: bool,
-    renderer: Option<CompositionRenderer>,
+    pub(super) renderer: Option<CompositionRenderer>,
     topbar: Option<WindowSurface>,
-    dock: Option<WindowSurface>,
+    pub(super) dock: Option<WindowSurface>,
     orchestration: RuntimeOrchestrator,
-    dock_controller: DockController,
+    pub(super) dock_controller: DockController,
 }
 
 impl RuntimeSurfaces {
@@ -63,17 +63,12 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                if before != *self.dock_controller.state()
-                    || visual_before != self.dock_controller.visual_generation()
-                    || !actions.is_empty()
-                {
-                    self.apply_dock_visibility(dock)?;
-                    self.rebuild(topbar, dock)?;
-                }
+                self.render_dock_change(&before, visual_before, &actions, topbar, dock)?;
                 return Ok(true);
             }
             PlatformEvent::DockContextMenu { point, command } => {
                 let before = self.dock_controller.state().clone();
+                let visual_before = self.dock_controller.visual_generation();
                 let actions = self
                     .dock_controller
                     .handle_context_menu(*point, *command)
@@ -81,13 +76,12 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                if before != *self.dock_controller.state() || !actions.is_empty() {
-                    self.rebuild(topbar, dock)?;
-                }
+                self.render_dock_change(&before, visual_before, &actions, topbar, dock)?;
                 return Ok(true);
             }
             PlatformEvent::DockDrop { point, path } => {
                 let before = self.dock_controller.state().clone();
+                let visual_before = self.dock_controller.visual_generation();
                 let actions = self
                     .dock_controller
                     .handle_drop(*point, path)
@@ -95,13 +89,12 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                if before != *self.dock_controller.state() || !actions.is_empty() {
-                    self.rebuild(topbar, dock)?;
-                }
+                self.render_dock_change(&before, visual_before, &actions, topbar, dock)?;
                 return Ok(true);
             }
             PlatformEvent::SyncWindows => {
                 let before = self.dock_controller.state().clone();
+                let visual_before = self.dock_controller.visual_generation();
                 let observed = discover_running_windows(&[topbar.hwnd, dock.hwnd])?;
                 let actions = self
                     .dock_controller
@@ -110,9 +103,7 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                if before != *self.dock_controller.state() || !actions.is_empty() {
-                    self.rebuild(topbar, dock)?;
-                }
+                self.render_dock_change(&before, visual_before, &actions, topbar, dock)?;
                 return Ok(true);
             }
             PlatformEvent::TaskbarCreated
@@ -148,16 +139,7 @@ impl RuntimeSurfaces {
         Ok(true)
     }
 
-    fn apply_dock_visibility(&self, dock: &mut OwnedWindow) -> Result<()> {
-        let work = primary_work_area()?;
-        dock.apply_dock_visibility(
-            work,
-            self.dock_controller.config(),
-            !self.dock_controller.state().dock().is_revealed(),
-        )
-    }
-
-    fn rebuild(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {
+    pub(super) fn rebuild(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {
         self.topbar = None;
         self.dock = None;
         self.renderer = None;
@@ -209,7 +191,7 @@ impl RuntimeSurfaces {
         Ok(())
     }
 
-    fn trace_dock_state(&self) {
+    pub(super) fn trace_dock_state(&self) {
         if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
             println!("{}", self.dock_controller.qa_trace_line());
         }
@@ -218,14 +200,4 @@ impl RuntimeSurfaces {
 
 const fn invalid_arg() -> windows::core::HRESULT {
     windows::core::HRESULT(0x8007_0057_u32 as i32)
-}
-
-fn dip_surface(window: &OwnedWindow) -> DipRect {
-    let scale = window.dpi().scale();
-    DipRect::new(
-        0.0,
-        0.0,
-        window.rect.width as f32 / scale,
-        window.rect.height as f32 / scale,
-    )
 }
