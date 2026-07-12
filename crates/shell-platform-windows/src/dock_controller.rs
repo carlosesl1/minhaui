@@ -74,6 +74,31 @@ impl DockController {
             .with_hovered_item(self.hovered_item.map(DockItemId::value))
     }
 
+    pub(crate) fn qa_trace_line(&self) -> String {
+        let items = self
+            .state
+            .dock_items()
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                format!(
+                    "{}:{}:{}:{}:{}",
+                    index,
+                    item.id().value(),
+                    item.app().as_str(),
+                    format!("{:?}", item.pin()).to_ascii_lowercase(),
+                    running_state(item.running()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        format!(
+            "DOCK_STATE hover={:?} items={}",
+            self.hovered_item.map(DockItemId::value),
+            items
+        )
+    }
+
     pub(crate) fn apply(
         &mut self,
         event: ShellEvent,
@@ -85,5 +110,19 @@ impl DockController {
             .into_iter()
             .map(crate::QueuedDockAction::Effect)
             .collect())
+    }
+}
+
+fn running_state(running: &shell_core::RunningState) -> String {
+    match running {
+        shell_core::RunningState::Stopped => "stopped".to_owned(),
+        shell_core::RunningState::Running {
+            window,
+            focused,
+            minimized,
+        } => format!(
+            "running:{:?}:focused={}:minimized={}",
+            window, focused, minimized
+        ),
     }
 }

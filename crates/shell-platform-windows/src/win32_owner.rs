@@ -197,6 +197,7 @@ impl RuntimeSurfaces {
         self.renderer = Some(renderer);
         self.topbar = Some(topbar_surface);
         self.dock = Some(dock_surface);
+        self.trace_dock_state();
         println!(
             "RESOURCE generation={} renderer={}",
             self.orchestration.generation(),
@@ -206,6 +207,12 @@ impl RuntimeSurfaces {
             }
         );
         Ok(())
+    }
+
+    fn trace_dock_state(&self) {
+        if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
+            println!("{}", self.dock_controller.qa_trace_line());
+        }
     }
 }
 
