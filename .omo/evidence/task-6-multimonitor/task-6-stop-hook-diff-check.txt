@@ -1,0 +1,2 @@
+Invocation: git diff --check && git diff --cached --check before stop-hook evidence commit
+Result: PASS exit=0

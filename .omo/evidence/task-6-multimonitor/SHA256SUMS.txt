@@ -1,6 +1,6 @@
 # SHA-256 hashes for Task 6 canonical evidence pack
 # Invocation: find .omo/evidence/task-6-multimonitor -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum
-84618d52652b05506d47b0509b60de19455e1410e370979fbbe45858c0598bb6 *.omo/evidence/task-6-multimonitor/manifest.md
+c2b81382b06d31db1796086da6962d38afe8656567ae4a89da366914ed95c78c *.omo/evidence/task-6-multimonitor/manifest.md
 c51886c9d4c5f7f215830f080c94eb44c764724fc06a320bad77ced52f915dc3 *.omo/evidence/task-6-multimonitor/task-6-clippy-final.txt
 3c47b3a66ef28f1156ee63727e67c38e13d894f835e2caa8f04f2eff3d9495f8 *.omo/evidence/task-6-multimonitor/task-6-diff-check-working.txt
 141fc0ba6429928117bcd2db058b5f1bd55760dfbe453bbdab9ddf805ff57c11 *.omo/evidence/task-6-multimonitor/task-6-doneclaim-review.md
@@ -40,4 +40,5 @@ fb2b31e4f2b92a1d239f4d6822c4cb2e8066dc7ac92ab9696775807d6d1afd8c *.omo/evidence/
 dbfd84409eaf18d6a6c0598e3cd7a54081d86549bf0aef196d9974eb4fd86dd1 *.omo/evidence/task-6-multimonitor/task-6-red-renderer-fallback.txt
 ab2f869b23cb6d682cb48e948e988566cd8415fe9f2550001f1afa3ebecf697e *.omo/evidence/task-6-multimonitor/task-6-release-final.txt
 d03c66d844a91d53ac6d5b8df642c39e63df5824b23a17d3f6468b69bd17bd72 *.omo/evidence/task-6-multimonitor/task-6-slop-scan-final.txt
+5f7c23166a41d2db5d9eaf4bf68c9c729bd591b37354516a06e38d1ffe9edf2c *.omo/evidence/task-6-multimonitor/task-6-stop-hook-verification.txt
 4e6ca7a54568c015d2dcc45a2231282c83bd7faa17d3b0f65fee23e5709a798d *.omo/evidence/task-6-multimonitor/task-6-tests-workspace-final.txt
