@@ -54,7 +54,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - App/system menu, clock/date, network throughput/status, volume, power, notification entry point and module ordering/visibility. Use polling budgets and event-driven updates where available.
   - Manual QA: `.omo/evidence/task-7-topbar/` across compact/comfortable density and narrow monitors.
 
-- [ ] 8. Implement token-driven popovers
+- [x] 8. Implement token-driven popovers
   - Depends on: 7. Calendar, weather (provider abstraction with explicit opt-in/network error state), audio device/volume, media controls, control center, network details, and system/session/power menu.
   - Every popover has keyboard navigation, loading/empty/error/offline states and cannot crash the host when an adapter fails.
   - Manual QA: reference comparison matrix and screenshots `.omo/evidence/task-8-popovers/`.
