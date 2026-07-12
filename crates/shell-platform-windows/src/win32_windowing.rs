@@ -4,6 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use shell_renderer::{DipPoint, Dpi, PhysicalRect};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
@@ -149,7 +150,9 @@ pub(super) unsafe extern "system" fn window_proc(
         WM_COMMAND if is_dock_window(hwnd) => {
             if let Some(command) = ContextMenuCommand::from_native_id((wparam.0 & 0xffff) as u16) {
                 queue_event(PlatformEvent::DockContextMenu {
-                    point: last_context_point().unwrap_or(DipPoint::new(0.0, 0.0)),
+                    point: cursor_client_point(hwnd)
+                        .or_else(last_context_point)
+                        .unwrap_or(DipPoint::new(0.0, 0.0)),
                     command,
                 });
             }
@@ -251,4 +254,25 @@ fn client_physical_point(lparam: LPARAM) -> POINT {
         x: (lparam.0 as u16) as i16 as i32,
         y: ((lparam.0 >> 16) as u16) as i16 as i32,
     }
+}
+
+fn cursor_client_point(hwnd: HWND) -> Option<DipPoint> {
+    let mut point = POINT::default();
+    // SAFETY: Category 8 (FFI boundary). The pointer to POINT is valid for the
+    // synchronous cursor-position query.
+    if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+    // SAFETY: Category 8 (FFI boundary). The HWND is live during dispatch and
+    // `point` is valid mutable storage for the screen-to-client conversion.
+    if !unsafe { ScreenToClient(hwnd, &mut point) }.as_bool() {
+        return None;
+    }
+    // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
+    let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
+    let scale = dpi.scale();
+    Some(DipPoint::new(
+        point.x as f32 / scale,
+        point.y as f32 / scale,
+    ))
 }

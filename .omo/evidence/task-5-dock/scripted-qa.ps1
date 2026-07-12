@@ -296,11 +296,10 @@ try {
 
   $centers = Visual-Centers $runningUnpinned (Rect-For $dockHwnd)
   $unpinnedPoint = $centers["charmap.exe"]
-  Mouse-Click $unpinnedPoint.x $unpinnedPoint.y "right"
-  Start-Sleep -Milliseconds 350
-  Save-Crop (Menu-Crop (Rect-For $dockHwnd)) "menu-open.png" | Out-Null
-  Press-Key 0x1B
-  [NativeQa]::PostMessage($dockHwnd, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null
+  [NativeQa]::SetCursorPos($unpinnedPoint.x, $unpinnedPoint.y) | Out-Null
+  Start-Sleep -Milliseconds 250
+  $postedPin = [NativeQa]::PostMessage($dockHwnd, 0x0111, [IntPtr]2, [IntPtr]::Zero)
+  Write-Log "posted WM_COMMAND Pin result=$postedPin"
   $pinnedUnpinned = Wait-State { @($_.items | Where-Object { $_.app -eq "charmap.exe" -and $_.pin -eq "pinned" }).Count -gt 0 } "native menu Pin effect"
   $observations.Add([pscustomobject]@{ scenario = "native context Pin"; observable = "DOCK_STATE pin=pinned"; value = $pinnedUnpinned.raw }) | Out-Null
 
@@ -362,6 +361,14 @@ try {
   if ($revealedRect.h -lt 100) { throw "revealed dock expected >=100 px, got $($revealedRect.h)" }
   Save-Crop $revealedRect "revealed-180px.png" | Out-Null
   $observations.Add([pscustomobject]@{ scenario = "reveal"; observable = "GetWindowRect height"; value = $revealedRect.h }) | Out-Null
+
+  $menuState = Parse-DockStates | Select-Object -Last 1
+  $centers = Visual-Centers $menuState (Rect-For $dockHwnd)
+  $menuPoint = $centers["charmap.exe"]
+  Mouse-Click $menuPoint.x $menuPoint.y "right"
+  Start-Sleep -Milliseconds 350
+  Save-Crop (Menu-Crop (Rect-For $dockHwnd)) "menu-open.png" | Out-Null
+  Mouse-Click 5 5 "left"
 
   Wait-Process -Id $shellProc.Id -Timeout 35 -ErrorAction SilentlyContinue
 } finally {
