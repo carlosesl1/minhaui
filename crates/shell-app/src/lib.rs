@@ -43,7 +43,7 @@ pub const fn crate_identity() -> &'static str {
 
 #[must_use]
 pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
-    let mut mode = AppMode::Bootstrap;
+    let mut mode = AppMode::Showcase;
     let mut qa_exit = None;
     let mut force_warp = false;
     let mut simulate_device_loss_once = false;
@@ -55,6 +55,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
 
     while index < args.len() {
         match args[index] {
+            "--bootstrap" => mode = AppMode::Bootstrap,
             "--showcase" => mode = AppMode::Showcase,
             "--window-smoke" => mode = AppMode::WindowSmoke,
             "--force-warp" => force_warp = true,
@@ -97,7 +98,7 @@ pub fn parse_env_args() -> AppConfig {
 
 #[must_use]
 pub fn parse_arg_slice(args: &[String]) -> AppConfig {
-    let mut mode = AppMode::Bootstrap;
+    let mut mode = AppMode::Showcase;
     let mut qa_exit = None;
     let mut force_warp = false;
     let mut simulate_device_loss_once = false;
@@ -109,6 +110,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
 
     while index < args.len() {
         match args[index].as_str() {
+            "--bootstrap" => mode = AppMode::Bootstrap,
             "--showcase" => mode = AppMode::Showcase,
             "--window-smoke" => mode = AppMode::WindowSmoke,
             "--force-warp" => force_warp = true,

@@ -1,4 +1,6 @@
 /target/
+/packaging/msix/out/
+/packaging/steam/out/
 *.pdb
 *.ilk
 *.dmp

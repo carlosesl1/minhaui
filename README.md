@@ -1,9 +1,9 @@
 # Windows Native Dock
 
-Windows Native Dock is a local-first shell companion for Windows 10 22H2 and
-Windows 11 on x64 hardware. The V1 workspace is intentionally dependency-free
-while its native process, persistence, platform, and rendering boundaries are
-being established.
+Windows Native Dock, currently branded **Obsidian Glass**, is a local-first
+shell companion for Windows 10 22H2 and Windows 11 on x64 hardware. The app
+provides a native dock, top bar, popovers, settings, portable themes, safe mode,
+and a separate recovery watchdog.
 
 ## Workspace architecture
 
@@ -52,9 +52,24 @@ Release builds use abort-on-panic, fat LTO, one codegen unit, and stripped
 symbols. The two process skeletons currently print an explicit bootstrap status
 and exit successfully; lifecycle and crash recovery arrive in later milestones.
 
-## Run the process skeletons
+## Run the app
 
 ```powershell
 cargo run --release --bin shell-app
 cargo run --release --bin shell-watchdog
 ```
+
+The normal app launch opens the interactive shell. `--safe-mode`,
+`--high-contrast`, and `--reduced-motion` are available as recovery and
+accessibility switches.
+
+## Build distributable layouts
+
+```powershell
+.\packaging\msix\Build-Msix.ps1
+.\packaging\steam\Build-SteamLayout.ps1
+```
+
+The MSIX output is unsigned by default and ready for a publisher certificate.
+Signing secrets are accepted only at build time. Steam VDF files are templates;
+replace the application and depot identifiers in the release pipeline.

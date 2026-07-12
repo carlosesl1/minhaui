@@ -1,0 +1,12 @@
+"DepotBuildConfig"
+{
+    "DepotID" "REPLACE_WITH_DEPOT_ID"
+    "ContentRoot" ".\out\content"
+    "FileMapping"
+    {
+        "LocalPath" "*"
+        "DepotPath" "."
+        "recursive" "1"
+    }
+}
+

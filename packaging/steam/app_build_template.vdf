@@ -1,0 +1,14 @@
+"appbuild"
+{
+    "appid" "REPLACE_WITH_STEAM_APP_ID"
+    "desc" "Obsidian Glass Windows x64"
+    "buildoutput" ".\build-output"
+    "contentroot" ".\out\content"
+    "setlive" ""
+    "preview" "1"
+    "depots"
+    {
+        "REPLACE_WITH_DEPOT_ID" "depot_build_template.vdf"
+    }
+}
+

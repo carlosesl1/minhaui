@@ -1,6 +1,30 @@
 use shell_app::{AppMode, QaExit, parse_args};
 
 #[test]
+fn starts_functional_ui_when_no_mode_is_supplied() {
+    // Given: the packaged executable is launched from a Start menu or Steam shortcut.
+    let args = ["shell-app.exe"];
+
+    // When: no diagnostic mode argument is supplied.
+    let config = parse_args(args);
+
+    // Then: the long-running native UI is the default.
+    assert_eq!(config.mode, AppMode::Showcase);
+}
+
+#[test]
+fn bootstrap_remains_available_for_diagnostics() {
+    // Given: an automation explicitly requests the non-UI bootstrap path.
+    let args = ["shell-app.exe", "--bootstrap"];
+
+    // When: the arguments are parsed.
+    let config = parse_args(args);
+
+    // Then: the process may perform its bounded bootstrap and exit.
+    assert_eq!(config.mode, AppMode::Bootstrap);
+}
+
+#[test]
 fn parses_showcase_with_bounded_qa_exit() {
     let showcase_args = ["shell-app.exe", "--showcase", "--qa-exit-ms", "20000"];
     let config = parse_args(showcase_args);
