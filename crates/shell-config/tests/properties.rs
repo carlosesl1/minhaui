@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 use shell_config::{
-    ConfigLoad, ShellConfigV1, ThemePayload, decode_config, encode_config, export_theme,
-    import_theme,
+    ConfigLoad, ShellConfigV1, ThemeError, ThemePayload, decode_config, encode_config,
+    export_theme, import_theme,
 };
 
 proptest! {
@@ -29,5 +29,31 @@ proptest! {
 
         // Then: the checksum-protected payload is unchanged.
         prop_assert_eq!(imported, theme);
+    }
+
+    #[test]
+    fn malformed_config_bytes_always_recover_without_panicking(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
+        // Given: arbitrary untrusted bytes below the public size bound.
+        // When: the config parser handles them at the boundary.
+        let loaded = decode_config(&bytes);
+
+        // Then: it either produces a validated config or an explicit recovery report.
+        match loaded {
+            ConfigLoad::Current(config)
+            | ConfigLoad::Migrated { config, .. }
+            | ConfigLoad::Recovered { config, .. } => prop_assert!(config.validate().is_ok()),
+        }
+    }
+
+    #[test]
+    fn unsafe_theme_asset_references_are_inert(reference in r"(?i)(https?://|file://|[a-z]:\\|/|\\|\.\./).{0,80}") {
+        // Given: a theme payload containing URL, absolute, drive, or traversal syntax.
+        let theme = ThemePayload::default().with_asset(&reference);
+
+        // When: the payload is exported.
+        let result = export_theme(&theme);
+
+        // Then: unsafe references never enter an importable theme envelope.
+        prop_assert_eq!(result, Err(ThemeError::ForbiddenAssetReference));
     }
 }

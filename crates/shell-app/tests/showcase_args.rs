@@ -47,3 +47,18 @@ fn parses_lifecycle_event_simulation() {
     ];
     assert!(parse_args(args).simulate_lifecycle_events);
 }
+
+#[test]
+fn parses_accessibility_and_safe_mode_smoke_flags() {
+    let args = [
+        "shell-app.exe",
+        "--window-smoke",
+        "--safe-mode",
+        "--high-contrast",
+        "--reduced-motion",
+    ];
+    let config = parse_args(args);
+    assert!(config.safe_mode);
+    assert!(config.high_contrast);
+    assert!(config.reduced_motion);
+}

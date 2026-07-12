@@ -1,7 +1,7 @@
 use shell_core::{Popover, ShellState, TopbarModuleKind};
 use shell_platform_windows::{
-    PollBudget, QueuedTopbarAction, TopbarController, TopbarPointerPhase, TopbarPointerSample,
-    TopbarSnapshot,
+    PollBudget, QueuedTopbarAction, TopbarController, TopbarKey, TopbarPointerPhase,
+    TopbarPointerSample, TopbarSnapshot,
 };
 use shell_renderer::{DipPoint, DipRect, TopbarDensity};
 
@@ -47,6 +47,50 @@ fn status_polling_respects_budget_and_keeps_existing_snapshot_when_deferred()
     // Then: no adapter polling occurs and the privacy-safe snapshot remains stable.
     assert_eq!(action, QueuedTopbarAction::PollDeferred);
     assert_eq!(controller.snapshot(), &before);
+    Ok(())
+}
+
+#[test]
+fn topbar_keyboard_focus_opens_visible_modules_without_pointer_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: a topbar controller with keyboard focus on no module yet.
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 680.0, 40.0));
+    controller.update_snapshot(TopbarSnapshot::privacy_safe_fixture());
+
+    // When: keyboard navigation reaches the network module and activates it.
+    assert_eq!(
+        controller.handle_key(TopbarKey::Next)?,
+        vec![QueuedTopbarAction::RedrawTopbar]
+    );
+    assert_eq!(
+        controller.handle_key(TopbarKey::Next)?,
+        vec![QueuedTopbarAction::RedrawTopbar]
+    );
+    assert_eq!(
+        controller.handle_key(TopbarKey::Next)?,
+        vec![QueuedTopbarAction::RedrawTopbar]
+    );
+    let actions = controller.handle_key(TopbarKey::Activate)?;
+
+    // Then: the focused module is visible in the scene and opens a typed popover.
+    assert_eq!(
+        controller.scene().focused_module(),
+        Some(TopbarModuleKind::Network)
+    );
+    assert_eq!(
+        actions,
+        vec![QueuedTopbarAction::OpenPopover(Popover::Network)]
+    );
+
+    // When: Escape is pressed.
+    assert_eq!(
+        controller.handle_key(TopbarKey::Escape)?,
+        vec![QueuedTopbarAction::RedrawTopbar]
+    );
+
+    // Then: keyboard focus is cleared.
+    assert_eq!(controller.scene().focused_module(), None);
     Ok(())
 }
 

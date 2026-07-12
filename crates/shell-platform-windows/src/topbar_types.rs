@@ -34,6 +34,14 @@ impl TopbarPointerSample {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TopbarKey {
+    Next,
+    Previous,
+    Activate,
+    Escape,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QueuedTopbarAction {
     OpenPopover(Popover),

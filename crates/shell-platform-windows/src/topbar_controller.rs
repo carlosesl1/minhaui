@@ -10,7 +10,8 @@ use shell_renderer::{
 };
 
 use crate::{
-    PollBudget, QueuedTopbarAction, TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot,
+    PollBudget, QueuedTopbarAction, TopbarKey, TopbarPointerPhase, TopbarPointerSample,
+    TopbarSnapshot,
 };
 
 pub struct TopbarController {
@@ -19,6 +20,7 @@ pub struct TopbarController {
     surface: DipRect,
     snapshot: TopbarSnapshot,
     pressed_intent: Option<Popover>,
+    focused_module: Option<TopbarModuleKind>,
     visual_generation: u64,
     resource_generation: u64,
 }
@@ -32,6 +34,7 @@ impl TopbarController {
             surface: DipRect::new(0.0, 0.0, 1.0, 1.0),
             snapshot: TopbarSnapshot::default(),
             pressed_intent: None,
+            focused_module: None,
             visual_generation: 0,
             resource_generation: 0,
         })
@@ -75,6 +78,7 @@ impl TopbarController {
     #[must_use]
     pub fn scene(&self) -> TopbarScene {
         TopbarScene::new(self.density, self.visible_modules())
+            .with_focused_module(self.focused_module)
     }
 
     pub fn handle_pointer(
@@ -108,6 +112,27 @@ impl TopbarController {
         QueuedTopbarAction::RedrawTopbar
     }
 
+    pub fn handle_key(
+        &mut self,
+        key: TopbarKey,
+    ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
+        match key {
+            TopbarKey::Next => {
+                self.focus_delta(1);
+                Ok(vec![QueuedTopbarAction::RedrawTopbar])
+            }
+            TopbarKey::Previous => {
+                self.focus_delta(-1);
+                Ok(vec![QueuedTopbarAction::RedrawTopbar])
+            }
+            TopbarKey::Activate => self.open_intent(self.focused_intent()),
+            TopbarKey::Escape => {
+                self.set_focused_module(None);
+                Ok(vec![QueuedTopbarAction::RedrawTopbar])
+            }
+        }
+    }
+
     fn hit_test(&self, sample: TopbarPointerSample) -> Option<Popover> {
         layout_topbar_scene(&self.scene(), self.surface).hit_test(sample.point())
     }
@@ -122,6 +147,48 @@ impl TopbarController {
         let transition = reduce(&self.state, ShellEvent::OpenPopover(popover))?;
         self.state = transition.state;
         Ok(vec![QueuedTopbarAction::OpenPopover(popover)])
+    }
+
+    fn focus_delta(&mut self, delta: isize) {
+        let modules = self
+            .visible_modules()
+            .into_iter()
+            .filter(|module| module.intent().is_some())
+            .map(|module| module.kind())
+            .collect::<Vec<_>>();
+        if modules.is_empty() {
+            self.set_focused_module(None);
+            return;
+        }
+        let Some(current) = self.focused_module else {
+            if delta < 0 {
+                self.set_focused_module(modules.last().copied());
+            } else {
+                self.set_focused_module(Some(modules[0]));
+            }
+            return;
+        };
+        let position = modules
+            .iter()
+            .position(|module| *module == current)
+            .unwrap_or(0);
+        let next = position.saturating_add_signed(delta).min(modules.len() - 1);
+        self.set_focused_module(Some(modules[next]));
+    }
+
+    fn focused_intent(&self) -> Option<Popover> {
+        let focused = self.focused_module?;
+        self.visible_modules()
+            .into_iter()
+            .find(|module| module.kind() == focused)
+            .and_then(|module| module.intent())
+    }
+
+    fn set_focused_module(&mut self, focused_module: Option<TopbarModuleKind>) {
+        if self.focused_module != focused_module {
+            self.focused_module = focused_module;
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
     }
 
     fn visible_modules(&self) -> Vec<TopbarModuleVisual> {

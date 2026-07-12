@@ -1,7 +1,7 @@
 use shell_core::{AppId, DockItem, DockItemId, Effect, ShellState, WindowId};
 use shell_platform_windows::{
-    ContextMenuCommand, DockController, DockPointerPhase, DockPointerSample, DockRuntimeConfig,
-    ObservedWindow, QueuedDockAction,
+    ContextMenuCommand, DockController, DockKey, DockPointerPhase, DockPointerSample,
+    DockRuntimeConfig, ObservedWindow, QueuedDockAction,
 };
 use shell_renderer::{DipPoint, DipRect, DockItemVisualKind};
 
@@ -209,6 +209,33 @@ fn separators_split_running_apps_and_are_not_interactive() -> Result<(), Box<dyn
         controller.state().dock_items()[0].id(),
         DockItemId::new(separator.id())
     );
+    Ok(())
+}
+
+#[test]
+fn keyboard_focus_activates_dock_items_without_pointer_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: a dock with no pointer hover state.
+    let mut controller = DockController::new(state()?, DockRuntimeConfig::default())?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 320.0, 96.0));
+
+    // When: keyboard navigation focuses the second app and activates it.
+    assert!(controller.handle_key(DockKey::Next)?.is_empty());
+    assert!(controller.handle_key(DockKey::Next)?.is_empty());
+    let actions = controller.handle_key(DockKey::Activate)?;
+
+    // Then: focus is visible in the scene and activation uses the dock reducer path.
+    assert_eq!(controller.scene().focused_item(), Some(2));
+    assert_eq!(
+        actions,
+        vec![QueuedDockAction::Launch("app.calculator".to_owned())]
+    );
+
+    // When: Escape is pressed.
+    assert!(controller.handle_key(DockKey::Escape)?.is_empty());
+
+    // Then: keyboard focus is cleared without changing app state.
+    assert_eq!(controller.scene().focused_item(), None);
     Ok(())
 }
 

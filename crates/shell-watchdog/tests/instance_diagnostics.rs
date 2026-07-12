@@ -44,6 +44,33 @@ fn diagnostics_redact_titles_paths_and_secrets_before_export()
 }
 
 #[test]
+fn diagnostics_redact_posix_paths_and_profile_names() -> Result<(), Box<dyn std::error::Error>> {
+    let given_event = DiagnosticEvent::new(
+        "shell.config_recovery",
+        [
+            DiagnosticField::new("config_path", "/Users/Carlos/.minha-ui/settings.json"),
+            DiagnosticField::new("detail", "failed under C:/Users/Carlos/Documents"),
+            DiagnosticField::new("result", "recovered"),
+        ],
+    );
+    let given_path = std::env::temp_dir().join(format!(
+        "shell-watchdog-posix-diagnostics-{}.jsonl",
+        std::process::id()
+    ));
+
+    export_diagnostics(&given_path, &[given_event])?;
+    let when_exported = fs::read_to_string(&given_path)?;
+    fs::remove_file(&given_path)?;
+
+    assert!(when_exported.contains("\"result\":\"recovered\""));
+    assert!(!when_exported.contains("Carlos"));
+    assert!(!when_exported.contains("/Users/"));
+    assert!(!when_exported.contains("C:/Users/"));
+    assert!(when_exported.contains("[redacted]"));
+    Ok(())
+}
+
+#[test]
 fn log_rotation_keeps_newest_segments_within_bounds() {
     let given_policy = RotationPolicy::new(2, 100);
     let given_segments = [40_u64, 90, 20];

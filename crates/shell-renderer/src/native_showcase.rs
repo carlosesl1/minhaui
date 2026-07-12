@@ -132,6 +132,7 @@ pub(crate) fn draw_showcase(
             &primary,
             &secondary,
             &accent,
+            &focus,
             &error,
             tokens.control_radius,
         );

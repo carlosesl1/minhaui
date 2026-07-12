@@ -144,6 +144,7 @@ pub(crate) fn draw_functional_dock(
     primary: &ID2D1SolidColorBrush,
     secondary: &ID2D1SolidColorBrush,
     accent: &ID2D1SolidColorBrush,
+    focus: &ID2D1SolidColorBrush,
     error: &ID2D1SolidColorBrush,
     control_radius: f32,
 ) {
@@ -205,6 +206,19 @@ pub(crate) fn draw_functional_dock(
             }
             DockItemVisualKind::App => {
                 let bounds = item.bounds();
+                if item.focused() {
+                    fill_round(
+                        context,
+                        rect(
+                            bounds.x - 3.0,
+                            bounds.y - 3.0,
+                            bounds.x + bounds.width + 3.0,
+                            bounds.y + bounds.height + 3.0,
+                            control_radius + 3.0,
+                        ),
+                        focus,
+                    );
+                }
                 let brush = match item.indicator() {
                     RunningIndicator::Focused => selected,
                     RunningIndicator::Running | RunningIndicator::Minimized => hover,

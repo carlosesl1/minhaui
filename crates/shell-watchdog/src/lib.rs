@@ -14,7 +14,7 @@ pub use recovery::{
     TaskbarMutation, TaskbarRequest, TaskbarTransaction, begin_taskbar_transaction,
 };
 pub use supervisor::{
-    ChildEvent, RestartDelay, SupervisorAction, SupervisorConfig, SupervisorState,
+    ChildCleanup, ChildEvent, RestartDelay, SupervisorAction, SupervisorConfig, SupervisorState,
 };
 
 #[must_use]

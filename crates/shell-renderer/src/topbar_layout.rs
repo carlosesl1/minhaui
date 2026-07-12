@@ -6,6 +6,7 @@ use crate::{DipPoint, DipRect, TopbarDensity, TopbarModuleVisual, TopbarScene};
 pub struct TopbarLaidOutItem {
     visual: TopbarModuleVisual,
     bounds: DipRect,
+    focused: bool,
 }
 
 impl TopbarLaidOutItem {
@@ -17,6 +18,11 @@ impl TopbarLaidOutItem {
     #[must_use]
     pub const fn bounds(&self) -> DipRect {
         self.bounds
+    }
+
+    #[must_use]
+    pub const fn focused(&self) -> bool {
+        self.focused
     }
 
     #[must_use]
@@ -37,6 +43,11 @@ impl TopbarLaidOutItem {
     #[must_use]
     pub const fn intent(&self) -> Option<Popover> {
         self.visual.intent()
+    }
+
+    #[must_use]
+    pub fn accessible_name(&self) -> &str {
+        self.visual.text()
     }
 }
 
@@ -99,6 +110,7 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
         items.push(TopbarLaidOutItem {
             visual: visual.clone(),
             bounds: DipRect::new(x, surface.y + metrics.y, width, metrics.height),
+            focused: scene.focused_module() == Some(visual.kind()),
         });
         x += width + metrics.gap;
     }

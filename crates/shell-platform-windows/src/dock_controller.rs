@@ -15,6 +15,7 @@ pub struct DockController {
     pub(crate) surface: DipRect,
     pub(crate) pressed_item: Option<DockItemId>,
     pub(crate) hovered_item: Option<DockItemId>,
+    pub(crate) focused_item: Option<DockItemId>,
     pub(crate) visual_generation: u64,
     pub(crate) launch_targets: HashMap<DockItemId, String>,
     pub(crate) previews: HashMap<WindowId, crate::PreviewCapture>,
@@ -30,6 +31,7 @@ impl DockController {
             surface: DipRect::new(0.0, 0.0, 1.0, 1.0),
             pressed_item: None,
             hovered_item: None,
+            focused_item: None,
             visual_generation: 0,
             launch_targets,
             previews: HashMap::new(),
@@ -74,6 +76,7 @@ impl DockController {
     pub fn scene(&self) -> DockScene {
         DockScene::new(self.config.layout(), visual_items(&self.state))
             .with_hovered_item(self.hovered_item.map(DockItemId::value))
+            .with_focused_item(self.focused_item.map(DockItemId::value))
             .with_window_previews(self.hovered_window_preview())
     }
 

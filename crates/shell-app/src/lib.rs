@@ -7,6 +7,9 @@ pub struct AppConfig {
     pub force_warp: bool,
     pub simulate_device_loss_once: bool,
     pub simulate_lifecycle_events: bool,
+    pub safe_mode: bool,
+    pub high_contrast: bool,
+    pub reduced_motion: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +48,9 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
     let mut force_warp = false;
     let mut simulate_device_loss_once = false;
     let mut simulate_lifecycle_events = false;
+    let mut safe_mode = false;
+    let mut high_contrast = false;
+    let mut reduced_motion = false;
     let mut index = 1;
 
     while index < args.len() {
@@ -54,6 +60,9 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
             "--force-warp" => force_warp = true,
             "--simulate-device-loss-once" => simulate_device_loss_once = true,
             "--simulate-lifecycle-events" => simulate_lifecycle_events = true,
+            "--safe-mode" => safe_mode = true,
+            "--high-contrast" => high_contrast = true,
+            "--reduced-motion" => reduced_motion = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -74,6 +83,9 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
         force_warp,
         simulate_device_loss_once,
         simulate_lifecycle_events,
+        safe_mode,
+        high_contrast,
+        reduced_motion,
     }
 }
 
@@ -90,6 +102,9 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
     let mut force_warp = false;
     let mut simulate_device_loss_once = false;
     let mut simulate_lifecycle_events = false;
+    let mut safe_mode = false;
+    let mut high_contrast = false;
+    let mut reduced_motion = false;
     let mut index = 1;
 
     while index < args.len() {
@@ -99,6 +114,9 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
             "--force-warp" => force_warp = true,
             "--simulate-device-loss-once" => simulate_device_loss_once = true,
             "--simulate-lifecycle-events" => simulate_lifecycle_events = true,
+            "--safe-mode" => safe_mode = true,
+            "--high-contrast" => high_contrast = true,
+            "--reduced-motion" => reduced_motion = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -119,5 +137,8 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
         force_warp,
         simulate_device_loss_once,
         simulate_lifecycle_events,
+        safe_mode,
+        high_contrast,
+        reduced_motion,
     }
 }

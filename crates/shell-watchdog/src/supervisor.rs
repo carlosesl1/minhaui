@@ -51,6 +51,27 @@ pub enum SupervisorAction {
     EnterSafeMode,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChildCleanup {
+    grace_period: RestartDelay,
+}
+
+impl ChildCleanup {
+    #[must_use]
+    pub const fn new(grace_period: RestartDelay) -> Self {
+        Self { grace_period }
+    }
+
+    #[must_use]
+    pub const fn action_after_shutdown(self, elapsed_ms: u64) -> SupervisorAction {
+        if elapsed_ms > self.grace_period.millis {
+            SupervisorAction::EnterSafeMode
+        } else {
+            SupervisorAction::Continue
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SupervisorState {
     restart_count: u32,

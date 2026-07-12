@@ -76,10 +76,11 @@ pub(super) fn create_slots(
     class: &WindowClass,
     monitors: &[MonitorPlacementInput],
     force_warp: bool,
+    safe_mode: bool,
 ) -> Result<Vec<ShellSlot>> {
     let mut slots = Vec::new();
     for monitor in monitors {
-        slots.push(create_slot(class, *monitor, force_warp)?);
+        slots.push(create_slot(class, *monitor, force_warp, safe_mode)?);
     }
     Ok(slots)
 }
@@ -87,26 +88,30 @@ pub(super) fn create_slots(
 pub(super) fn dispatch_event(
     class: &WindowClass,
     force_warp: bool,
+    safe_mode: bool,
     slots: &mut Vec<ShellSlot>,
     event: RoutedPlatformEvent,
 ) -> Result<bool> {
     match event.target() {
         NativeEventTarget::Broadcast => {
-            handle_broadcast_event(class, force_warp, slots, event.into_event())
+            handle_broadcast_event(class, force_warp, safe_mode, slots, event.into_event())
         }
-        NativeEventTarget::Window(_) => dispatch_window_event(class, force_warp, slots, event),
+        NativeEventTarget::Window(_) => {
+            dispatch_window_event(class, force_warp, safe_mode, slots, event)
+        }
     }
 }
 
 pub(super) fn handle_broadcast_event(
     class: &WindowClass,
     force_warp: bool,
+    safe_mode: bool,
     slots: &mut Vec<ShellSlot>,
     event: PlatformEvent,
 ) -> Result<bool> {
     match event {
         PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated => {
-            reconcile_slots(class, slots, force_warp)?;
+            reconcile_slots(class, slots, force_warp, safe_mode)?;
             Ok(true)
         }
         PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => Ok(false),
@@ -145,6 +150,7 @@ pub(super) fn print_monitor_placements(monitors: &[MonitorPlacementInput]) {
 fn dispatch_window_event(
     class: &WindowClass,
     force_warp: bool,
+    safe_mode: bool,
     slots: &mut Vec<ShellSlot>,
     event: RoutedPlatformEvent,
 ) -> Result<bool> {
@@ -155,7 +161,7 @@ fn dispatch_window_event(
             .find(|slot| slot.monitor == monitor)
             .map_or(Ok(true), |slot| slot.handle_event(event.into_event())),
         NativeRouteDecision::Broadcast => {
-            handle_broadcast_event(class, force_warp, slots, event.into_event())
+            handle_broadcast_event(class, force_warp, safe_mode, slots, event.into_event())
         }
         NativeRouteDecision::UnknownWindow => Ok(true),
     }
@@ -165,6 +171,7 @@ fn create_slot(
     class: &WindowClass,
     monitor: MonitorPlacementInput,
     force_warp: bool,
+    safe_mode: bool,
 ) -> Result<ShellSlot> {
     let topbar = OwnedWindow::create(
         class,
@@ -198,6 +205,7 @@ fn create_slot(
         },
         dock_controller,
         topbar_controller,
+        safe_mode,
     )?;
     let sync_timer = TimerGuard::start_sync(dock.hwnd)?;
     Ok(ShellSlot {
@@ -215,6 +223,7 @@ fn reconcile_slots(
     class: &WindowClass,
     slots: &mut Vec<ShellSlot>,
     force_warp: bool,
+    safe_mode: bool,
 ) -> Result<()> {
     let monitors = monitor_placement_inputs()?;
     if monitors.is_empty() {
@@ -236,6 +245,7 @@ fn reconcile_slots(
                     class,
                     monitor_input(&monitors, monitor)?,
                     force_warp,
+                    safe_mode,
                 )?);
             }
             SlotReconcileAction::Reuse(monitor) => {

@@ -99,6 +99,14 @@ impl DockPointerSample {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DockKey {
+    Next,
+    Previous,
+    Activate,
+    Escape,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContextMenuCommand {
     Open,
     Unpin,

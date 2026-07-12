@@ -21,6 +21,7 @@ use crate::{
 
 pub(super) struct RuntimeSurfaces {
     force_warp: bool,
+    safe_mode: bool,
     pub(super) renderer: Option<CompositionRenderer>,
     pub(super) topbar: Option<WindowSurface>,
     pub(super) dock: Option<WindowSurface>,
@@ -51,9 +52,11 @@ impl RuntimeSurfaces {
         windows: SurfaceWindows<'_>,
         dock_controller: DockController,
         topbar_controller: TopbarController,
+        safe_mode: bool,
     ) -> Result<Self> {
         let mut runtime = Self {
             force_warp,
+            safe_mode,
             renderer: None,
             topbar: None,
             dock: None,
@@ -100,6 +103,28 @@ impl RuntimeSurfaces {
                 let actions = self
                     .dock_controller
                     .handle_pointer(*sample)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if !apply_dock_actions(&actions)? {
+                    return Ok(false);
+                }
+                self.render_dock_change(
+                    DockRenderBaseline::new(&before, visual_before),
+                    &actions,
+                    DockRenderWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        settings,
+                    },
+                )?;
+                return Ok(true);
+            }
+            PlatformEvent::DockKey(key) => {
+                let before = self.dock_controller.state().clone();
+                let visual_before = self.dock_controller.visual_generation();
+                let actions = self
+                    .dock_controller
+                    .handle_key(*key)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
@@ -169,17 +194,27 @@ impl RuntimeSurfaces {
                 self.redraw_topbar(topbar, dock, popover, settings)?;
                 return Ok(true);
             }
+            PlatformEvent::TopbarKey(key) => {
+                let actions = self
+                    .topbar_controller
+                    .handle_key(*key)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                self.apply_topbar_actions(&actions, topbar, dock, popover, settings)?;
+                self.redraw_topbar(topbar, dock, popover, settings)?;
+                return Ok(true);
+            }
             PlatformEvent::PopoverKey(key) => {
                 let actions = self.popover_controller.handle_key(*key);
                 self.apply_popover_actions(&actions, topbar, dock, popover, settings)?;
                 return Ok(true);
             }
             PlatformEvent::SettingsKey(key) => {
-                match key {
-                    crate::PopoverKey::Next => self.settings_controller.focus_next(),
-                    crate::PopoverKey::Previous => self.settings_controller.focus_previous(),
-                    crate::PopoverKey::Activate => {}
-                    crate::PopoverKey::Escape => settings.hide(),
+                let actions = self
+                    .settings_controller
+                    .handle_key(*key)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if actions.contains(&crate::QueuedSettingsAction::Dismiss) {
+                    settings.hide();
                 }
                 self.redraw_settings(topbar, dock, popover, settings)?;
                 return Ok(true);
@@ -376,6 +411,10 @@ impl RuntimeSurfaces {
         dock: &OwnedWindow,
         scene: &shell_renderer::DockScene,
     ) {
+        if self.safe_mode {
+            self.preview_thumbnail = None;
+            return;
+        }
         let Some(preview) = scene.window_previews().first().copied() else {
             self.preview_thumbnail = None;
             return;

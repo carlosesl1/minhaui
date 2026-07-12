@@ -68,10 +68,10 @@ impl RuntimeOrchestrator {
                 RuntimeAction::RepositionAndRebuild
             }
             PlatformEvent::DpiChanged(rect) => RuntimeAction::ResizeAndRebuild(rect),
-            PlatformEvent::DockPointer(_) | PlatformEvent::DockContextMenu { .. } => {
-                RuntimeAction::None
-            }
-            PlatformEvent::TopbarPointer(_) => RuntimeAction::None,
+            PlatformEvent::DockPointer(_)
+            | PlatformEvent::DockKey(_)
+            | PlatformEvent::DockContextMenu { .. } => RuntimeAction::None,
+            PlatformEvent::TopbarPointer(_) | PlatformEvent::TopbarKey(_) => RuntimeAction::None,
             PlatformEvent::PopoverKey(_) => RuntimeAction::None,
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. } | PlatformEvent::SyncWindows => RuntimeAction::None,

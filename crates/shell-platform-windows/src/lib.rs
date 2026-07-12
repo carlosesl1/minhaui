@@ -110,8 +110,8 @@ pub use dock_placement::{
     reconcile_monitor_slots, taskbar_edge,
 };
 pub use dock_types::{
-    ContextMenuCommand, DockAnimator, DockControllerError, DockPointerPhase, DockPointerSample,
-    DockRuntimeConfig, QueuedDockAction,
+    ContextMenuCommand, DockAnimator, DockControllerError, DockKey, DockPointerPhase,
+    DockPointerSample, DockRuntimeConfig, QueuedDockAction,
 };
 pub use dock_window_sync::ObservedWindow;
 pub use native_event_route::{
@@ -129,14 +129,17 @@ pub use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
 };
-pub use settings_controller::{SettingsController, SettingsEdit, SettingsError};
+pub use settings_controller::{
+    QueuedSettingsAction, SettingsController, SettingsEdit, SettingsError, SettingsKey,
+    SettingsSection,
+};
 pub use topbar_controller::{TopbarController, TopbarControllerError};
 pub use topbar_types::{
-    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, ThroughputLabel,
+    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, ThroughputLabel, TopbarKey,
     TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot,
 };
 #[cfg(windows)]
-pub use win32::run_showcase;
+pub use win32::{ShowcaseRunConfig, run_showcase};
 pub use window_preview::{
     PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
 };
@@ -151,7 +154,9 @@ pub enum PlatformEvent {
     PowerResumed,
     DeviceLost,
     DockPointer(DockPointerSample),
+    DockKey(DockKey),
     TopbarPointer(TopbarPointerSample),
+    TopbarKey(TopbarKey),
     DockContextMenu {
         point: DipPoint,
         command: ContextMenuCommand,
@@ -161,7 +166,7 @@ pub enum PlatformEvent {
         path: String,
     },
     PopoverKey(PopoverKey),
-    SettingsKey(PopoverKey),
+    SettingsKey(SettingsKey),
     SyncWindows,
     QaExitRequested,
     CloseRequested,

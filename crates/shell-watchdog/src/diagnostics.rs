@@ -98,6 +98,8 @@ fn redact(key: &str, value: &str) -> String {
         || lower_key.contains("secret")
         || lower_key.contains("password")
         || value.contains("\\Users\\")
+        || value.contains("/Users/")
+        || value.contains(":/Users/")
     {
         String::from("[redacted]")
     } else {

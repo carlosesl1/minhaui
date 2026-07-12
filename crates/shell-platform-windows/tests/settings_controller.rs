@@ -1,7 +1,10 @@
 use shell_config::{
     AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
 };
-use shell_platform_windows::{SettingsController, SettingsEdit, SettingsError};
+use shell_platform_windows::{
+    QueuedSettingsAction, SettingsController, SettingsEdit, SettingsError, SettingsKey,
+    SettingsSection,
+};
 
 fn qa_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir()
@@ -127,5 +130,38 @@ fn applied_settings_survive_restart_through_config_store() -> Result<(), Box<dyn
     if let Some(parent) = path.parent() {
         let _ = std::fs::remove_dir_all(parent);
     }
+    Ok(())
+}
+
+#[test]
+fn settings_keyboard_navigation_activates_sections_and_escapes()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: settings starts focused on the first section.
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+
+    // When: keyboard navigation moves to Appearance and activates it.
+    for _ in 0..4 {
+        assert_eq!(
+            controller.handle_key(SettingsKey::Next)?,
+            vec![QueuedSettingsAction::Redraw]
+        );
+    }
+    let actions = controller.handle_key(SettingsKey::Activate)?;
+
+    // Then: activation emits the typed section instead of doing nothing.
+    assert_eq!(
+        actions,
+        vec![QueuedSettingsAction::OpenSection(
+            SettingsSection::Appearance
+        )]
+    );
+
+    // When: Escape is pressed after a draft edit.
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    let escape = controller.handle_key(SettingsKey::Escape)?;
+
+    // Then: the draft is cancelled and the native settings surface can close.
+    assert_eq!(escape, vec![QueuedSettingsAction::Dismiss]);
+    assert_eq!(controller.preview(), controller.committed());
     Ok(())
 }

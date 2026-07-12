@@ -16,6 +16,17 @@ use crate::win32_timer::TimerGuard;
 use crate::win32_window::WindowClass;
 use crate::win32_windowing::{message_loop, monitor_placement_inputs};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShowcaseRunConfig {
+    pub force_warp: bool,
+    pub qa_exit_ms: Option<u32>,
+    pub simulate_device_loss_once: bool,
+    pub simulate_lifecycle_events: bool,
+    pub safe_mode: bool,
+    pub high_contrast: bool,
+    pub reduced_motion: bool,
+}
+
 pub(super) const TIMER_ID: usize = 0x4D55;
 pub(super) const SYNC_TIMER_ID: usize = 0x4D56;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
@@ -29,12 +40,7 @@ static TOPBAR_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static POPOVER_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static SETTINGS_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 
-pub fn run_showcase(
-    force_warp: bool,
-    qa_exit_ms: Option<u32>,
-    simulate_device_loss_once: bool,
-    simulate_lifecycle_events: bool,
-) -> Result<()> {
+pub fn run_showcase(config: ShowcaseRunConfig) -> Result<()> {
     // SAFETY: Category 8 (FFI boundary). DPI awareness is set before any HWND is
     // created and uses the documented process-wide per-monitor-v2 constant.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }?;
@@ -52,29 +58,48 @@ pub fn run_showcase(
         ));
     }
     print_monitor_placements(&monitors);
-    let mut slots = create_slots(&class, &monitors, force_warp)?;
-    let timer = qa_exit_ms
+    println!(
+        "ACCESSIBILITY safe_mode={} high_contrast={} reduced_motion={}",
+        config.safe_mode, config.high_contrast, config.reduced_motion
+    );
+    let mut slots = create_slots(&class, &monitors, config.force_warp, config.safe_mode)?;
+    let timer = config
+        .qa_exit_ms
         .map(|milliseconds| TimerGuard::start(slots[0].topbar_hwnd(), milliseconds))
         .transpose()?;
     for slot in &mut slots {
         slot.handle_event(PlatformEvent::SyncWindows)?;
         slot.print_windows();
     }
-    if simulate_device_loss_once {
+    if config.simulate_device_loss_once {
         for slot in &mut slots {
             slot.handle_event(PlatformEvent::DeviceLost)?;
         }
     }
-    if simulate_lifecycle_events {
+    if config.simulate_lifecycle_events {
         for event in [
             PlatformEvent::DisplayChanged,
             PlatformEvent::PowerResumed,
             PlatformEvent::TaskbarCreated,
         ] {
-            handle_broadcast_event(&class, force_warp, &mut slots, event)?;
+            handle_broadcast_event(
+                &class,
+                config.force_warp,
+                config.safe_mode,
+                &mut slots,
+                event,
+            )?;
         }
     }
-    let result = message_loop(|event| dispatch_event(&class, force_warp, &mut slots, event));
+    let result = message_loop(|event| {
+        dispatch_event(
+            &class,
+            config.force_warp,
+            config.safe_mode,
+            &mut slots,
+            event,
+        )
+    });
     drop(slots);
     drop(timer);
     drop(class);

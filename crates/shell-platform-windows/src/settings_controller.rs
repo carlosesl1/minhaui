@@ -15,6 +15,35 @@ pub enum SettingsEdit {
     Appearance(AppearanceSettings),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettingsKey {
+    Next,
+    Previous,
+    Activate,
+    Escape,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettingsSection {
+    Dock,
+    Topbar,
+    Modules,
+    Behavior,
+    Appearance,
+    Performance,
+    Accessibility,
+    Startup,
+    Taskbar,
+    AdvancedRecovery,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QueuedSettingsAction {
+    Redraw,
+    OpenSection(SettingsSection),
+    Dismiss,
+}
+
 #[derive(Debug)]
 pub enum SettingsError {
     Config(ConfigError),
@@ -97,6 +126,29 @@ impl SettingsController {
         self.focus = self.focus.saturating_sub(1);
     }
 
+    pub fn handle_key(
+        &mut self,
+        key: SettingsKey,
+    ) -> Result<Vec<QueuedSettingsAction>, SettingsError> {
+        match key {
+            SettingsKey::Next => {
+                self.focus_next();
+                Ok(vec![QueuedSettingsAction::Redraw])
+            }
+            SettingsKey::Previous => {
+                self.focus_previous();
+                Ok(vec![QueuedSettingsAction::Redraw])
+            }
+            SettingsKey::Activate => Ok(vec![QueuedSettingsAction::OpenSection(
+                section_for_focus(self.focus),
+            )]),
+            SettingsKey::Escape => {
+                self.cancel();
+                Ok(vec![QueuedSettingsAction::Dismiss])
+            }
+        }
+    }
+
     #[must_use]
     pub fn scene(&self) -> SettingsScene {
         SettingsScene::new("Settings", settings_rows(), Some(self.focus))
@@ -146,6 +198,21 @@ fn settings_rows() -> Vec<SettingsRow> {
     .into_iter()
     .map(|(label, detail)| SettingsRow::new(label, detail, true))
     .collect()
+}
+
+const fn section_for_focus(focus: usize) -> SettingsSection {
+    match focus {
+        0 => SettingsSection::Dock,
+        1 => SettingsSection::Topbar,
+        2 => SettingsSection::Modules,
+        3 => SettingsSection::Behavior,
+        4 => SettingsSection::Appearance,
+        5 => SettingsSection::Performance,
+        6 => SettingsSection::Accessibility,
+        7 => SettingsSection::Startup,
+        8 => SettingsSection::Taskbar,
+        _ => SettingsSection::AdvancedRecovery,
+    }
 }
 
 impl From<ConfigError> for SettingsError {

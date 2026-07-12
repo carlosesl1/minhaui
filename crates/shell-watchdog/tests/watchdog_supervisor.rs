@@ -1,5 +1,5 @@
 use shell_watchdog::{
-    ChildEvent, RestartDelay, SupervisorAction, SupervisorConfig, SupervisorState,
+    ChildCleanup, ChildEvent, RestartDelay, SupervisorAction, SupervisorConfig, SupervisorState,
 };
 
 #[test]
@@ -51,4 +51,15 @@ fn watchdog_enters_safe_mode_instead_of_infinite_restart_loop() {
     );
     assert_eq!(when_safe, SupervisorAction::EnterSafeMode);
     assert!(given_state.safe_mode_active());
+}
+
+#[test]
+fn shutdown_cleanup_escalates_after_bounded_grace_period() {
+    let given_cleanup = ChildCleanup::new(RestartDelay::from_millis(250));
+
+    let when_requested = given_cleanup.action_after_shutdown(0);
+    let when_expired = given_cleanup.action_after_shutdown(251);
+
+    assert_eq!(when_requested, SupervisorAction::Continue);
+    assert_eq!(when_expired, SupervisorAction::EnterSafeMode);
 }

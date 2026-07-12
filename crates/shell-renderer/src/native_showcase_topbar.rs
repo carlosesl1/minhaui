@@ -25,6 +25,19 @@ pub(crate) fn draw_functional_topbar(
     let layout = layout_topbar_scene(scene, DipRect::new(0.0, 0.0, width, height));
     for item in layout.visible_items() {
         let bounds = item.bounds();
+        if item.focused() {
+            fill_round(
+                context,
+                rect(
+                    bounds.x - 3.0,
+                    bounds.y - 3.0,
+                    bounds.x + bounds.width + 3.0,
+                    bounds.y + bounds.height + 3.0,
+                    10.0,
+                ),
+                brushes.accent,
+            );
+        }
         fill_round(
             context,
             rect(

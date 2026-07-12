@@ -7,6 +7,7 @@ use crate::{
 pub struct DockLaidOutItem {
     visual: DockItemVisual,
     bounds: DipRect,
+    focused: bool,
 }
 
 impl DockLaidOutItem {
@@ -31,7 +32,17 @@ impl DockLaidOutItem {
     }
 
     #[must_use]
+    pub const fn focused(&self) -> bool {
+        self.focused
+    }
+
+    #[must_use]
     pub fn label(&self) -> &str {
+        self.visual.label()
+    }
+
+    #[must_use]
+    pub fn accessible_name(&self) -> &str {
         self.visual.label()
     }
 }
@@ -106,6 +117,7 @@ pub fn layout_dock_scene(scene: &DockScene, surface: DipRect) -> DockLayout {
             DockLaidOutItem {
                 visual: visual.clone(),
                 bounds,
+                focused: scene.focused_item() == Some(visual.id()),
             }
         })
         .collect();

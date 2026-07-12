@@ -70,12 +70,17 @@ impl TopbarModuleVisual {
 pub struct TopbarScene {
     density: TopbarDensity,
     modules: Vec<TopbarModuleVisual>,
+    focused_module: Option<TopbarModuleKind>,
 }
 
 impl TopbarScene {
     #[must_use]
     pub const fn new(density: TopbarDensity, modules: Vec<TopbarModuleVisual>) -> Self {
-        Self { density, modules }
+        Self {
+            density,
+            modules,
+            focused_module: None,
+        }
     }
 
     #[must_use]
@@ -86,5 +91,16 @@ impl TopbarScene {
     #[must_use]
     pub fn modules(&self) -> &[TopbarModuleVisual] {
         &self.modules
+    }
+
+    #[must_use]
+    pub const fn focused_module(&self) -> Option<TopbarModuleKind> {
+        self.focused_module
+    }
+
+    #[must_use]
+    pub const fn with_focused_module(mut self, focused_module: Option<TopbarModuleKind>) -> Self {
+        self.focused_module = focused_module;
+        self
     }
 }

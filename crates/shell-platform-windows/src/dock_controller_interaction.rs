@@ -5,8 +5,8 @@ use shell_renderer::{DipPoint, DockLayout, layout_dock_scene};
 
 use crate::dock_launch::dropped_launch_target;
 use crate::{
-    ContextMenuCommand, DockController, DockControllerError, DockPointerPhase, DockPointerSample,
-    PreviewAction, QueuedDockAction,
+    ContextMenuCommand, DockController, DockControllerError, DockKey, DockPointerPhase,
+    DockPointerSample, PreviewAction, QueuedDockAction,
 };
 
 impl DockController {
@@ -63,6 +63,29 @@ impl DockController {
                 self.handle_preview_action_at(point, PreviewAction::Close)
             }
             ContextMenuCommand::Quit => Ok(vec![QueuedDockAction::Quit]),
+        }
+    }
+
+    pub fn handle_key(
+        &mut self,
+        key: DockKey,
+    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        match key {
+            DockKey::Next => {
+                self.focus_delta(1);
+                Ok(Vec::new())
+            }
+            DockKey::Previous => {
+                self.focus_delta(-1);
+                Ok(Vec::new())
+            }
+            DockKey::Activate => self
+                .focused_item
+                .map_or(Ok(Vec::new()), |item| self.activate(item)),
+            DockKey::Escape => {
+                self.set_focused_item(None);
+                Ok(Vec::new())
+            }
         }
     }
 
@@ -180,6 +203,37 @@ impl DockController {
             self.hovered_item = hovered_item;
             self.visual_generation = self.visual_generation.wrapping_add(1);
         }
+    }
+
+    fn set_focused_item(&mut self, focused_item: Option<DockItemId>) {
+        if self.focused_item != focused_item {
+            self.focused_item = focused_item;
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
+    }
+
+    fn focus_delta(&mut self, delta: isize) {
+        let items = self
+            .state
+            .dock_items()
+            .iter()
+            .map(DockItem::id)
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            self.set_focused_item(None);
+            return;
+        }
+        let Some(current) = self.focused_item else {
+            if delta < 0 {
+                self.set_focused_item(items.last().copied());
+            } else {
+                self.set_focused_item(Some(items[0]));
+            }
+            return;
+        };
+        let position = items.iter().position(|item| *item == current).unwrap_or(0);
+        let next = position.saturating_add_signed(delta).min(items.len() - 1);
+        self.set_focused_item(Some(items[next]));
     }
 
     fn activate(&mut self, item: DockItemId) -> Result<Vec<QueuedDockAction>, DockControllerError> {

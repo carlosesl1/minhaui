@@ -29,8 +29,8 @@ pub(super) use crate::win32_work_area::{
     monitor_placement_inputs, window_monitor_id, window_work_area,
 };
 use crate::{
-    ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent, PopoverKey,
-    TopbarPointerPhase, TopbarPointerSample,
+    ContextMenuCommand, DockKey, DockPointerPhase, DockPointerSample, PlatformEvent, PopoverKey,
+    SettingsKey, TopbarKey, TopbarPointerPhase, TopbarPointerSample,
 };
 
 pub(super) fn message_loop(
@@ -166,8 +166,26 @@ pub(super) unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_KEYDOWN if is_dock_window(hwnd) => {
+            if let Some(key) = dock_key(wparam) {
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::DockKey(key),
+                ));
+            }
+            LRESULT(0)
+        }
+        WM_KEYDOWN if is_topbar_window(hwnd) => {
+            if let Some(key) = topbar_key(wparam) {
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::TopbarKey(key),
+                ));
+            }
+            LRESULT(0)
+        }
         WM_KEYDOWN if is_settings_window(hwnd) => {
-            if let Some(key) = popover_key(wparam) {
+            if let Some(key) = settings_key(wparam) {
                 queue_event(RoutedPlatformEvent::window(
                     hwnd,
                     PlatformEvent::SettingsKey(key),
@@ -315,6 +333,51 @@ fn popover_key(wparam: WPARAM) -> Option<PopoverKey> {
         Some(PopoverKey::Activate)
     } else if code == VK_ESCAPE.0 {
         Some(PopoverKey::Escape)
+    } else {
+        None
+    }
+}
+
+fn dock_key(wparam: WPARAM) -> Option<DockKey> {
+    let code = wparam.0 as u16;
+    if code == VK_TAB.0 || code == VK_DOWN.0 {
+        Some(DockKey::Next)
+    } else if code == VK_UP.0 {
+        Some(DockKey::Previous)
+    } else if code == VK_RETURN.0 || code == VK_SPACE.0 {
+        Some(DockKey::Activate)
+    } else if code == VK_ESCAPE.0 {
+        Some(DockKey::Escape)
+    } else {
+        None
+    }
+}
+
+fn topbar_key(wparam: WPARAM) -> Option<TopbarKey> {
+    let code = wparam.0 as u16;
+    if code == VK_TAB.0 || code == VK_DOWN.0 {
+        Some(TopbarKey::Next)
+    } else if code == VK_UP.0 {
+        Some(TopbarKey::Previous)
+    } else if code == VK_RETURN.0 || code == VK_SPACE.0 {
+        Some(TopbarKey::Activate)
+    } else if code == VK_ESCAPE.0 {
+        Some(TopbarKey::Escape)
+    } else {
+        None
+    }
+}
+
+fn settings_key(wparam: WPARAM) -> Option<SettingsKey> {
+    let code = wparam.0 as u16;
+    if code == VK_TAB.0 || code == VK_DOWN.0 {
+        Some(SettingsKey::Next)
+    } else if code == VK_UP.0 {
+        Some(SettingsKey::Previous)
+    } else if code == VK_RETURN.0 || code == VK_SPACE.0 {
+        Some(SettingsKey::Activate)
+    } else if code == VK_ESCAPE.0 {
+        Some(SettingsKey::Escape)
     } else {
         None
     }

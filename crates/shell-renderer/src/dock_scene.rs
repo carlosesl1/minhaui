@@ -153,6 +153,7 @@ pub struct DockScene {
     config: DockLayoutConfig,
     items: Vec<DockItemVisual>,
     hovered_item: Option<u64>,
+    focused_item: Option<u64>,
     window_previews: Vec<WindowPreviewVisual>,
 }
 
@@ -163,6 +164,7 @@ impl DockScene {
             config,
             items,
             hovered_item: None,
+            focused_item: None,
             window_previews: Vec::new(),
         }
     }
@@ -183,8 +185,19 @@ impl DockScene {
     }
 
     #[must_use]
+    pub const fn focused_item(&self) -> Option<u64> {
+        self.focused_item
+    }
+
+    #[must_use]
     pub const fn with_hovered_item(mut self, hovered_item: Option<u64>) -> Self {
         self.hovered_item = hovered_item;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_focused_item(mut self, focused_item: Option<u64>) -> Self {
+        self.focused_item = focused_item;
         self
     }
 
