@@ -1,15 +1,19 @@
 #![deny(unsafe_code)]
 
-use shell_core::{AppId, DockItem, DockItemId, RunningState, ShellEvent};
+use shell_core::{AppId, DockItem, DockItemId, RunningState, ShellEvent, WindowId};
 
 use crate::dock_window_sync::stable_item_id;
-use crate::{DockController, DockControllerError, ObservedWindow, QueuedDockAction};
+use crate::{
+    DockController, DockControllerError, ObservedWindow, PreviewAction, PreviewQueuedAction,
+    QueuedDockAction,
+};
 
 impl DockController {
     pub fn sync_running_windows(
         &mut self,
         observed: &[ObservedWindow],
     ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        self.sync_previews(observed);
         let mut actions = Vec::new();
         for window in observed {
             let item = if let Some(item) = self.item_for_app(window.app()) {
@@ -31,6 +35,40 @@ impl DockController {
             }
         }
         Ok(actions)
+    }
+
+    pub fn sync_running_windows_with_previews(
+        &mut self,
+        observed: &[ObservedWindow],
+    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        self.sync_running_windows(observed)
+    }
+
+    pub fn handle_preview_action(
+        &self,
+        window: WindowId,
+        action: PreviewAction,
+    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        if !self.previews.contains_key(&window) {
+            return Ok(Vec::new());
+        }
+        let Some(app) = self.app_for_window(window) else {
+            return Ok(Vec::new());
+        };
+        let queued = match action {
+            PreviewAction::Focus => PreviewQueuedAction::Focus { window, app },
+            PreviewAction::Close => PreviewQueuedAction::Close { window, app },
+        };
+        Ok(vec![QueuedDockAction::Preview(queued)])
+    }
+
+    fn sync_previews(&mut self, observed: &[ObservedWindow]) {
+        self.previews.clear();
+        for window in observed {
+            if let Some(preview) = window.preview() {
+                self.previews.insert(window.window(), preview);
+            }
+        }
     }
 
     fn discover_running_window(
@@ -58,6 +96,18 @@ impl DockController {
             .iter()
             .find(|item| item.app() == app)
             .map(DockItem::id)
+    }
+
+    fn app_for_window(&self, target: WindowId) -> Option<AppId> {
+        self.state
+            .dock_items()
+            .iter()
+            .find_map(|item| match item.running() {
+                RunningState::Running { window, .. } if *window == target => {
+                    Some(item.app().clone())
+                }
+                RunningState::Stopped | RunningState::Running { .. } => None,
+            })
     }
 
     fn stable_item_for_app(&self, app: &AppId) -> DockItemId {

@@ -52,6 +52,10 @@ mod win32_window;
 #[allow(unsafe_code, reason = "Win32 work-area lookup is isolated here")]
 mod win32_work_area;
 
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "DWM thumbnail probing is isolated here")]
+mod win32_preview;
+
 mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
@@ -61,9 +65,13 @@ mod dock_types;
 mod dock_visuals;
 mod dock_window_sync;
 mod runtime;
+mod window_preview;
 
 pub use dock_controller::DockController;
-pub use dock_placement::DockPhysicalPlacement;
+pub use dock_placement::{
+    DockPhysicalPlacement, FullscreenObservation, FullscreenPolicy, MonitorPlacementInput,
+    MonitorShellPlacement, TaskbarEdge, plan_monitor_placements, taskbar_edge,
+};
 pub use dock_types::{
     ContextMenuCommand, DockAnimator, DockControllerError, DockPointerPhase, DockPointerSample,
     DockRuntimeConfig, QueuedDockAction,
@@ -75,6 +83,9 @@ pub use runtime::{
 };
 #[cfg(windows)]
 pub use win32::run_showcase;
+pub use window_preview::{
+    PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
+};
 
 use shell_renderer::{DipPoint, DipRect, PhysicalRect, rounded_content_hit};
 

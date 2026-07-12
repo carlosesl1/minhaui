@@ -16,13 +16,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::Result;
 
-use crate::win32::{
-    DOCK_DRAGGING, DOCK_WINDOW, LIVE_WINDOWS, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
-};
+use crate::win32::{DOCK_DRAGGING, LIVE_WINDOWS, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID};
 use crate::win32_context_menu::track_dock_context_menu;
 use crate::win32_drop::first_drop_path;
 use crate::win32_hit_test::hit_test;
-pub(super) use crate::win32_work_area::primary_work_area;
+pub(super) use crate::win32_work_area::{
+    monitor_placement_inputs, window_monitor_id, window_work_area,
+};
 use crate::{ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent};
 
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
@@ -226,7 +226,7 @@ pub(super) unsafe extern "system" fn window_proc(
 }
 
 fn is_dock_window(hwnd: HWND) -> bool {
-    DOCK_WINDOW.load(Ordering::Acquire) == hwnd.0 as isize
+    crate::win32::is_dock_window(hwnd)
 }
 
 fn track_mouse_leave(hwnd: HWND) {

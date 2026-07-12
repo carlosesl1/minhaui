@@ -1,0 +1,6 @@
+﻿Surface: Windows process table cleanup check
+Invocation: Get-Process shell-app -ErrorAction SilentlyContinue
+Started: 2026-07-11T23:39:43.8451748-03:00
+
+No shell-app process found.
+Finished: 2026-07-11T23:39:43.8957811-03:00

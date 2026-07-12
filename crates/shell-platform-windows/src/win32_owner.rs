@@ -8,15 +8,18 @@ use windows::core::Result;
 use crate::win32_actions::apply_dock_actions;
 use crate::win32_discovery::discover_running_windows;
 use crate::win32_dock_render::dip_surface;
+use crate::win32_preview::DwmPreviewThumbnail;
 use crate::win32_window::OwnedWindow;
-use crate::win32_windowing::primary_work_area;
-use crate::{DockController, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
+use crate::win32_windowing::{monitor_placement_inputs, window_monitor_id, window_work_area};
+use crate::{DockController, FullscreenPolicy, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
 
 pub(super) struct RuntimeSurfaces {
     force_warp: bool,
     pub(super) renderer: Option<CompositionRenderer>,
     topbar: Option<WindowSurface>,
     pub(super) dock: Option<WindowSurface>,
+    preview_thumbnail: Option<DwmPreviewThumbnail>,
+    fullscreen_suppressed: bool,
     orchestration: RuntimeOrchestrator,
     pub(super) dock_controller: DockController,
 }
@@ -33,6 +36,8 @@ impl RuntimeSurfaces {
             renderer: None,
             topbar: None,
             dock: None,
+            preview_thumbnail: None,
+            fullscreen_suppressed: false,
             orchestration: RuntimeOrchestrator::new(),
             dock_controller,
         };
@@ -95,7 +100,9 @@ impl RuntimeSurfaces {
             PlatformEvent::SyncWindows => {
                 let before = self.dock_controller.state().clone();
                 let visual_before = self.dock_controller.visual_generation();
-                let observed = discover_running_windows(&[topbar.hwnd, dock.hwnd])?;
+                let observed =
+                    discover_running_windows(&[topbar.hwnd, dock.hwnd], Some(dock.hwnd))?;
+                self.sync_fullscreen_suppression(&observed, topbar, dock)?;
                 let actions = self
                     .dock_controller
                     .sync_running_windows(&observed)
@@ -121,7 +128,7 @@ impl RuntimeSurfaces {
             RuntimeAction::Quit => return Ok(false),
             RuntimeAction::Rebuild => self.rebuild(topbar, dock)?,
             RuntimeAction::RepositionAndRebuild => {
-                let work = primary_work_area()?;
+                let work = window_work_area(dock.hwnd)?;
                 topbar.reposition(work)?;
                 dock.apply_dock_visibility(
                     work,
@@ -143,6 +150,7 @@ impl RuntimeSurfaces {
         self.topbar = None;
         self.dock = None;
         self.renderer = None;
+        self.preview_thumbnail = None;
         self.build(topbar, dock)
     }
 
@@ -179,7 +187,10 @@ impl RuntimeSurfaces {
         self.renderer = Some(renderer);
         self.topbar = Some(topbar_surface);
         self.dock = Some(dock_surface);
-        self.trace_dock_state();
+        self.update_preview_thumbnail(dock, &dock_scene);
+        if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
+            println!("{}", self.dock_controller.qa_trace_line());
+        }
         println!(
             "RESOURCE generation={} renderer={}",
             self.orchestration.generation(),
@@ -191,10 +202,56 @@ impl RuntimeSurfaces {
         Ok(())
     }
 
-    pub(super) fn trace_dock_state(&self) {
-        if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
-            println!("{}", self.dock_controller.qa_trace_line());
+    pub(super) fn update_preview_thumbnail(
+        &mut self,
+        dock: &OwnedWindow,
+        scene: &shell_renderer::DockScene,
+    ) {
+        let Some(preview) = scene.window_previews().first().copied() else {
+            self.preview_thumbnail = None;
+            return;
+        };
+        if self
+            .preview_thumbnail
+            .as_ref()
+            .is_some_and(|current| current.window() == preview.window())
+        {
+            return;
         }
+        let destination = shell_renderer::PhysicalRect::new(
+            16,
+            8,
+            (dock.rect.width - 32).clamp(1, 260),
+            (dock.rect.height - 24).clamp(1, 132),
+        );
+        self.preview_thumbnail =
+            DwmPreviewThumbnail::show(dock.hwnd, preview, destination).unwrap_or(None);
+    }
+
+    fn sync_fullscreen_suppression(
+        &mut self,
+        observed: &[crate::ObservedWindow],
+        topbar: &OwnedWindow,
+        dock: &mut OwnedWindow,
+    ) -> Result<()> {
+        let fullscreen = observed
+            .iter()
+            .filter_map(crate::ObservedWindow::fullscreen)
+            .collect::<Vec<_>>();
+        let monitors = monitor_placement_inputs()?;
+        let policy = FullscreenPolicy::hide_for_fullscreen(&fullscreen, &monitors);
+        let suppressed = policy.suppresses(window_monitor_id(dock.hwnd));
+        if suppressed == self.fullscreen_suppressed {
+            return Ok(());
+        }
+        self.fullscreen_suppressed = suppressed;
+        let work = window_work_area(dock.hwnd)?;
+        dock.apply_dock_visibility(
+            work,
+            self.dock_controller.config().with_autohide(true),
+            suppressed,
+        )?;
+        self.rebuild(topbar, dock)
     }
 }
 

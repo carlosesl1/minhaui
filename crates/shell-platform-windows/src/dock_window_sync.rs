@@ -2,12 +2,16 @@
 
 use shell_core::{AppId, DockItemId, WindowId};
 
+use crate::{FullscreenObservation, PreviewCapture};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservedWindow {
     window: WindowId,
     app: AppId,
     foreground: bool,
     minimized: bool,
+    preview: Option<PreviewCapture>,
+    fullscreen: Option<FullscreenObservation>,
 }
 
 impl ObservedWindow {
@@ -18,6 +22,8 @@ impl ObservedWindow {
             app,
             foreground,
             minimized,
+            preview: None,
+            fullscreen: None,
         }
     }
 
@@ -39,6 +45,28 @@ impl ObservedWindow {
     #[must_use]
     pub const fn minimized(&self) -> bool {
         self.minimized
+    }
+
+    #[must_use]
+    pub const fn preview(&self) -> Option<PreviewCapture> {
+        self.preview
+    }
+
+    #[must_use]
+    pub const fn with_preview(mut self, preview: PreviewCapture) -> Self {
+        self.preview = Some(preview);
+        self
+    }
+
+    #[must_use]
+    pub const fn fullscreen(&self) -> Option<FullscreenObservation> {
+        self.fullscreen
+    }
+
+    #[must_use]
+    pub const fn with_fullscreen(mut self, fullscreen: FullscreenObservation) -> Self {
+        self.fullscreen = Some(fullscreen);
+        self
     }
 }
 

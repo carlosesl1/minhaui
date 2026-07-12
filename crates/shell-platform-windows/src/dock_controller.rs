@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use shell_core::{DockItemId, ShellEvent, ShellState, reduce};
-use shell_renderer::{DipRect, DockScene};
+use shell_core::{DockItemId, RunningState, ShellEvent, ShellState, WindowId, reduce};
+use shell_renderer::{DipRect, DockScene, WindowPreviewVisual};
 
 use crate::dock_launch::initial_launch_targets;
 use crate::dock_visuals::visual_items;
@@ -17,6 +17,7 @@ pub struct DockController {
     pub(crate) hovered_item: Option<DockItemId>,
     pub(crate) visual_generation: u64,
     pub(crate) launch_targets: HashMap<DockItemId, String>,
+    pub(crate) previews: HashMap<WindowId, crate::PreviewCapture>,
     pub(crate) animator: DockAnimator,
 }
 
@@ -31,6 +32,7 @@ impl DockController {
             hovered_item: None,
             visual_generation: 0,
             launch_targets,
+            previews: HashMap::new(),
             animator: DockAnimator::new(),
         };
         if config.autohide() {
@@ -72,6 +74,7 @@ impl DockController {
     pub fn scene(&self) -> DockScene {
         DockScene::new(self.config.layout(), visual_items(&self.state))
             .with_hovered_item(self.hovered_item.map(DockItemId::value))
+            .with_window_previews(self.hovered_window_preview())
     }
 
     pub(crate) fn qa_trace_line(&self) -> String {
@@ -110,6 +113,35 @@ impl DockController {
             .into_iter()
             .map(crate::QueuedDockAction::Effect)
             .collect())
+    }
+}
+
+impl DockController {
+    fn hovered_window_preview(&self) -> Vec<WindowPreviewVisual> {
+        let Some(hovered) = self.hovered_item else {
+            return Vec::new();
+        };
+        let Some(window) = self
+            .state
+            .dock_items()
+            .iter()
+            .find(|item| item.id() == hovered)
+            .and_then(|item| match item.running() {
+                RunningState::Running { window, .. } => Some(*window),
+                RunningState::Stopped => None,
+            })
+        else {
+            return Vec::new();
+        };
+        match self.previews.get(&window).copied() {
+            Some(crate::PreviewCapture::DwmThumbnail) => {
+                vec![WindowPreviewVisual::available(window, hovered)]
+            }
+            Some(crate::PreviewCapture::Restricted(reason)) => {
+                vec![WindowPreviewVisual::restricted(window, hovered, reason)]
+            }
+            None => Vec::new(),
+        }
     }
 }
 

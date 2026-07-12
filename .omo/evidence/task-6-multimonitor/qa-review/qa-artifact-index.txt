@@ -1,0 +1,8 @@
+﻿manualQa.md                              3701
+qa-artifact-index.txt                    2058
+qa-cleanup.txt                           231
+qa-desktop-window-smoke.stderr.txt       5
+qa-desktop-window-smoke.txt              2482
+qa-monitor-enumeration.txt               750
+qa-rust-targeted-tests.txt               2871
+qa-screenshot-inspection.txt             349

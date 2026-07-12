@@ -9,7 +9,6 @@ use windows::core::Result;
 
 use crate::win32_owner::RuntimeSurfaces;
 use crate::win32_window::OwnedWindow;
-use crate::win32_windowing::primary_work_area;
 use crate::{DockRenderAction, DockRenderChange, QueuedDockAction, classify_dock_render_action};
 
 impl RuntimeSurfaces {
@@ -39,7 +38,7 @@ impl RuntimeSurfaces {
     }
 
     fn apply_dock_visibility(&self, dock: &mut OwnedWindow) -> Result<()> {
-        let work = primary_work_area()?;
+        let work = crate::win32_windowing::window_work_area(dock.hwnd)?;
         dock.apply_dock_visibility(
             work,
             self.dock_controller.config(),
@@ -50,6 +49,7 @@ impl RuntimeSurfaces {
     fn redraw_dock(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {
         self.dock_controller.update_surface(dip_surface(dock));
         let dock_scene = self.dock_controller.scene();
+        self.update_preview_thumbnail(dock, &dock_scene);
         let outcome = match (self.renderer.as_ref(), self.dock.as_ref()) {
             (Some(renderer), Some(surface)) => {
                 renderer.redraw_surface(surface, ShowcaseRole::Dock, Some(&dock_scene))
@@ -58,7 +58,9 @@ impl RuntimeSurfaces {
         };
         match outcome {
             Ok(PresentOutcome::Presented) => {
-                self.trace_dock_state();
+                if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
+                    println!("{}", self.dock_controller.qa_trace_line());
+                }
                 Ok(())
             }
             Ok(PresentOutcome::DeviceLost(kind)) => {

@@ -1,3 +1,5 @@
+use shell_core::{DockItemId, WindowId};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DockAlignment {
     Left,
@@ -151,6 +153,7 @@ pub struct DockScene {
     config: DockLayoutConfig,
     items: Vec<DockItemVisual>,
     hovered_item: Option<u64>,
+    window_previews: Vec<WindowPreviewVisual>,
 }
 
 impl DockScene {
@@ -160,6 +163,7 @@ impl DockScene {
             config,
             items,
             hovered_item: None,
+            window_previews: Vec::new(),
         }
     }
 
@@ -182,5 +186,74 @@ impl DockScene {
     pub const fn with_hovered_item(mut self, hovered_item: Option<u64>) -> Self {
         self.hovered_item = hovered_item;
         self
+    }
+
+    #[must_use]
+    pub fn window_previews(&self) -> &[WindowPreviewVisual] {
+        &self.window_previews
+    }
+
+    #[must_use]
+    pub fn with_window_previews(mut self, previews: Vec<WindowPreviewVisual>) -> Self {
+        self.window_previews = previews;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreviewUnavailableReason {
+    CaptureRestricted,
+    SourceUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowPreviewCapture {
+    DwmThumbnail,
+    Restricted(PreviewUnavailableReason),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowPreviewVisual {
+    window: WindowId,
+    item: DockItemId,
+    capture: WindowPreviewCapture,
+}
+
+impl WindowPreviewVisual {
+    #[must_use]
+    pub const fn available(window: WindowId, item: DockItemId) -> Self {
+        Self {
+            window,
+            item,
+            capture: WindowPreviewCapture::DwmThumbnail,
+        }
+    }
+
+    #[must_use]
+    pub const fn restricted(
+        window: WindowId,
+        item: DockItemId,
+        reason: PreviewUnavailableReason,
+    ) -> Self {
+        Self {
+            window,
+            item,
+            capture: WindowPreviewCapture::Restricted(reason),
+        }
+    }
+
+    #[must_use]
+    pub const fn window(self) -> WindowId {
+        self.window
+    }
+
+    #[must_use]
+    pub const fn item(self) -> DockItemId {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn capture(self) -> WindowPreviewCapture {
+        self.capture
     }
 }

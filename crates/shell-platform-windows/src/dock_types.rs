@@ -6,6 +6,8 @@ use std::fmt;
 use shell_core::{AppIdError, Effect, TransitionError};
 use shell_renderer::{DipPoint, DockAlignment, DockLayoutConfig};
 
+use crate::PreviewQueuedAction;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DockRuntimeConfig {
     layout: DockLayoutConfig,
@@ -131,6 +133,7 @@ impl ContextMenuCommand {
 pub enum QueuedDockAction {
     Launch(String),
     Effect(Effect),
+    Preview(PreviewQueuedAction),
     Quit,
 }
 

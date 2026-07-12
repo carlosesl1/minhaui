@@ -37,7 +37,7 @@ pub use color::{Rgba8, premultiply_srgb};
 pub use dock_layout::{DockLaidOutItem, DockLayout, layout_dock_scene};
 pub use dock_scene::{
     DockAlignment, DockItemVisual, DockItemVisualKind, DockLayoutConfig, DockScene,
-    RunningIndicator,
+    PreviewUnavailableReason, RunningIndicator, WindowPreviewCapture, WindowPreviewVisual,
 };
 pub use geometry::{
     DipPoint, DipRect, Dpi, PhysicalRect, ShellMetrics, apply_dpi_suggested_rect,

@@ -1,20 +1,27 @@
 use std::path::Path;
 
-use shell_core::{AppId, WindowId};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use shell_core::{AppId, MonitorId, WindowId};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_TOOLWINDOW,
+    GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR, Result};
 
-use crate::ObservedWindow;
+use crate::{FullscreenObservation, ObservedWindow, PreviewCapture};
 
-pub(super) fn discover_running_windows(excluded: &[HWND]) -> Result<Vec<ObservedWindow>> {
+pub(super) fn discover_running_windows(
+    excluded: &[HWND],
+    preview_host: Option<HWND>,
+) -> Result<Vec<ObservedWindow>> {
     let mut state = EnumState {
         excluded: excluded.iter().map(|hwnd| hwnd.0 as isize).collect(),
         foreground: {
@@ -27,6 +34,7 @@ pub(super) fn discover_running_windows(excluded: &[HWND]) -> Result<Vec<Observed
             // returns the current process identifier.
             unsafe { GetCurrentProcessId() }
         },
+        preview_host,
         windows: Vec::new(),
     };
     // SAFETY: Category 8 (FFI boundary). `state` lives for the whole synchronous
@@ -39,6 +47,7 @@ struct EnumState {
     excluded: Vec<isize>,
     foreground: isize,
     current_process: u32,
+    preview_host: Option<HWND>,
     windows: Vec<ObservedWindow>,
 }
 
@@ -61,16 +70,24 @@ fn observed_window(hwnd: HWND, state: &EnumState) -> Option<ObservedWindow> {
         return None;
     }
     let app = process_app(process)?;
-    Some(ObservedWindow::new(
-        WindowId::new(hwnd.0 as usize as u64),
-        app,
-        hwnd.0 as isize == state.foreground,
-        {
-            // SAFETY: Category 8 (FFI boundary). The HWND is from EnumWindows and
-            // still valid for this synchronous minimized-state query.
-            unsafe { IsIconic(hwnd) }.as_bool()
-        },
-    ))
+    let window_id = WindowId::new(hwnd.0 as usize as u64);
+    let observed = ObservedWindow::new(window_id, app, hwnd.0 as isize == state.foreground, {
+        // SAFETY: Category 8 (FFI boundary). The HWND is from EnumWindows and
+        // still valid for this synchronous minimized-state query.
+        unsafe { IsIconic(hwnd) }.as_bool()
+    });
+    Some(match state.preview_host {
+        Some(host) => observed.with_preview(probe_preview(host, hwnd)),
+        None => observed,
+    })
+    .map(|window| match fullscreen_observation(hwnd, window_id) {
+        Some(fullscreen) => window.with_fullscreen(fullscreen),
+        None => window,
+    })
+}
+
+fn probe_preview(host: HWND, source: HWND) -> PreviewCapture {
+    crate::win32_preview::probe_dwm_thumbnail(host, source)
 }
 
 fn eligible_window(hwnd: HWND) -> bool {
@@ -126,4 +143,41 @@ fn process_app(process: u32) -> Option<AppId> {
     let path = String::from_utf16_lossy(&buffer[..length as usize]);
     let file = Path::new(&path).file_name()?.to_str()?.to_ascii_lowercase();
     AppId::parse(&file).ok()
+}
+
+fn fullscreen_observation(hwnd: HWND, window: WindowId) -> Option<FullscreenObservation> {
+    let mut window_rect = RECT::default();
+    // SAFETY: Category 8 (FFI boundary). The HWND is supplied by EnumWindows and
+    // `window_rect` is valid writable storage for the synchronous query.
+    unsafe { GetWindowRect(hwnd, &mut window_rect) }.ok()?;
+    // SAFETY: Category 8 (FFI boundary). The default-nearest flag gives the
+    // monitor containing the enumerated HWND.
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: Category 8 (FFI boundary). `info` has the documented size field
+    // and valid writable storage for this monitor query.
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return None;
+    }
+    (window_rect.left == info.rcMonitor.left
+        && window_rect.top == info.rcMonitor.top
+        && window_rect.right == info.rcMonitor.right
+        && window_rect.bottom == info.rcMonitor.bottom)
+        .then_some(FullscreenObservation::new(
+            window,
+            MonitorId::new(monitor.0 as usize as u64),
+            rect_from_win32(info.rcMonitor),
+        ))
+}
+
+const fn rect_from_win32(rect: RECT) -> shell_renderer::PhysicalRect {
+    shell_renderer::PhysicalRect::new(
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    )
 }

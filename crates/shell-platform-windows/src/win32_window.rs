@@ -12,7 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-use crate::win32::{DOCK_WINDOW, LIVE_WINDOWS};
+use crate::win32::{LIVE_WINDOWS, register_dock_window, unregister_dock_window};
 use crate::win32_windowing::window_proc;
 use crate::{DockPhysicalPlacement, DockRuntimeConfig};
 
@@ -93,7 +93,7 @@ impl OwnedWindow {
         }?;
         LIVE_WINDOWS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if role == ShowcaseRole::Dock {
-            DOCK_WINDOW.store(hwnd.0 as isize, std::sync::atomic::Ordering::Release);
+            register_dock_window(hwnd);
             // SAFETY: Category 8 (FFI boundary). The dock HWND is live and owned by
             // this guard; enabling documented shell file-drop delivery is reversible
             // on window destruction.
@@ -172,6 +172,9 @@ impl OwnedWindow {
 
 impl Drop for OwnedWindow {
     fn drop(&mut self) {
+        if self.role == ShowcaseRole::Dock {
+            unregister_dock_window(self.hwnd);
+        }
         // SAFETY: Category 8 (FFI boundary). This guard is the sole owner of the
         // HWND; DestroyWindow is idempotently skipped by Windows if already closed.
         let _ = unsafe { DestroyWindow(self.hwnd) };
