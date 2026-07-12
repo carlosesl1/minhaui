@@ -40,7 +40,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Create per-monitor DPI-aware, click-correct transparent dock/topbar windows using documented Win32 plus D3D11/DirectComposition; handle device loss, display changes, Explorer restart, sleep/resume, and software-safe fallback.
   - Render a token-driven primitive showcase before feature UI. Verify unit seams plus Windows integration build. Manual QA via real desktop: `.omo/evidence/task-4-native-window.png` and metadata.
 
-- [ ] 5. Implement the functional dock interaction loop
+- [x] 5. Implement the functional dock interaction loop
   - Depends on: 4. Files: dock scene/controller plus platform process/window adapters.
   - Pinned and running apps, launch/focus/minimize, reorder, separators, running indicators, context menu, drag/drop pinning, magnification, configurable alignment/size/spacing, autohide and reveal hit zone.
   - Ensure animation cannot block input/state thread. Manual QA: scripted desktop scenarios and screenshots in `.omo/evidence/task-5-dock/`.
