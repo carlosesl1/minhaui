@@ -49,7 +49,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Depends on: 5. Support independent monitor placement/DPI, taskbar edge awareness, fullscreen hide policy, preview thumbnails and close/focus actions with graceful degradation where capture is restricted.
   - Verify mixed-DPI topology simulations and hot-plug recovery. Manual QA: `.omo/evidence/task-6-multimonitor/`.
 
-- [ ] 7. Implement the top bar shell and reliable base modules
+- [x] 7. Implement the top bar shell and reliable base modules
   - Depends on: 4. Files: topbar scene/controllers and documented Windows adapters.
   - App/system menu, clock/date, network throughput/status, volume, power, notification entry point and module ordering/visibility. Use polling budgets and event-driven updates where available.
   - Manual QA: `.omo/evidence/task-7-topbar/` across compact/comfortable density and narrow monitors.
