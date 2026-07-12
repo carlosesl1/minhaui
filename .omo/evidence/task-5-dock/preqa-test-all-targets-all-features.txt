@@ -1,4 +1,7 @@
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+[1m[92m   Compiling[0m shell-renderer v0.1.0 (C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\crates\shell-renderer)
+[1m[92m   Compiling[0m shell-platform-windows v0.1.0 (C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\crates\shell-platform-windows)
+[1m[92m   Compiling[0m shell-app v0.1.0 (C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\crates\shell-app)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2.34s
 [1m[92m     Running[0m unittests src\lib.rs (target\x86_64-pc-windows-msvc\debug\deps\shell_app-04731582055fecf9.exe)
 
 running 0 tests
@@ -22,9 +25,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 4 tests
 test parses_forced_warp_showcase ... ok
-test parses_showcase_with_bounded_qa_exit ... ok
-test parses_one_shot_device_loss_simulation ... ok
 test parses_lifecycle_event_simulation ... ok
+test parses_one_shot_device_loss_simulation ... ok
+test parses_showcase_with_bounded_qa_exit ... ok
 
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -39,10 +42,10 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 6 tests
 test defaults_are_safe_and_valid ... ok
 test future_schema_is_rejected_explicitly ... ok
-test current_schema_roundtrips ... ok
-test oversized_input_is_rejected_before_json_parsing ... ok
-test v0_fixture_migrates_to_v1 ... ok
 test malformed_and_truncated_input_recovers_to_safe_defaults ... ok
+test current_schema_roundtrips ... ok
+test v0_fixture_migrates_to_v1 ... ok
+test oversized_input_is_rejected_before_json_parsing ... ok
 
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -57,13 +60,13 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 6 tests
 test interrupted_atomic_write_preserves_previous_valid_config ... ok
+test missing_primary_reconciles_completed_backup_candidate ... ok
 test corrupt_primary_recovers_from_preserved_backup ... ok
 test staged_temp_is_promoted_when_it_is_the_only_valid_candidate ... ok
-test missing_primary_reconciles_completed_backup_candidate ... ok
 test missing_primary_restores_previous_before_next_persist ... ok
 test existing_primary_wins_over_stale_rollback_and_cleans_staging ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
 
 [1m[92m     Running[0m tests\properties.rs (target\x86_64-pc-windows-msvc\debug\deps\properties-0be616d63e350158.exe)
 
@@ -78,8 +81,8 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 4 tests
 test oversized_theme_is_rejected ... ok
 test traversal_and_external_asset_references_are_rejected ... ok
-test theme_export_import_roundtrips ... ok
 test checksum_tampering_is_rejected ... ok
+test theme_export_import_roundtrips ... ok
 
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -107,7 +110,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 1 test
 test arbitrary_event_sequences_never_break_state_invariants ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
 
 [1m[92m     Running[0m tests\reducer.rs (target\x86_64-pc-windows-msvc\debug\deps\reducer-df07b88f14e27725.exe)
 
@@ -117,8 +120,8 @@ test display_change_and_safe_mode_choose_a_primary_surface ... ok
 test empty_display_change_is_rejected_without_mutating_state ... ok
 test launch_focus_minimize_sequence_emits_typed_intents ... ok
 test observed_window_sync_tracks_focus_and_minimized_state ... ok
-test opening_a_popover_replaces_the_previous_popover ... ok
 test pin_existing_unpinned_entry_updates_pin_without_duplicate ... ok
+test opening_a_popover_replaces_the_previous_popover ... ok
 test pin_reorder_unpin_sequence_preserves_unique_order ... ok
 test repeated_hide_is_an_explicit_noop ... ok
 test running_unpinned_entries_can_be_pinned_without_losing_window_state ... ok
@@ -137,16 +140,16 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 12 tests
 test dock_physical_placement_collapses_hidden_autohide_to_reveal_strip ... ok
 test autohide_reveal_zone_and_alignment_are_runtime_configurable ... ok
-test context_menu_pin_persists_discovered_unpinned_app ... ok
 test dragging_an_item_reorders_the_persisted_state ... ok
-test native_context_menu_ids_map_to_controller_commands ... ok
+test context_menu_pin_persists_discovered_unpinned_app ... ok
 test context_menu_and_file_drop_pin_existing_windows_without_private_shell_hooks ... ok
-test primary_click_queues_launch_focus_or_minimize_without_waiting_for_animation ... ok
-test drop_preserves_launchable_path_with_spaces_separate_from_identity ... ok
 test separators_split_running_apps_and_are_not_interactive ... ok
 test sync_running_windows_tracks_pinned_focus_minimize_and_close ... ok
 test sync_running_windows_adds_unpinned_apps_with_stable_identity ... ok
+test primary_click_queues_launch_focus_or_minimize_without_waiting_for_animation ... ok
 test pointer_move_sets_hovered_item_for_magnified_scene_and_exit_clears_it ... ok
+test drop_preserves_launchable_path_with_spaces_separate_from_identity ... ok
+test native_context_menu_ids_map_to_controller_commands ... ok
 
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -161,13 +164,13 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 8 tests
 test classifies_transparent_rounded_corners_as_click_through ... ok
-test dock_visibility_change_still_requests_rebuild_for_resized_strip ... ok
-test maps_native_lifecycle_messages_to_typed_events ... ok
 test classifies_visible_shell_content_as_interactive ... ok
-test leaves_unknown_messages_at_win32_boundary ... ok
 test dock_hover_visual_change_requests_redraw_without_resource_generation ... ok
-test runtime_orchestrator_increments_generation_for_real_rebuild_triggers ... ok
+test dock_visibility_change_still_requests_rebuild_for_resized_strip ... ok
 test translates_taskbarcreated_to_typed_lifecycle_event ... ok
+test maps_native_lifecycle_messages_to_typed_events ... ok
+test leaves_unknown_messages_at_win32_boundary ... ok
+test runtime_orchestrator_increments_generation_for_real_rebuild_triggers ... ok
 
 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -197,14 +200,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 11 tests
 test applies_wm_dpichanged_suggested_rect_without_rescaling_twice ... ok
-test classifies_present_hresult_for_success_and_recoverable_loss ... ok
-test converts_dip_to_physical_at_supported_dpi_scales ... ok
-test places_shells_in_offset_high_dpi_work_area ... ok
 test converts_dip_to_physical_when_monitor_uses_fractional_scale ... ok
+test converts_dip_to_physical_at_supported_dpi_scales ... ok
+test classifies_present_hresult_for_success_and_recoverable_loss ... ok
+test places_shells_in_offset_high_dpi_work_area ... ok
+test places_shells_in_signed_secondary_work_area ... ok
 test places_topbar_and_dock_inside_primary_work_area_when_scaled ... ok
 test premultiplies_tokens_before_rendering_to_composition_swapchain ... ok
 test rejects_points_outside_rounded_content_mask_when_window_is_transparent ... ok
-test places_shells_in_signed_secondary_work_area ... ok
 test showcase_model_covers_required_states_and_primitives ... ok
 test showcase_tokens_match_design_contract ... ok
 

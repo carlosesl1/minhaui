@@ -1,2 +1,2 @@
-[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 0.29s
 EXIT_CODE=0

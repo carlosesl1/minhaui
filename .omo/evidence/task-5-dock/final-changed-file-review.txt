@@ -1,9 +1,8 @@
-﻿241`tcrates\shell-platform-windows\src\win32_windowing.rs
-79`tcrates\shell-platform-windows\src\win32_actions.rs
-106`tcrates\shell-platform-windows\src\dock_controller.rs
-168`tcrates\shell-platform-windows\src\dock_controller_interaction.rs
-77`tcrates\shell-platform-windows\src\dock_controller_sync.rs
-45`tcrates\shell-platform-windows\src\dock_visuals.rs
-153`tcrates\shell-core\src\reducer.rs
-147`tcrates\shell-core\src\reducer_dock.rs
+Changed source file pure LOC review
+crates/shell-renderer/src/native.rs pure_loc=184
+crates/shell-platform-windows/src/lib.rs pure_loc=130
+crates/shell-platform-windows/src/runtime.rs pure_loc=77
+crates/shell-platform-windows/src/win32_owner.rs pure_loc=192
+crates/shell-platform-windows/src/win32_dock_render.rs pure_loc=89
+crates/shell-platform-windows/tests/native_slice.rs pure_loc=115
 EXIT_CODE=0

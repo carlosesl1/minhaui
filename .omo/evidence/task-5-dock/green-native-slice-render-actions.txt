@@ -1,0 +1,17 @@
+[1m[92m   Compiling[0m shell-platform-windows v0.1.0 (C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\crates\shell-platform-windows)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1.95s
+[1m[92m     Running[0m tests\native_slice.rs (target\x86_64-pc-windows-msvc\debug\deps\native_slice-838b0eccef0a7abd.exe)
+
+running 8 tests
+test classifies_transparent_rounded_corners_as_click_through ... ok
+test dock_visibility_change_still_requests_rebuild_for_resized_strip ... ok
+test runtime_orchestrator_increments_generation_for_real_rebuild_triggers ... ok
+test classifies_visible_shell_content_as_interactive ... ok
+test leaves_unknown_messages_at_win32_boundary ... ok
+test maps_native_lifecycle_messages_to_typed_events ... ok
+test dock_hover_visual_change_requests_redraw_without_resource_generation ... ok
+test translates_taskbarcreated_to_typed_lifecycle_event ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT_CODE=0

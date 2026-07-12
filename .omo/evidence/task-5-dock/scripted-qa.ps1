@@ -18,6 +18,7 @@ $DropMarker = Join-Path $TempRoot "drop-launched.txt"
 $UnpinnedExe = (Get-Command charmap.exe -ErrorAction Stop).Source
 
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -155,6 +156,27 @@ function Save-Crop($rect, $name) {
   $path
 }
 
+function New-PrivacyBackdrop {
+  $bounds = [System.Drawing.Rectangle]::Empty
+  foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+    if ($bounds.IsEmpty) {
+      $bounds = $screen.Bounds
+    } else {
+      $bounds = [System.Drawing.Rectangle]::Union($bounds, $screen.Bounds)
+    }
+  }
+  $form = New-Object System.Windows.Forms.Form
+  $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+  $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+  $form.ShowInTaskbar = $false
+  $form.TopMost = $true
+  $form.Bounds = $bounds
+  $form.BackColor = [System.Drawing.Color]::FromArgb(32, 36, 40)
+  $form.Show()
+  [System.Windows.Forms.Application]::DoEvents()
+  $form
+}
+
 function Menu-Crop($dockRect) {
   [pscustomobject]@{
     x = [Math]::Max(0, $dockRect.x - 24)
@@ -274,9 +296,24 @@ function Artifact-Record($path) {
   }
 }
 
+function Validate-ManifestArtifacts($path) {
+  $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  foreach ($artifact in $manifest.artifacts) {
+    $item = Get-Item -LiteralPath $artifact.path
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash
+    if ($item.Length -ne $artifact.bytes) {
+      throw "manifest byte mismatch for $($artifact.path)"
+    }
+    if ($hash -ne $artifact.sha256) {
+      throw "manifest hash mismatch for $($artifact.path)"
+    }
+  }
+}
+
 $shellProc = $null
 $unpinnedProc = $null
 $dropCmdProcess = $null
+$privacyBackdrop = $null
 $beforeNotepadIds = @(Get-Process notepad -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $observations = New-Object System.Collections.Generic.List[object]
 
@@ -295,6 +332,9 @@ try {
   $unpinnedWindow = Get-Process -Id $unpinnedProc.Id -ErrorAction SilentlyContinue
   if (-not $unpinnedWindow -or $unpinnedWindow.MainWindowHandle -eq 0) { throw "charmap.exe unpinned window did not appear" }
   Write-Log "started external unpinned app pid=$($unpinnedWindow.Id)"
+
+  $privacyBackdrop = New-PrivacyBackdrop
+  Write-Log "privacy backdrop hwnd=$($privacyBackdrop.Handle)"
 
   $exe = Find-ShellApp
   $oldTrace = $env:MINHA_UI_QA_TRACE
@@ -429,6 +469,10 @@ try {
     Stop-Process -Id $shellProc.Id -Force -ErrorAction SilentlyContinue
     Wait-Process -Id $shellProc.Id -Timeout 5 -ErrorAction SilentlyContinue
   }
+  if ($privacyBackdrop) {
+    $privacyBackdrop.Close()
+    $privacyBackdrop.Dispose()
+  }
 }
 
 $cleanup = [pscustomobject]@{
@@ -458,7 +502,13 @@ $manifestObject = [pscustomobject]@{
   )
   observations = $observations
   cleanup = $cleanup
+  privacy = [pscustomobject]@{
+    backdrop = "solid neutral topmost form"
+    color = "#202428"
+    desktopTextExposure = "blocked behind shell crops"
+  }
   artifacts = @($artifactFiles | ForEach-Object { Artifact-Record $_.FullName })
 }
 $manifestObject | ConvertTo-Json -Depth 8 | Set-Content -Path $Manifest -Encoding UTF8
+Validate-ManifestArtifacts $Manifest
 Artifact-Record $Manifest | ConvertTo-Json -Compress

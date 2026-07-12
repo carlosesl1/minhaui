@@ -1,293 +1,69 @@
-﻿[
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\app-stderr.txt",
-        "Length":  0,
-        "LastWriteTimeUtc":  "\/Date(1783818556547)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\app-stdout.txt",
-        "Length":  30361,
-        "LastWriteTimeUtc":  "\/Date(1783818567339)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\dock-initial.png",
-        "Length":  14563,
-        "LastWriteTimeUtc":  "\/Date(1783818556899)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\drag-insertion.png",
-        "Length":  17013,
-        "LastWriteTimeUtc":  "\/Date(1783818563802)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\drag-reordered.png",
-        "Length":  16814,
-        "LastWriteTimeUtc":  "\/Date(1783818564429)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\focus-minimized-indicators.png",
-        "Length":  16857,
-        "LastWriteTimeUtc":  "\/Date(1783818562525)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\hidden-8px.png",
-        "Length":  1115,
-        "LastWriteTimeUtc":  "\/Date(1783818565855)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\manifest.json",
-        "Length":  13066,
-        "LastWriteTimeUtc":  "\/Date(1783818574119)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\menu-open.png",
-        "Length":  33283,
-        "LastWriteTimeUtc":  "\/Date(1783818567971)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\qa-run.txt",
-        "Length":  661,
-        "LastWriteTimeUtc":  "\/Date(1783818568225)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\revealed-180px.png",
-        "Length":  16481,
-        "LastWriteTimeUtc":  "\/Date(1783818567292)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\running-unpinned.png",
-        "Length":  14542,
-        "LastWriteTimeUtc":  "\/Date(1783818557174)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\topbar-initial.png",
-        "Length":  5530,
-        "LastWriteTimeUtc":  "\/Date(1783818556914)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical-qa-run-console.txt",
-        "Length":  568,
-        "LastWriteTimeUtc":  "\/Date(1783818574141)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\check-platform-after-win32-wiring.txt",
-        "Length":  5110,
-        "LastWriteTimeUtc":  "\/Date(1783814940316)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\check-platform-after-win32-wiring-2.txt",
-        "Length":  2296,
-        "LastWriteTimeUtc":  "\/Date(1783814961736)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\check-platform-after-win32-wiring-3.txt",
-        "Length":  1208,
-        "LastWriteTimeUtc":  "\/Date(1783814970474)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\clippy.txt",
-        "Length":  1208,
-        "LastWriteTimeUtc":  "\/Date(1783815029543)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\clippy-final.txt",
-        "Length":  1494,
-        "LastWriteTimeUtc":  "\/Date(1783815296511)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\dock-functional.png",
-        "Length":  3488,
-        "LastWriteTimeUtc":  "\/Date(1783813974359)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\doneclaim.md",
-        "Length":  3943,
-        "LastWriteTimeUtc":  "\/Date(1783818727313)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\evidence-inventory-final.txt",
-        "Length":  3662,
-        "LastWriteTimeUtc":  "\/Date(1783815347772)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-build-release-all-targets-all-features.txt",
-        "Length":  88,
-        "LastWriteTimeUtc":  "\/Date(1783818694722)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-changed-file-review.txt",
-        "Length":  462,
-        "LastWriteTimeUtc":  "\/Date(1783818640369)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-cleanup-process-scan.txt",
-        "Length":  20,
-        "LastWriteTimeUtc":  "\/Date(1783818650801)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-clippy-all-targets-all-features.txt",
-        "Length":  98,
-        "LastWriteTimeUtc":  "\/Date(1783818680064)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-fmt-check.txt",
-        "Length":  13,
-        "LastWriteTimeUtc":  "\/Date(1783818673489)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-test-all-targets-all-features.txt",
-        "Length":  10642,
-        "LastWriteTimeUtc":  "\/Date(1783818685939)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\fmt-check-final.txt",
-        "Length":  167,
-        "LastWriteTimeUtc":  "\/Date(1783815686028)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\fmt-check-preqa.txt",
-        "Length":  9570,
-        "LastWriteTimeUtc":  "\/Date(1783815006839)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\green-core-window-sync.txt",
-        "Length":  2836,
-        "LastWriteTimeUtc":  "\/Date(1783814977118)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\green-platform-dock-blockers.txt",
-        "Length":  3576,
-        "LastWriteTimeUtc":  "\/Date(1783815001116)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-1.txt",
-        "Length":  12637,
-        "LastWriteTimeUtc":  "\/Date(1783814306866)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-2.txt",
-        "Length":  14033,
-        "LastWriteTimeUtc":  "\/Date(1783814346489)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-3.txt",
-        "Length":  16014,
-        "LastWriteTimeUtc":  "\/Date(1783814383261)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-final.txt",
-        "Length":  12442,
-        "LastWriteTimeUtc":  "\/Date(1783815707877)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\manual-qa-metadata.json",
-        "Length":  1738,
-        "LastWriteTimeUtc":  "\/Date(1783813976989)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\manual-qa-stderr.txt",
-        "Length":  5,
-        "LastWriteTimeUtc":  "\/Date(1783813976797)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\manual-qa-stdout.txt",
-        "Length":  338,
-        "LastWriteTimeUtc":  "\/Date(1783813976796)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\process-clean-check.txt",
-        "Length":  1190,
-        "LastWriteTimeUtc":  "\/Date(1783815277916)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\process-clean-check-final.txt",
-        "Length":  48,
-        "LastWriteTimeUtc":  "\/Date(1783815307616)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\red-core-window-sync.txt",
-        "Length":  5406,
-        "LastWriteTimeUtc":  "\/Date(1783814614162)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\red-platform-dock-blockers.txt",
-        "Length":  12284,
-        "LastWriteTimeUtc":  "\/Date(1783814622126)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build.txt",
-        "Length":  982,
-        "LastWriteTimeUtc":  "\/Date(1783815278187)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build-preqa.txt",
-        "Length":  2456,
-        "LastWriteTimeUtc":  "\/Date(1783815062310)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build-preqa-2.txt",
-        "Length":  1474,
-        "LastWriteTimeUtc":  "\/Date(1783815186398)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build-preqa-3.txt",
-        "Length":  1474,
-        "LastWriteTimeUtc":  "\/Date(1783815250828)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-dock-hidden-strip.png",
-        "Length":  12394,
-        "LastWriteTimeUtc":  "\/Date(1783815265371)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-dock-initial.png",
-        "Length":  174731,
-        "LastWriteTimeUtc":  "\/Date(1783815604359)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-dock-revealed.png",
-        "Length":  184362,
-        "LastWriteTimeUtc":  "\/Date(1783815266605)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa.ps1",
-        "Length":  21766,
-        "LastWriteTimeUtc":  "\/Date(1783818525197)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-metadata.json",
-        "Length":  3839,
-        "LastWriteTimeUtc":  "\/Date(1783815604360)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-run.txt",
-        "Length":  7674,
-        "LastWriteTimeUtc":  "\/Date(1783815604361)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-stderr.txt",
-        "Length":  0,
-        "LastWriteTimeUtc":  "\/Date(1783815523802)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-stdout.txt",
-        "Length":  1224,
-        "LastWriteTimeUtc":  "\/Date(1783815604362)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-topbar-initial.png",
-        "Length":  30848,
-        "LastWriteTimeUtc":  "\/Date(1783815524152)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\topbar-functional.png",
-        "Length":  2769,
-        "LastWriteTimeUtc":  "\/Date(1783813974370)\/"
-    },
-    {
-        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\workspace-tests.txt",
-        "Length":  24786,
-        "LastWriteTimeUtc":  "\/Date(1783815288041)\/"
-    }
-]
+Evidence inventory generated 2026-07-11T22:29:25.5865433-03:00
+canonical\app-stderr.txt bytes=0 sha256=E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
+canonical\app-stdout.txt bytes=18852 sha256=FFAC3EF3ACB9FA6F32C47FA879AB8E17DE9D37FABD3C38A82623324751EE1987
+canonical\dock-initial.png bytes=7201 sha256=C00E91AC6678D53569EF872092D74753A0E459ADF636D539B12908DB608AFD4E
+canonical\drag-insertion.png bytes=10221 sha256=A309A7CD28A9BB7DFD688DA52030327A4CF12C1454DE94BB4755F2DD92EDCD38
+canonical\drag-reordered.png bytes=9658 sha256=156417B6A92D572C679BA0BBD459F6BCE853724849BF69F7B4DDA01D38F7DB03
+canonical\focus-minimized-indicators.png bytes=9789 sha256=E48D0CDB526FA04AA1C0CC1F0788116368D3B66AA760D0EB720E87FAAF23CF6E
+canonical\hidden-8px.png bytes=1060 sha256=6CC732D721FEC6E77CC3E561DA2A0F9AB7500D1DE57C366768108C81A1947D8D
+canonical\manifest.json bytes=13278 sha256=57A77E0AA9B7B6E4EFAB891DF079DBBB01F054F30A0708B92A2F141BC6C5784F
+canonical\menu-open.png bytes=14164 sha256=290FC2DCC635F034AE4A75EEF0C3F293422A7B012313BBFCCF9CAC81615E29F2
+canonical\qa-run.txt bytes=727 sha256=CCC86EA994BDAC36587BCA65A6666412780A1869AEC6A7C0C329854C1DEF6F0F
+canonical\revealed-180px.png bytes=9658 sha256=156417B6A92D572C679BA0BBD459F6BCE853724849BF69F7B4DDA01D38F7DB03
+canonical\running-unpinned.png bytes=7201 sha256=C00E91AC6678D53569EF872092D74753A0E459ADF636D539B12908DB608AFD4E
+canonical\topbar-initial.png bytes=2756 sha256=0739B23636E935F66ECCED1A652021CF0E6B0D49F4BFD3C3704BAFE9D037EF3C
+canonical-qa-run-console.txt bytes=594 sha256=F64FD13CFF38AB662C7D374DD69B1E7925C4913DBA67176885996846C46F0808
+check-platform-after-win32-wiring.txt bytes=5110 sha256=2C2339A85B227576FC2E31EAEE2C7256E171B39DB8BE235875EFCD68FE36B770
+check-platform-after-win32-wiring-2.txt bytes=2296 sha256=50163C9107A8B6CCF0B9043CDB42DEFD4353E37085E6F0DC8D8FD1F4F8E3130C
+check-platform-after-win32-wiring-3.txt bytes=1208 sha256=B672FAE04DCCD8A0A99D9165896A509969E1B39FD6BA71C3C58552B820D89739
+clippy.txt bytes=1208 sha256=9AE2171AB5B00B39046BCFFA8EB04C06D3CA354D77FD1B641FAD9D3D4E582130
+clippy-final.txt bytes=1494 sha256=EBD8D889431AC554FA65DCB443319E686ABD1CA3384941935001289EF5CCEC69
+dock-functional.png bytes=3488 sha256=3A86F8381E3ED6FF51EBF3C8A109D61EE021474387FF35DF5E568DBC6F486AA3
+doneclaim.md bytes=5367 sha256=A31A56C48B7B874D49DA795268EFFD5753B47858A3C146457B93B46FE7115BB1
+evidence-inventory-final.txt bytes=3662 sha256=95DB8E433A04B833DDEAF9E9D88CD24321D1C4C201266FE179E52A4C83ECEF35
+final-build-release-all-targets-all-features.txt bytes=88 sha256=501426491EDD7B9266F05152BDD522C33369C2D0FCD393A4331030B57789D193
+final-changed-file-review.txt bytes=410 sha256=338961AE37A55DDAA471D5F1E8458B8E5F3E799BA551AB6F6374F74887B14220
+final-cleanup-process-scan.txt bytes=17 sha256=4A879DD0E8893C5D775164D089134B1DE2328F13FC279FF282BDD71EC3B889B6
+final-clippy-all-targets-all-features.txt bytes=98 sha256=D1FB4627B3DB253F86D55B872A103911F8B52F27CDE72A90C11BB6624746D678
+final-fmt-check.txt bytes=13 sha256=C1E97067C5F479A44A6F57297A0A8F87A59D181C3C529910F8BF059094BC3ABB
+final-manifest-hash-validation.txt bytes=2804 sha256=7E3109464B999C9A71BFFD012B2A623F8751E110FB2C87C9D062BB78D8A463F4
+final-render-resource-trace.txt bytes=391 sha256=AB26C86ADD3BD11361C65C03B8EC419F8619A997E12F3A3E5320CADD82059584
+final-test-all-targets-all-features.txt bytes=10799 sha256=BAB7616E41F15F0E669F4C3CE391BBE9885207015901ECA18859B2E88973914F
+fmt-check-final.txt bytes=167 sha256=D8AF8FECFCB29E0CC679CCF95531BEAA19CDCEB1910282FBAF0E7589D455B19E
+fmt-check-preqa.txt bytes=9570 sha256=5FEBF82DAC7F64A9AACC28D420DE97067AD87351E72CA8D39BD06DD50E2492E6
+green-core-window-sync.txt bytes=2836 sha256=D7B3A0892DA5DDD16CE07524B386BCE4B6A3190252C2FFD35D67A611649FEE9A
+green-hover-redraw.txt bytes=733 sha256=5CBE7230315222218663513A8F6DB96588C89C6369D5A6881FE7857C204C9240
+green-native-slice-render-actions.txt bytes=1045 sha256=947A5E37EA0441E00D54ABD66A9B8880896BBCB68F2DFA2EB0F57E95FEC9DA58
+green-platform-dock-blockers.txt bytes=3576 sha256=C026158DD82E5181A21401F849B54179B09E5E8F94CC8BF144183004B34179BA
+hook-verification-1.txt bytes=12637 sha256=F3BEC07B6750EDA56E1E21937A224543978A5D5BF9A77CD0C731CC05B4C54593
+hook-verification-2.txt bytes=14033 sha256=EE153812C773D1CB7DE3D43C515C7650B308729C3498209154425656EDEF8800
+hook-verification-3.txt bytes=16282 sha256=7C6EF570F377961F1EDA1894931B27164897FDC55DB5182E228190EAA84CA88F
+hook-verification-final.txt bytes=12442 sha256=AF67139602A37C7F451A272D5702F580AA6296A7197201A1D6CF63C35A7231CA
+manual-qa-metadata.json bytes=1738 sha256=EB8DA7257A18ED68D6FF5EEA721D8C0E5405F7D4E33CF3D7E9CCE269CA654B8E
+manual-qa-stderr.txt bytes=5 sha256=F01A374E9C81E3DB89B3A42940C4D6A5447684986A1296E42BF13F196EED6295
+manual-qa-stdout.txt bytes=338 sha256=A049FE8AFDC32EAF27B8FBC4E5FC15AB9D011D09F1C27C2EB132D9F3E073F705
+preqa-build-release-all-targets-all-features.txt bytes=545 sha256=B0C90BB7848C0AB06FA46E2CE96A2DD2A97FAC377DA062B46751704433B973F5
+preqa-clippy-all-targets-all-features.txt bytes=554 sha256=7C9464635EC307A764ED6D6207B9189899B95A1CE64A6C58A88A7DAA4A39A55B
+preqa-fmt-check.txt bytes=13 sha256=C1E97067C5F479A44A6F57297A0A8F87A59D181C3C529910F8BF059094BC3ABB
+preqa-test-all-targets-all-features.txt bytes=11255 sha256=14589667D06EDF24F787DB27D91E0E4CA2B57DA30BC0D029BFB675F5991C011E
+process-clean-check.txt bytes=1190 sha256=4F6045141B813F171546E0E8CC27F295C2DFCC06FDA19B736F5BCBD616B2C577
+process-clean-check-final.txt bytes=48 sha256=8BB02829693B3FFBFD3BDB76B46240A90974521712A71EFB1AB81982C5950450
+red-core-window-sync.txt bytes=5406 sha256=46C52EB5461A67203276EF181805C5BAFA098FCEB1C1A1F64F0966524F98346A
+red-hover-redraw.txt bytes=1073 sha256=2D9291B9AE34E5171F8C7794884CCACCEB82C32EC127BD22ED7A06E17E6CA824
+red-platform-dock-blockers.txt bytes=12284 sha256=C80BAB957B3185AB38F495E9D5558613FB6573A52CE2EC918EA49C81E4DE9A1E
+release-build.txt bytes=982 sha256=9352CA8681D651F952D7F01416E2360ACAE9C50C7A29D64A47AE9BBD7F64B3CB
+release-build-preqa.txt bytes=2456 sha256=25D935226A3E4517C09A4CBD3FE1FDBE9DC6FFF9666DA23C450BB96FE8CDB8BA
+release-build-preqa-2.txt bytes=1474 sha256=33F977B6DDFC3E9BDAF12169E19EAB4FE81A82201667EC058562538401A65574
+release-build-preqa-3.txt bytes=1474 sha256=CC65644D4BB76608E7FED747618370BFAD31F5148C99418AE881338535D793BB
+scripted-dock-hidden-strip.png bytes=12394 sha256=99D6BA9AE6C75A599414EAF485992DB5CD89E20FE207CECA7E0D1126C86DDB9D
+scripted-dock-initial.png bytes=174731 sha256=6205BF6E6890049D51D9878B2CE23B86D2C54FF6930A5BB1A0E157F11FA972A9
+scripted-dock-revealed.png bytes=184362 sha256=F3DF733280F8E6C60F18B9561147865DFC96065513B552A91DE6725F5EE53140
+scripted-qa.ps1 bytes=23441 sha256=92E6894C35A0CB164B016592E5CC0BAD33C9789DB986A6FC9B2AF23C0C9741E4
+scripted-qa-metadata.json bytes=3839 sha256=2FE20EA3CA152D40F1D0A3F10540062E67EFAA953E0A80CC46BA777D5CA3335D
+scripted-qa-run.txt bytes=7674 sha256=5B3FB4E08029991EC43AA36B8CC2B358F4D4A0BA5C5AB79AF4D9D94FE177BFBF
+scripted-qa-stderr.txt bytes=0 sha256=E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
+scripted-qa-stdout.txt bytes=1224 sha256=3B63289C94E447F0403F0E96887BB887FE48BD1CC0AABDA881D8439F3FBA454D
+scripted-topbar-initial.png bytes=30848 sha256=21B1A095953E32BC14C3B6F27BA8948029BB01E67C1A848940D729F9EBB0ED9A
+topbar-functional.png bytes=2769 sha256=4E30B3AC0AE0767161954D93EBC2D2663D240AE4E81318DDFBE69B17B20E6B70
+workspace-tests.txt bytes=24786 sha256=2470933124B6642CD6F12853667DFCFEADB31C5AF3DC9DFE7625E0E2E924E916
 EXIT_CODE=0
