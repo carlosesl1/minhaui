@@ -64,7 +64,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Live preview changes are transactional with Apply/Cancel/Reset; invalid values never reach runtime state. Include original presets plus local theme import/export/share-by-file.
   - Manual QA: `.omo/evidence/task-9-settings/` including corrupt theme rejection and restart persistence.
 
-- [ ] 10. Add taskbar policy, watchdog, single-instance, diagnostics, and safe mode
+- [x] 10. Add taskbar policy, watchdog, single-instance, diagnostics, and safe mode
   - Depends on: 3, 4. Implement off/auto-hide/hide policy with explicit consent and an always-available recovery shortcut; restore Explorer taskbar after crash, forced termination, failed startup, update, or uninstall.
   - Separate watchdog process, heartbeat, bounded restart/backoff, crash loop safe mode, local redacted logs and user-exportable diagnostics.
   - Manual QA: kill/crash/Explorer-restart matrix `.omo/evidence/task-10-recovery/` proving taskbar restoration.
