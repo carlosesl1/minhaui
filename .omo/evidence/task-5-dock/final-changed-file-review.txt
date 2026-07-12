@@ -1,0 +1,9 @@
+﻿241`tcrates\shell-platform-windows\src\win32_windowing.rs
+79`tcrates\shell-platform-windows\src\win32_actions.rs
+106`tcrates\shell-platform-windows\src\dock_controller.rs
+168`tcrates\shell-platform-windows\src\dock_controller_interaction.rs
+77`tcrates\shell-platform-windows\src\dock_controller_sync.rs
+45`tcrates\shell-platform-windows\src\dock_visuals.rs
+153`tcrates\shell-core\src\reducer.rs
+147`tcrates\shell-core\src\reducer_dock.rs
+EXIT_CODE=0

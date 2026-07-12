@@ -1,0 +1,293 @@
+﻿[
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\app-stderr.txt",
+        "Length":  0,
+        "LastWriteTimeUtc":  "\/Date(1783818556547)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\app-stdout.txt",
+        "Length":  30361,
+        "LastWriteTimeUtc":  "\/Date(1783818567339)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\dock-initial.png",
+        "Length":  14563,
+        "LastWriteTimeUtc":  "\/Date(1783818556899)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\drag-insertion.png",
+        "Length":  17013,
+        "LastWriteTimeUtc":  "\/Date(1783818563802)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\drag-reordered.png",
+        "Length":  16814,
+        "LastWriteTimeUtc":  "\/Date(1783818564429)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\focus-minimized-indicators.png",
+        "Length":  16857,
+        "LastWriteTimeUtc":  "\/Date(1783818562525)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\hidden-8px.png",
+        "Length":  1115,
+        "LastWriteTimeUtc":  "\/Date(1783818565855)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\manifest.json",
+        "Length":  13066,
+        "LastWriteTimeUtc":  "\/Date(1783818574119)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\menu-open.png",
+        "Length":  33283,
+        "LastWriteTimeUtc":  "\/Date(1783818567971)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\qa-run.txt",
+        "Length":  661,
+        "LastWriteTimeUtc":  "\/Date(1783818568225)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\revealed-180px.png",
+        "Length":  16481,
+        "LastWriteTimeUtc":  "\/Date(1783818567292)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\running-unpinned.png",
+        "Length":  14542,
+        "LastWriteTimeUtc":  "\/Date(1783818557174)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\topbar-initial.png",
+        "Length":  5530,
+        "LastWriteTimeUtc":  "\/Date(1783818556914)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical-qa-run-console.txt",
+        "Length":  568,
+        "LastWriteTimeUtc":  "\/Date(1783818574141)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\check-platform-after-win32-wiring.txt",
+        "Length":  5110,
+        "LastWriteTimeUtc":  "\/Date(1783814940316)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\check-platform-after-win32-wiring-2.txt",
+        "Length":  2296,
+        "LastWriteTimeUtc":  "\/Date(1783814961736)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\check-platform-after-win32-wiring-3.txt",
+        "Length":  1208,
+        "LastWriteTimeUtc":  "\/Date(1783814970474)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\clippy.txt",
+        "Length":  1208,
+        "LastWriteTimeUtc":  "\/Date(1783815029543)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\clippy-final.txt",
+        "Length":  1494,
+        "LastWriteTimeUtc":  "\/Date(1783815296511)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\dock-functional.png",
+        "Length":  3488,
+        "LastWriteTimeUtc":  "\/Date(1783813974359)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\doneclaim.md",
+        "Length":  3943,
+        "LastWriteTimeUtc":  "\/Date(1783818727313)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\evidence-inventory-final.txt",
+        "Length":  3662,
+        "LastWriteTimeUtc":  "\/Date(1783815347772)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-build-release-all-targets-all-features.txt",
+        "Length":  88,
+        "LastWriteTimeUtc":  "\/Date(1783818694722)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-changed-file-review.txt",
+        "Length":  462,
+        "LastWriteTimeUtc":  "\/Date(1783818640369)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-cleanup-process-scan.txt",
+        "Length":  20,
+        "LastWriteTimeUtc":  "\/Date(1783818650801)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-clippy-all-targets-all-features.txt",
+        "Length":  98,
+        "LastWriteTimeUtc":  "\/Date(1783818680064)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-fmt-check.txt",
+        "Length":  13,
+        "LastWriteTimeUtc":  "\/Date(1783818673489)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\final-test-all-targets-all-features.txt",
+        "Length":  10642,
+        "LastWriteTimeUtc":  "\/Date(1783818685939)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\fmt-check-final.txt",
+        "Length":  167,
+        "LastWriteTimeUtc":  "\/Date(1783815686028)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\fmt-check-preqa.txt",
+        "Length":  9570,
+        "LastWriteTimeUtc":  "\/Date(1783815006839)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\green-core-window-sync.txt",
+        "Length":  2836,
+        "LastWriteTimeUtc":  "\/Date(1783814977118)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\green-platform-dock-blockers.txt",
+        "Length":  3576,
+        "LastWriteTimeUtc":  "\/Date(1783815001116)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-1.txt",
+        "Length":  12637,
+        "LastWriteTimeUtc":  "\/Date(1783814306866)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-2.txt",
+        "Length":  14033,
+        "LastWriteTimeUtc":  "\/Date(1783814346489)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-3.txt",
+        "Length":  16014,
+        "LastWriteTimeUtc":  "\/Date(1783814383261)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\hook-verification-final.txt",
+        "Length":  12442,
+        "LastWriteTimeUtc":  "\/Date(1783815707877)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\manual-qa-metadata.json",
+        "Length":  1738,
+        "LastWriteTimeUtc":  "\/Date(1783813976989)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\manual-qa-stderr.txt",
+        "Length":  5,
+        "LastWriteTimeUtc":  "\/Date(1783813976797)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\manual-qa-stdout.txt",
+        "Length":  338,
+        "LastWriteTimeUtc":  "\/Date(1783813976796)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\process-clean-check.txt",
+        "Length":  1190,
+        "LastWriteTimeUtc":  "\/Date(1783815277916)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\process-clean-check-final.txt",
+        "Length":  48,
+        "LastWriteTimeUtc":  "\/Date(1783815307616)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\red-core-window-sync.txt",
+        "Length":  5406,
+        "LastWriteTimeUtc":  "\/Date(1783814614162)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\red-platform-dock-blockers.txt",
+        "Length":  12284,
+        "LastWriteTimeUtc":  "\/Date(1783814622126)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build.txt",
+        "Length":  982,
+        "LastWriteTimeUtc":  "\/Date(1783815278187)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build-preqa.txt",
+        "Length":  2456,
+        "LastWriteTimeUtc":  "\/Date(1783815062310)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build-preqa-2.txt",
+        "Length":  1474,
+        "LastWriteTimeUtc":  "\/Date(1783815186398)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\release-build-preqa-3.txt",
+        "Length":  1474,
+        "LastWriteTimeUtc":  "\/Date(1783815250828)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-dock-hidden-strip.png",
+        "Length":  12394,
+        "LastWriteTimeUtc":  "\/Date(1783815265371)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-dock-initial.png",
+        "Length":  174731,
+        "LastWriteTimeUtc":  "\/Date(1783815604359)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-dock-revealed.png",
+        "Length":  184362,
+        "LastWriteTimeUtc":  "\/Date(1783815266605)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa.ps1",
+        "Length":  21766,
+        "LastWriteTimeUtc":  "\/Date(1783818525197)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-metadata.json",
+        "Length":  3839,
+        "LastWriteTimeUtc":  "\/Date(1783815604360)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-run.txt",
+        "Length":  7674,
+        "LastWriteTimeUtc":  "\/Date(1783815604361)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-stderr.txt",
+        "Length":  0,
+        "LastWriteTimeUtc":  "\/Date(1783815523802)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-qa-stdout.txt",
+        "Length":  1224,
+        "LastWriteTimeUtc":  "\/Date(1783815604362)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\scripted-topbar-initial.png",
+        "Length":  30848,
+        "LastWriteTimeUtc":  "\/Date(1783815524152)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\topbar-functional.png",
+        "Length":  2769,
+        "LastWriteTimeUtc":  "\/Date(1783813974370)\/"
+    },
+    {
+        "FullName":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\workspace-tests.txt",
+        "Length":  24786,
+        "LastWriteTimeUtc":  "\/Date(1783815288041)\/"
+    }
+]
+EXIT_CODE=0

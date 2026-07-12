@@ -1,0 +1,137 @@
+﻿{
+    "runId":  "task5-20260711-220915",
+    "commit":  "e8eda69a1baf96d4391b439ca6e1f3c4f10e7220",
+    "invocation":  "powershell -NoProfile -ExecutionPolicy Bypass -File .omo\\evidence\\task-5-dock\\scripted-qa.ps1",
+    "binary":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\target\\x86_64-pc-windows-msvc\\release\\shell-app.exe",
+    "scenarios":  [
+                      "running unpinned app appears from Win32 discovery",
+                      "native menu Pin changes unpinned item to pinned",
+                      "WM_DROPFILES path with spaces pins and launches script through ShellExecute",
+                      "GetForegroundWindow verifies focus",
+                      "IsIconic verifies minimize",
+                      "drag reorder persists in DOCK_STATE order",
+                      "hidden HWND strip and revealed HWND height are measured"
+                  ],
+    "observations":  [
+                         {
+                             "scenario":  "running unpinned appears",
+                             "observable":  "DOCK_STATE",
+                             "value":  "DOCK_STATE hover=None items=0:1:notepad.exe:pinned:stopped|1:2:calc.exe:pinned:stopped|2:3:explorer.exe:pinned:running:WindowId(330654):focused=false:minimized=false|3:14609490430463431446:vivaldi.exe:unpinned:running:WindowId(66990):focused=true:minimized=false|4:17079244527839054391:charmap.exe:unpinned:running:WindowId(280299214):focused=false:minimized=false|5:13949927681159296966:chatgpt.exe:unpinned:running:WindowId(1376904):focused=false:minimized=false|6:12064318522600637124:taskmgr.exe:unpinned:running:WindowId(116918972):focused=false:minimized=false|7:12934399268262152830:applicationframehost.exe:unpinned:running:WindowId(2101978):focused=false:minimized=false|8:17243632352439148098:textinputhost.exe:unpinned:running:WindowId(131260):focused=false:minimized=false"
+                         },
+                         {
+                             "scenario":  "native context Pin",
+                             "observable":  "DOCK_STATE pin=pinned",
+                             "value":  "DOCK_STATE hover=Some(17079244527839054391) items=0:1:notepad.exe:pinned:stopped|1:2:calc.exe:pinned:stopped|2:3:explorer.exe:pinned:running:WindowId(330654):focused=false:minimized=false|3:14609490430463431446:vivaldi.exe:unpinned:running:WindowId(66990):focused=true:minimized=false|4:17079244527839054391:charmap.exe:pinned:running:WindowId(280299214):focused=false:minimized=false|5:13949927681159296966:chatgpt.exe:unpinned:running:WindowId(1376904):focused=false:minimized=false|6:12064318522600637124:taskmgr.exe:unpinned:running:WindowId(116918972):focused=false:minimized=false|7:12934399268262152830:applicationframehost.exe:unpinned:running:WindowId(2101978):focused=false:minimized=false|8:17243632352439148098:textinputhost.exe:unpinned:running:WindowId(131260):focused=false:minimized=false"
+                         },
+                         {
+                             "scenario":  "drop path launch",
+                             "observable":  "drop marker file",
+                             "value":  "launched"
+                         },
+                         {
+                             "scenario":  "focus",
+                             "observable":  "DOCK_STATE and GetForegroundWindow",
+                             "value":  "280299214 DOCK_STATE hover=Some(17079244527839054391) items=0:1:notepad.exe:pinned:stopped|1:2:calc.exe:pinned:stopped|2:3:explorer.exe:pinned:running:WindowId(330654):focused=false:minimized=false|3:14609490430463431446:vivaldi.exe:unpinned:running:WindowId(66990):focused=false:minimized=false|4:17079244527839054391:charmap.exe:pinned:running:WindowId(280299214):focused=true:minimized=false|5:13949927681159296966:chatgpt.exe:unpinned:running:WindowId(1376904):focused=false:minimized=false|6:12064318522600637124:taskmgr.exe:unpinned:running:WindowId(116918972):focused=false:minimized=false|7:12934399268262152830:applicationframehost.exe:unpinned:running:WindowId(2101978):focused=false:minimized=false|8:17243632352439148098:textinputhost.exe:unpinned:running:WindowId(131260):focused=false:minimized=false|9:17243632352439148099:drop-target.cmd:pinned:stopped|10:10435509414779944412:windowsterminal.exe:unpinned:running:WindowId(1512524):focused=false:minimized=false"
+                         },
+                         {
+                             "scenario":  "minimize",
+                             "observable":  "DOCK_STATE and IsIconic",
+                             "value":  "True DOCK_STATE hover=Some(17079244527839054391) items=0:1:notepad.exe:pinned:stopped|1:2:calc.exe:pinned:stopped|2:3:explorer.exe:pinned:running:WindowId(330654):focused=false:minimized=false|3:14609490430463431446:vivaldi.exe:unpinned:running:WindowId(66990):focused=false:minimized=false|4:17079244527839054391:charmap.exe:pinned:running:WindowId(280299214):focused=false:minimized=true|5:13949927681159296966:chatgpt.exe:unpinned:running:WindowId(1376904):focused=false:minimized=false|6:12064318522600637124:taskmgr.exe:unpinned:running:WindowId(116918972):focused=false:minimized=false|7:12934399268262152830:applicationframehost.exe:unpinned:running:WindowId(2101978):focused=false:minimized=false|8:17243632352439148098:textinputhost.exe:unpinned:running:WindowId(131260):focused=false:minimized=false|9:17243632352439148099:drop-target.cmd:pinned:stopped|10:10435509414779944412:windowsterminal.exe:unpinned:running:WindowId(1512524):focused=false:minimized=false"
+                         },
+                         {
+                             "scenario":  "drag reorder",
+                             "observable":  "DOCK_STATE first app",
+                             "value":  "DOCK_STATE hover=Some(2) items=0:2:calc.exe:pinned:stopped|1:1:notepad.exe:pinned:stopped|2:3:explorer.exe:pinned:running:WindowId(330654):focused=false:minimized=false|3:14609490430463431446:vivaldi.exe:unpinned:running:WindowId(66990):focused=false:minimized=false|4:17079244527839054391:charmap.exe:pinned:running:WindowId(280299214):focused=false:minimized=true|5:13949927681159296966:chatgpt.exe:unpinned:running:WindowId(1376904):focused=false:minimized=false|6:12064318522600637124:taskmgr.exe:unpinned:running:WindowId(116918972):focused=false:minimized=false|7:12934399268262152830:applicationframehost.exe:unpinned:running:WindowId(2101978):focused=false:minimized=false|8:17243632352439148098:textinputhost.exe:unpinned:running:WindowId(131260):focused=false:minimized=false|9:17243632352439148099:drop-target.cmd:pinned:stopped|10:10435509414779944412:windowsterminal.exe:unpinned:running:WindowId(1512524):focused=true:minimized=false"
+                         },
+                         {
+                             "scenario":  "autohide",
+                             "observable":  "GetWindowRect height",
+                             "value":  8
+                         },
+                         {
+                             "scenario":  "reveal",
+                             "observable":  "GetWindowRect height",
+                             "value":  180
+                         }
+                     ],
+    "cleanup":  {
+                    "shellProcessAliveAfterExit":  false,
+                    "dropProcessAliveAfterCleanup":  0,
+                    "unpinnedProcessAliveAfterCleanup":  0,
+                    "newNotepadAliveAfterCleanup":  0
+                },
+    "artifacts":  [
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\app-stderr.txt",
+                          "bytes":  0,
+                          "mtimeUtc":  "2026-07-12T01:09:16.5470716Z",
+                          "sha256":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\app-stdout.txt",
+                          "bytes":  30361,
+                          "mtimeUtc":  "2026-07-12T01:09:27.3393318Z",
+                          "sha256":  "67C6F669F7630209FE24FDED13030BBFBA9DC3360C246352082E2A08764A196D"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\dock-initial.png",
+                          "bytes":  14563,
+                          "mtimeUtc":  "2026-07-12T01:09:16.8990731Z",
+                          "sha256":  "01C646A9EC30DAA4F19A950197E664F020BEA400FF9083C3152AEFE67D99F4DA"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\drag-insertion.png",
+                          "bytes":  17013,
+                          "mtimeUtc":  "2026-07-12T01:09:23.8023309Z",
+                          "sha256":  "FEC10168B13200E8D68DC33259B4AA40B242BFFBDABDB1AD43C5ABD1E7CC59D6"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\drag-reordered.png",
+                          "bytes":  16814,
+                          "mtimeUtc":  "2026-07-12T01:09:24.4293325Z",
+                          "sha256":  "C5E66BB38D65556A5278080E56BCA111741945A5223D1F96049B9E4B704B4C46"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\focus-minimized-indicators.png",
+                          "bytes":  16857,
+                          "mtimeUtc":  "2026-07-12T01:09:22.5253318Z",
+                          "sha256":  "3C2F900A1C4D857C22BA86DE6F6B32F312C8CA60BA8B8A7BF831448B2EDA9B68"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\hidden-8px.png",
+                          "bytes":  1115,
+                          "mtimeUtc":  "2026-07-12T01:09:25.8553311Z",
+                          "sha256":  "766CF48BAFCFA15833B141B7997DBF22BBFD033A60ABE9093879258A87CAA099"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\menu-open.png",
+                          "bytes":  33283,
+                          "mtimeUtc":  "2026-07-12T01:09:27.9713318Z",
+                          "sha256":  "CF77E6F06D5251F339318CF89FEE59168C3F0C57B3923DD3AC86158363357771"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\qa-run.txt",
+                          "bytes":  661,
+                          "mtimeUtc":  "2026-07-12T01:09:28.2253334Z",
+                          "sha256":  "7CBB82286E5BCFD9339822C8ED2A52750F155B09546E87AE94DBA219FAFD9516"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\revealed-180px.png",
+                          "bytes":  16481,
+                          "mtimeUtc":  "2026-07-12T01:09:27.2923328Z",
+                          "sha256":  "E0605045731F479A68DB545DBD08A69F92698B33CB4BF1F5DDCAC347657D21C1"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\running-unpinned.png",
+                          "bytes":  14542,
+                          "mtimeUtc":  "2026-07-12T01:09:17.1740717Z",
+                          "sha256":  "FE4F3B07A374C8771521FC581BACAEF07AC3563DAC686A0CBDD6F8FACC275BAA"
+                      },
+                      {
+                          "path":  "C:\\Users\\Carlos\\Documents\\Codex\\Minha UI APP-worktrees\\windows-native-dock-v1\\.omo\\evidence\\task-5-dock\\canonical\\topbar-initial.png",
+                          "bytes":  5530,
+                          "mtimeUtc":  "2026-07-12T01:09:16.9140725Z",
+                          "sha256":  "4A99CB2BD9B3969607326191530D877468CC6F9550B86FF190AB6EE27B45CBA9"
+                      }
+                  ]
+}

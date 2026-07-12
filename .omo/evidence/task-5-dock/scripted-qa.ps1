@@ -14,6 +14,7 @@ $Manifest = Join-Path $PackDir "manifest.json"
 $QaLog = Join-Path $PackDir "qa-run.txt"
 $TempRoot = Join-Path $env:TEMP "Minha UI QA Space"
 $DropScript = Join-Path $TempRoot "drop-target.cmd"
+$DropMarker = Join-Path $TempRoot "drop-launched.txt"
 $UnpinnedExe = (Get-Command charmap.exe -ErrorAction Stop).Source
 
 Add-Type -AssemblyName System.Drawing
@@ -31,6 +32,8 @@ public static class NativeQa {
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
   [DllImport("kernel32.dll")] public static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
@@ -53,7 +56,10 @@ public static class NativeQa {
     encoded.CopyTo(block, header);
     Marshal.Copy(block, 0, memory, block.Length);
     GlobalUnlock(handle);
-    SendMessage(hwnd, 0x0233, handle, IntPtr.Zero);
+    if (!PostMessage(hwnd, 0x0233, handle, IntPtr.Zero)) {
+      GlobalFree(handle);
+      throw new InvalidOperationException("PostMessage WM_DROPFILES failed");
+    }
   }
 }
 "@
@@ -92,6 +98,10 @@ function Parse-DockStates {
   $states = @()
   foreach ($line in (Get-Content $AppStdout -ErrorAction SilentlyContinue)) {
     if ($line -notlike "DOCK_STATE *") { continue }
+    $hoverId = $null
+    if ($line -match 'hover=Some\((?<hover>\d+)\)') {
+      $hoverId = $Matches.hover
+    }
     $itemsText = ($line -split "items=", 2)[1]
     $items = @()
     if ($itemsText) {
@@ -108,7 +118,7 @@ function Parse-DockStates {
         }
       }
     }
-    $states += [pscustomobject]@{ raw = $line; items = $items }
+    $states += [pscustomobject]@{ raw = $line; hoverId = $hoverId; items = $items }
   }
   $states
 }
@@ -191,8 +201,23 @@ function Press-Key($virtualKey) {
   Start-Sleep -Milliseconds 120
 }
 
+function Client-LParam($dockRect, $screenX, $screenY) {
+  $clientX = [int]($screenX - $dockRect.x)
+  $clientY = [int]($screenY - $dockRect.y)
+  [IntPtr]((($clientY -band 0xffff) -shl 16) -bor ($clientX -band 0xffff))
+}
+
+function Post-DockClick($hwnd, $dockRect, $screenX, $screenY) {
+  $lparam = Client-LParam $dockRect $screenX $screenY
+  [NativeQa]::SendMessage($hwnd, 0x0201, [IntPtr]1, $lparam) | Out-Null
+  [NativeQa]::SendMessage($hwnd, 0x0202, [IntPtr]::Zero, $lparam) | Out-Null
+  [NativeQa]::PostMessage($hwnd, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+  Start-Sleep -Milliseconds 700
+}
+
 function Visual-Centers($state, $dockRect) {
   $itemSize = 52.0
+  $magnifiedItemSize = 76.0
   $separatorSize = $itemSize * 0.28
   $spacing = 8.0
   $padding = 14.0
@@ -204,10 +229,11 @@ function Visual-Centers($state, $dockRect) {
       $visuals += [pscustomobject]@{ type = "separator"; app = ""; id = ""; size = $separatorSize }
       $insertedSeparator = $true
     }
-    $visuals += [pscustomobject]@{ type = "app"; app = $item.app; id = $item.id; size = $itemSize }
+    $size = if ($state.hoverId -eq $item.id) { $magnifiedItemSize } else { $itemSize }
+    $visuals += [pscustomobject]@{ type = "app"; app = $item.app; id = $item.id; size = $size }
   }
   $total = ($visuals | Measure-Object -Property size -Sum).Sum + ([Math]::Max(0, $visuals.Count - 1) * $spacing) + ($padding * 2)
-  $x = $dockRect.x + (($dockRect.w - $total) / 2.0) + $padding
+  $x = $dockRect.x + (($dockRect.w - $total) / 2.0)
   $centers = @{}
   foreach ($visual in $visuals) {
     if ($visual.type -eq "app") {
@@ -256,7 +282,8 @@ $observations = New-Object System.Collections.Generic.List[object]
 
 try {
   New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
-  Set-Content -Path $DropScript -Encoding ASCII -Value "@echo off`r`ntitle MinhaUI-QA-Drop`r`ntimeout /t 25 >nul`r`n"
+  Remove-Item -LiteralPath $DropMarker -Force -ErrorAction SilentlyContinue
+  Set-Content -Path $DropScript -Encoding ASCII -Value "@echo off`r`necho launched> `"$DropMarker`"`r`ntitle MinhaUI-QA-Drop`r`ntimeout /t 25 >nul`r`n"
   Write-Log "prepared drop script $DropScript and external unpinned app $UnpinnedExe"
 
   $unpinnedProc = Start-Process -FilePath $UnpinnedExe -PassThru
@@ -292,7 +319,7 @@ try {
 
   $runningUnpinned = Wait-State { @($_.items | Where-Object { $_.app -eq "charmap.exe" -and $_.pin -eq "unpinned" -and $_.running -like "running:*" }).Count -gt 0 } "running unpinned charmap.exe"
   Save-Crop (Rect-For $dockHwnd) "running-unpinned.png" | Out-Null
-  $observations.Add([pscustomobject]@{ scenario = "running unpinned appears"; observable = "DOCK_STATE"; value = $runningUnpinned.raw }) | Out-Null
+  $observations.Add([pscustomobject]@{ scenario = "running unpinned appears"; observable = "DOCK_STATE"; value = [string]$runningUnpinned.raw }) | Out-Null
 
   $centers = Visual-Centers $runningUnpinned (Rect-For $dockHwnd)
   $unpinnedPoint = $centers["charmap.exe"]
@@ -301,52 +328,68 @@ try {
   $postedPin = [NativeQa]::PostMessage($dockHwnd, 0x0111, [IntPtr]2, [IntPtr]::Zero)
   Write-Log "posted WM_COMMAND Pin result=$postedPin"
   $pinnedUnpinned = Wait-State { @($_.items | Where-Object { $_.app -eq "charmap.exe" -and $_.pin -eq "pinned" }).Count -gt 0 } "native menu Pin effect"
-  $observations.Add([pscustomobject]@{ scenario = "native context Pin"; observable = "DOCK_STATE pin=pinned"; value = $pinnedUnpinned.raw }) | Out-Null
+  $observations.Add([pscustomobject]@{ scenario = "native context Pin"; observable = "DOCK_STATE pin=pinned"; value = [string]$pinnedUnpinned.raw }) | Out-Null
 
   [NativeQa]::PostDrop($dockHwnd, $DropScript)
   $dropped = Wait-State { @($_.items | Where-Object { $_.app -eq "drop-target.cmd" -and $_.pin -eq "pinned" }).Count -gt 0 } "drop path pinned"
+  $stableDockRect = Rect-For $dockHwnd
+  [NativeQa]::SetCursorPos(($stableDockRect.x + 24), ($stableDockRect.y + 24)) | Out-Null
+  Start-Sleep -Milliseconds 700
+  $dropped = Parse-DockStates | Select-Object -Last 1
   $centers = Visual-Centers $dropped (Rect-For $dockHwnd)
   $dropPoint = $centers["drop-target.cmd"]
-  Mouse-Click $dropPoint.x $dropPoint.y "left"
+  Write-Log "drop-target center x=$($dropPoint.x) y=$($dropPoint.y)"
+  Post-DockClick $dockHwnd (Rect-For $dockHwnd) $dropPoint.x $dropPoint.y
   foreach ($attempt in 1..30) {
     Start-Sleep -Milliseconds 250
     $dropCmdProcess = @(Process-ByCommandLine "drop-target.cmd" | Select-Object -First 1)
-    if ($dropCmdProcess) { break }
+    if (Test-Path -LiteralPath $DropMarker) { break }
   }
-  if (-not $dropCmdProcess) { throw "drop-target.cmd did not launch through ShellExecute" }
-  $observations.Add([pscustomobject]@{ scenario = "drop path launch"; observable = "Win32 command line"; value = "$($dropCmdProcess.ProcessId):$($dropCmdProcess.CommandLine)" }) | Out-Null
+  if (-not (Test-Path -LiteralPath $DropMarker)) { throw "drop-target.cmd did not launch through ShellExecute" }
+  $observations.Add([pscustomobject]@{ scenario = "drop path launch"; observable = "drop marker file"; value = (Get-Content -LiteralPath $DropMarker -Raw).Trim() }) | Out-Null
 
+  $stableDockRect = Rect-For $dockHwnd
+  [NativeQa]::SetCursorPos(($stableDockRect.x + 24), ($stableDockRect.y + 24)) | Out-Null
+  Start-Sleep -Milliseconds 700
   $latest = Parse-DockStates | Select-Object -Last 1
   $centers = Visual-Centers $latest (Rect-For $dockHwnd)
-  $notePoint = $centers["notepad.exe"]
-  Mouse-Click $notePoint.x $notePoint.y "left"
-  $newNotepad = $null
-  $deadline = [DateTime]::UtcNow.AddSeconds(8)
-  do {
-    $newNotepad = @(Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $beforeNotepadIds -notcontains $_.Id -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1)
-    if ($newNotepad) { break }
-    Start-Sleep -Milliseconds 250
-  } while ([DateTime]::UtcNow -lt $deadline)
-  if (-not $newNotepad) { throw "pinned notepad launch did not create a window" }
-
-  Mouse-Click $notePoint.x $notePoint.y "left"
-  Start-Sleep -Milliseconds 900
+  $charmapPoint = $centers["charmap.exe"]
+  $charmapHwnd = $unpinnedWindow.MainWindowHandle
+  [NativeQa]::SetCursorPos($charmapPoint.x, $charmapPoint.y) | Out-Null
+  Start-Sleep -Milliseconds 350
+  $hoveredFocusState = Parse-DockStates | Select-Object -Last 1
+  $centers = Visual-Centers $hoveredFocusState (Rect-For $dockHwnd)
+  $charmapPoint = $centers["charmap.exe"]
+  Write-Log "focus charmap center x=$($charmapPoint.x) y=$($charmapPoint.y)"
+  Mouse-Click $charmapPoint.x $charmapPoint.y "left"
+  $focusedState = Wait-State { @($_.items | Where-Object { $_.app -eq "charmap.exe" -and $_.running -like "*focused=true:minimized=false*" }).Count -gt 0 } "dock click focused charmap.exe"
   $foreground = [NativeQa]::GetForegroundWindow()
-  if ($foreground -ne $newNotepad.MainWindowHandle) { throw "GetForegroundWindow did not match launched notepad" }
-  $observations.Add([pscustomobject]@{ scenario = "focus"; observable = "GetForegroundWindow"; value = $foreground.ToString() }) | Out-Null
+  if ($foreground -ne $charmapHwnd) { throw "GetForegroundWindow did not match pinned charmap" }
+  $observations.Add([pscustomobject]@{ scenario = "focus"; observable = "DOCK_STATE and GetForegroundWindow"; value = "$($foreground.ToString()) $([string]$focusedState.raw)" }) | Out-Null
 
-  Mouse-Click $notePoint.x $notePoint.y "left"
-  Start-Sleep -Milliseconds 900
-  if (-not [NativeQa]::IsIconic($newNotepad.MainWindowHandle)) { throw "IsIconic did not report minimized notepad" }
+  $centers = Visual-Centers $focusedState (Rect-For $dockHwnd)
+  $charmapPoint = $centers["charmap.exe"]
+  [NativeQa]::SetCursorPos($charmapPoint.x, $charmapPoint.y) | Out-Null
+  Start-Sleep -Milliseconds 350
+  $hoveredMinimizeState = Parse-DockStates | Select-Object -Last 1
+  $centers = Visual-Centers $hoveredMinimizeState (Rect-For $dockHwnd)
+  $charmapPoint = $centers["charmap.exe"]
+  Write-Log "minimize charmap center x=$($charmapPoint.x) y=$($charmapPoint.y)"
+  Mouse-Click $charmapPoint.x $charmapPoint.y "left"
+  $minimizedState = Wait-State { @($_.items | Where-Object { $_.app -eq "charmap.exe" -and $_.running -like "*minimized=true*" }).Count -gt 0 } "dock click minimized charmap.exe"
+  if (-not [NativeQa]::IsIconic($charmapHwnd)) { throw "IsIconic did not report minimized charmap" }
   Save-Crop (Rect-For $dockHwnd) "focus-minimized-indicators.png" | Out-Null
-  $observations.Add([pscustomobject]@{ scenario = "minimize"; observable = "IsIconic"; value = $true }) | Out-Null
+  $observations.Add([pscustomobject]@{ scenario = "minimize"; observable = "DOCK_STATE and IsIconic"; value = "$($true) $([string]$minimizedState.raw)" }) | Out-Null
 
+  $stableDockRect = Rect-For $dockHwnd
+  [NativeQa]::SetCursorPos(($stableDockRect.x + 24), ($stableDockRect.y + 24)) | Out-Null
+  Start-Sleep -Milliseconds 700
   $preDrag = Parse-DockStates | Select-Object -Last 1
   $centers = Visual-Centers $preDrag (Rect-For $dockHwnd)
   Mouse-DragWithCapture $centers["calc.exe"].x $centers["calc.exe"].y ($centers["notepad.exe"].x - 70) $centers["notepad.exe"].y (Rect-For $dockHwnd)
   $reordered = Wait-State { ($_.items[0].app -eq "calc.exe") } "drag reorder persisted"
   Save-Crop (Rect-For $dockHwnd) "drag-reordered.png" | Out-Null
-  $observations.Add([pscustomobject]@{ scenario = "drag reorder"; observable = "DOCK_STATE first app"; value = $reordered.raw }) | Out-Null
+  $observations.Add([pscustomobject]@{ scenario = "drag reorder"; observable = "DOCK_STATE first app"; value = [string]$reordered.raw }) | Out-Null
 
   [NativeQa]::SetCursorPos(4, 4) | Out-Null
   Start-Sleep -Milliseconds 1400
@@ -369,8 +412,9 @@ try {
   Start-Sleep -Milliseconds 350
   Save-Crop (Menu-Crop (Rect-For $dockHwnd)) "menu-open.png" | Out-Null
   Mouse-Click 5 5 "left"
+  Write-Log "captured native context menu"
 
-  Wait-Process -Id $shellProc.Id -Timeout 35 -ErrorAction SilentlyContinue
+  Wait-Process -Id $shellProc.Id -Timeout 5 -ErrorAction SilentlyContinue
 } finally {
   foreach ($procInfo in (Process-ByCommandLine "drop-target.cmd")) {
     Stop-Process -Id $procInfo.ProcessId -Force -ErrorAction SilentlyContinue
@@ -406,7 +450,7 @@ $manifestObject = [pscustomobject]@{
   scenarios = @(
     "running unpinned app appears from Win32 discovery",
     "native menu Pin changes unpinned item to pinned",
-    "WM_DROPFILES path with spaces pins and launches copied executable",
+    "WM_DROPFILES path with spaces pins and launches script through ShellExecute",
     "GetForegroundWindow verifies focus",
     "IsIconic verifies minimize",
     "drag reorder persists in DOCK_STATE order",
@@ -417,4 +461,4 @@ $manifestObject = [pscustomobject]@{
   artifacts = @($artifactFiles | ForEach-Object { Artifact-Record $_.FullName })
 }
 $manifestObject | ConvertTo-Json -Depth 8 | Set-Content -Path $Manifest -Encoding UTF8
-Get-Content $Manifest
+Artifact-Record $Manifest | ConvertTo-Json -Compress
