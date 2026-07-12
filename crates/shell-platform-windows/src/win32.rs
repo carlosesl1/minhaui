@@ -20,10 +20,11 @@ use windows::core::{PCWSTR, Result, w};
 use crate::win32_owner::RuntimeSurfaces;
 use crate::win32_timer::TimerGuard;
 use crate::win32_windowing::{message_loop, primary_work_area, window_proc};
-use crate::{DockController, DockRuntimeConfig, PlatformEvent};
+use crate::{DockController, DockPhysicalPlacement, DockRuntimeConfig, PlatformEvent};
 
 const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.Window.v1");
 pub(super) const TIMER_ID: usize = 0x4D55;
+pub(super) const SYNC_TIMER_ID: usize = 0x4D56;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
 pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -51,8 +52,10 @@ pub fn run_showcase(
         Some(milliseconds) => Some(TimerGuard::start(topbar.hwnd, milliseconds)?),
         None => None,
     };
+    let sync_timer = TimerGuard::start_sync(dock.hwnd)?;
     let dock_controller = sample_dock_controller()?;
     let mut runtime = RuntimeSurfaces::new(force_warp, &topbar, &dock, dock_controller)?;
+    runtime.handle_event(PlatformEvent::SyncWindows, &mut topbar, &mut dock)?;
     print_window(&topbar, runtime.device_kind());
     print_window(&dock, runtime.device_kind());
     if simulate_device_loss_once {
@@ -69,6 +72,7 @@ pub fn run_showcase(
     }
     let result = message_loop(|event| runtime.handle_event(event, &mut topbar, &mut dock));
     drop(runtime);
+    drop(sync_timer);
     drop(timer);
     drop(dock);
     drop(topbar);
@@ -84,7 +88,7 @@ fn sample_dock_controller() -> Result<DockController> {
     ];
     DockController::new(
         ShellState::default().with_dock_items(items),
-        DockRuntimeConfig::default(),
+        DockRuntimeConfig::default().with_autohide(true),
     )
     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
 }
@@ -216,6 +220,25 @@ impl OwnedWindow {
             ShowcaseRole::Topbar => topbar_rect(work, self.dpi, metrics),
             ShowcaseRole::Dock => dock_showcase_rect(work, self.dpi, metrics),
         };
+        self.apply_rect()
+    }
+
+    pub(super) fn apply_dock_visibility(
+        &mut self,
+        work: PhysicalRect,
+        config: DockRuntimeConfig,
+        hidden: bool,
+    ) -> Result<()> {
+        if self.role != ShowcaseRole::Dock {
+            return Ok(());
+        }
+        // SAFETY: Category 8 (FFI boundary). The owned HWND is live while its
+        // current effective DPI is queried for work-area placement.
+        self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
+        let normal = dock_showcase_rect(work, self.dpi, ShellMetrics::default());
+        let placement =
+            DockPhysicalPlacement::from_visibility(normal, config, hidden, self.dpi.scale());
+        self.rect = placement.rect();
         self.apply_rect()
     }
 

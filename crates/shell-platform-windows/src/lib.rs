@@ -19,6 +19,14 @@ mod win32_windowing;
 mod win32_actions;
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 popup menu dispatch is isolated here")]
+mod win32_context_menu;
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 window discovery is isolated here")]
+mod win32_discovery;
+
+#[cfg(windows)]
 mod win32_owner;
 
 #[cfg(windows)]
@@ -26,14 +34,18 @@ mod win32_owner;
 mod win32_timer;
 
 mod dock_controller;
+mod dock_placement;
 mod dock_types;
+mod dock_window_sync;
 mod runtime;
 
 pub use dock_controller::DockController;
+pub use dock_placement::DockPhysicalPlacement;
 pub use dock_types::{
     ContextMenuCommand, DockAnimator, DockControllerError, DockPointerPhase, DockPointerSample,
     DockRuntimeConfig, QueuedDockAction,
 };
+pub use dock_window_sync::ObservedWindow;
 pub use runtime::{RuntimeAction, RuntimeOrchestrator};
 #[cfg(windows)]
 pub use win32::run_showcase;
@@ -56,6 +68,7 @@ pub enum PlatformEvent {
         point: DipPoint,
         path: String,
     },
+    SyncWindows,
     QaExitRequested,
     CloseRequested,
     Destroyed,

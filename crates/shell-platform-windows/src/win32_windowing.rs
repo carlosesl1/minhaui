@@ -22,8 +22,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::Result;
 
-use crate::win32::{DOCK_DRAGGING, DOCK_WINDOW, LIVE_WINDOWS, TASKBAR_CREATED, TIMER_ID};
-use crate::{ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent};
+use crate::win32::{
+    DOCK_DRAGGING, DOCK_WINDOW, LIVE_WINDOWS, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
+};
+use crate::win32_context_menu::track_dock_context_menu;
+use crate::{DockPointerPhase, DockPointerSample, PlatformEvent};
 
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
 
@@ -142,10 +145,12 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_RBUTTONUP if is_dock_window(hwnd) => {
-            queue_event(PlatformEvent::DockContextMenu {
-                point: client_point(hwnd, lparam),
-                command: ContextMenuCommand::Unpin,
-            });
+            if let Some(command) = track_dock_context_menu(hwnd, client_physical_point(lparam)) {
+                queue_event(PlatformEvent::DockContextMenu {
+                    point: client_point(hwnd, lparam),
+                    command,
+                });
+            }
             LRESULT(0)
         }
         WM_DROPFILES if is_dock_window(hwnd) => {
@@ -190,6 +195,10 @@ pub(super) unsafe extern "system" fn window_proc(
             queue_event(PlatformEvent::QaExitRequested);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == SYNC_TIMER_ID => {
+            queue_event(PlatformEvent::SyncWindows);
+            LRESULT(0)
+        }
         WM_CLOSE => {
             queue_event(PlatformEvent::CloseRequested);
             LRESULT(0)
@@ -228,12 +237,18 @@ fn track_mouse_leave(hwnd: HWND) {
 }
 
 fn client_point(hwnd: HWND, lparam: LPARAM) -> DipPoint {
-    let x = (lparam.0 as u16) as i16 as i32;
-    let y = ((lparam.0 >> 16) as u16) as i16 as i32;
+    let point = client_physical_point(lparam);
     // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
     let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
     let scale = dpi.scale();
-    DipPoint::new(x as f32 / scale, y as f32 / scale)
+    DipPoint::new(point.x as f32 / scale, point.y as f32 / scale)
+}
+
+fn client_physical_point(lparam: LPARAM) -> POINT {
+    POINT {
+        x: (lparam.0 as u16) as i16 as i32,
+        y: ((lparam.0 >> 16) as u16) as i16 as i32,
+    }
 }
 
 fn first_drop_path(wparam: WPARAM) -> Option<String> {

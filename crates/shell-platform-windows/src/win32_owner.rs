@@ -8,6 +8,7 @@ use windows::core::Result;
 
 use crate::win32::OwnedWindow;
 use crate::win32_actions::apply_dock_actions;
+use crate::win32_discovery::discover_running_windows;
 use crate::win32_windowing::primary_work_area;
 use crate::{DockController, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
 
@@ -53,6 +54,7 @@ impl RuntimeSurfaces {
     ) -> Result<bool> {
         match &event {
             PlatformEvent::DockPointer(sample) => {
+                let before = self.dock_controller.state().clone();
                 let actions = self
                     .dock_controller
                     .handle_pointer(*sample)
@@ -60,10 +62,14 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                self.rebuild(topbar, dock)?;
+                if before != *self.dock_controller.state() || !actions.is_empty() {
+                    self.apply_dock_visibility(dock)?;
+                    self.rebuild(topbar, dock)?;
+                }
                 return Ok(true);
             }
             PlatformEvent::DockContextMenu { point, command } => {
+                let before = self.dock_controller.state().clone();
                 let actions = self
                     .dock_controller
                     .handle_context_menu(*point, *command)
@@ -71,10 +77,13 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                self.rebuild(topbar, dock)?;
+                if before != *self.dock_controller.state() || !actions.is_empty() {
+                    self.rebuild(topbar, dock)?;
+                }
                 return Ok(true);
             }
             PlatformEvent::DockDrop { point, path } => {
+                let before = self.dock_controller.state().clone();
                 let actions = self
                     .dock_controller
                     .handle_drop(*point, path)
@@ -82,7 +91,24 @@ impl RuntimeSurfaces {
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);
                 }
-                self.rebuild(topbar, dock)?;
+                if before != *self.dock_controller.state() || !actions.is_empty() {
+                    self.rebuild(topbar, dock)?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::SyncWindows => {
+                let before = self.dock_controller.state().clone();
+                let observed = discover_running_windows(&[topbar.hwnd, dock.hwnd])?;
+                let actions = self
+                    .dock_controller
+                    .sync_running_windows(&observed)
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if !apply_dock_actions(&actions)? {
+                    return Ok(false);
+                }
+                if before != *self.dock_controller.state() || !actions.is_empty() {
+                    self.rebuild(topbar, dock)?;
+                }
                 return Ok(true);
             }
             PlatformEvent::TaskbarCreated
@@ -102,7 +128,11 @@ impl RuntimeSurfaces {
             RuntimeAction::RepositionAndRebuild => {
                 let work = primary_work_area()?;
                 topbar.reposition(work)?;
-                dock.reposition(work)?;
+                dock.apply_dock_visibility(
+                    work,
+                    self.dock_controller.config(),
+                    !self.dock_controller.state().dock().is_revealed(),
+                )?;
                 self.rebuild(topbar, dock)?;
             }
             RuntimeAction::ResizeAndRebuild(_) => {
@@ -112,6 +142,15 @@ impl RuntimeSurfaces {
             }
         }
         Ok(true)
+    }
+
+    fn apply_dock_visibility(&self, dock: &mut OwnedWindow) -> Result<()> {
+        let work = primary_work_area()?;
+        dock.apply_dock_visibility(
+            work,
+            self.dock_controller.config(),
+            !self.dock_controller.state().dock().is_revealed(),
+        )
     }
 
     fn rebuild(&mut self, topbar: &OwnedWindow, dock: &OwnedWindow) -> Result<()> {

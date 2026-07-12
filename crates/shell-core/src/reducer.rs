@@ -12,6 +12,13 @@ pub fn reduce(state: &ShellState, event: ShellEvent) -> Result<Transition, Trans
     let (effects, outcome) = match event {
         ShellEvent::ActivateDockItem(id) => activate(&mut next, id)?,
         ShellEvent::WindowOpened { item, window } => window_opened(&mut next, item, window)?,
+        ShellEvent::WindowChanged {
+            item,
+            window,
+            focused,
+            minimized,
+        } => window_changed(&mut next, item, window, focused, minimized)?,
+        ShellEvent::WindowDiscovered(item) => window_discovered(&mut next, item)?,
         ShellEvent::WindowClosed(id) => window_closed(&mut next, id)?,
         ShellEvent::Pin(item) => pin(&mut next, item)?,
         ShellEvent::Unpin(id) => unpin(&mut next, id),
@@ -92,6 +99,33 @@ fn window_opened(
         window,
         focused: false,
         minimized: false,
+    };
+    Ok(applied(Vec::new()))
+}
+
+fn window_discovered(
+    state: &mut ShellState,
+    item: DockItem,
+) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    if state.dock_items.iter().any(|current| current.id == item.id) {
+        return Err(TransitionError::DuplicateDockItem(item.id));
+    }
+    state.dock_items.push(item);
+    Ok(applied(Vec::new()))
+}
+
+fn window_changed(
+    state: &mut ShellState,
+    id: DockItemId,
+    window: WindowId,
+    focused: bool,
+    minimized: bool,
+) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    let item = find_item(state, id)?;
+    item.running = RunningState::Running {
+        window,
+        focused,
+        minimized,
     };
     Ok(applied(Vec::new()))
 }

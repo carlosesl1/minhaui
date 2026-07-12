@@ -2,14 +2,17 @@
 
 use std::path::Path;
 
-use shell_core::{AppId, DockItem, DockItemId, Effect, ShellEvent, ShellState, reduce};
+use shell_core::{
+    AppId, DockItem, DockItemId, Effect, RunningState, ShellEvent, ShellState, reduce,
+};
 use shell_renderer::{
     DipPoint, DipRect, DockItemVisual, DockLayout, DockScene, RunningIndicator, layout_dock_scene,
 };
 
+use crate::dock_window_sync::stable_item_id;
 use crate::{
     ContextMenuCommand, DockAnimator, DockControllerError, DockPointerPhase, DockPointerSample,
-    DockRuntimeConfig, QueuedDockAction,
+    DockRuntimeConfig, ObservedWindow, QueuedDockAction,
 };
 
 pub struct DockController {
@@ -110,6 +113,40 @@ impl DockController {
         self.apply(ShellEvent::Pin(DockItem::pinned(id, app)))
     }
 
+    pub fn sync_running_windows(
+        &mut self,
+        observed: &[ObservedWindow],
+    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        let mut actions = Vec::new();
+        for window in observed {
+            let item = if let Some(item) = self.item_for_app(window.app()) {
+                item
+            } else {
+                let item = self.stable_item_for_app(window.app());
+                let discovered = DockItem::running_unpinned(
+                    item,
+                    window.app().clone(),
+                    window.window(),
+                    window.foreground(),
+                    window.minimized(),
+                );
+                actions.extend(self.apply(ShellEvent::WindowDiscovered(discovered))?);
+                item
+            };
+            actions.extend(self.apply(ShellEvent::WindowChanged {
+                item,
+                window: window.window(),
+                focused: window.foreground(),
+                minimized: window.minimized(),
+            })?);
+        }
+        let stale_items = self.stale_running_items(observed);
+        for item in stale_items {
+            actions.extend(self.apply(ShellEvent::WindowClosed(item))?);
+        }
+        Ok(actions)
+    }
+
     #[must_use]
     pub fn scene(&self) -> DockScene {
         DockScene::new(self.config.layout(), self.visual_items())
@@ -188,6 +225,37 @@ impl DockController {
             .max()
             .map_or(1, |value| value + 1);
         DockItemId::new(value)
+    }
+
+    fn item_for_app(&self, app: &AppId) -> Option<DockItemId> {
+        self.state
+            .dock_items()
+            .iter()
+            .find(|item| item.app() == app)
+            .map(DockItem::id)
+    }
+
+    fn stable_item_for_app(&self, app: &AppId) -> DockItemId {
+        let mut id = stable_item_id(app);
+        while self.state.dock_items().iter().any(|item| item.id() == id) {
+            id = DockItemId::new(id.value().wrapping_add(1));
+        }
+        id
+    }
+
+    fn stale_running_items(&self, observed: &[ObservedWindow]) -> Vec<DockItemId> {
+        self.state
+            .dock_items()
+            .iter()
+            .filter_map(|item| match item.running() {
+                RunningState::Running { window, .. }
+                    if !observed.iter().any(|current| current.window() == *window) =>
+                {
+                    Some(item.id())
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     fn window_for_item(&self, id: DockItemId) -> Option<shell_core::WindowId> {

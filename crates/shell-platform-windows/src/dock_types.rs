@@ -104,6 +104,29 @@ pub enum ContextMenuCommand {
     Quit,
 }
 
+impl ContextMenuCommand {
+    #[must_use]
+    pub const fn from_native_id(value: u16) -> Option<Self> {
+        match value {
+            1 => Some(Self::Open),
+            2 => Some(Self::Pin),
+            3 => Some(Self::Unpin),
+            4 => Some(Self::Quit),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn native_id(self) -> u16 {
+        match self {
+            Self::Open => 1,
+            Self::Pin => 2,
+            Self::Unpin => 3,
+            Self::Quit => 4,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedDockAction {
     Effect(Effect),

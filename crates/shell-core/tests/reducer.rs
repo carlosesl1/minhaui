@@ -1,6 +1,7 @@
 use shell_core::{
-    AppId, DockItem, DockItemId, Effect, Monitor, MonitorId, NoOpReason, Popover, RunningState,
-    ShellEvent, ShellState, TaskbarPolicy, TransitionError, TransitionOutcome, WindowId, reduce,
+    AppId, DockItem, DockItemId, Effect, Monitor, MonitorId, NoOpReason, PinState, Popover,
+    RunningState, ShellEvent, ShellState, TaskbarPolicy, TransitionError, TransitionOutcome,
+    WindowId, reduce,
 };
 
 fn app(value: &str) -> Result<AppId, Box<dyn std::error::Error>> {
@@ -72,6 +73,74 @@ fn launch_focus_minimize_sequence_emits_typed_intents() -> Result<(), Box<dyn st
             window: WindowId::new(90),
             focused: false,
             minimized: true,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn observed_window_sync_tracks_focus_and_minimized_state() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Given: a pinned application that Windows has already surfaced.
+    let state = ShellState::default().with_dock_items(vec![item(7, "app.calculator")?]);
+
+    // When: platform discovery reports foreground and minimized states.
+    let focused = reduce(
+        &state,
+        ShellEvent::WindowChanged {
+            item: DockItemId::new(7),
+            window: WindowId::new(90),
+            focused: true,
+            minimized: false,
+        },
+    )?;
+    let minimized = reduce(
+        &focused.state,
+        ShellEvent::WindowChanged {
+            item: DockItemId::new(7),
+            window: WindowId::new(90),
+            focused: false,
+            minimized: true,
+        },
+    )?;
+
+    // Then: the dock mirrors the external lifecycle without a launch click.
+    assert_eq!(
+        minimized.state.dock_items()[0].running(),
+        &RunningState::Running {
+            window: WindowId::new(90),
+            focused: false,
+            minimized: true,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn running_unpinned_entries_can_be_pinned_without_losing_window_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: discovery created an unpinned running app.
+    let state = ShellState::default();
+    let running = DockItem::running_unpinned(
+        DockItemId::new(44),
+        app("app.external")?,
+        WindowId::new(440),
+        true,
+        false,
+    );
+
+    // When: the user pins that running app.
+    let pinned = reduce(&state, ShellEvent::Pin(running))?;
+
+    // Then: pinning preserves the observed window association.
+    let item = &pinned.state.dock_items()[0];
+    assert_eq!(item.pin(), PinState::Pinned);
+    assert_eq!(
+        item.running(),
+        &RunningState::Running {
+            window: WindowId::new(440),
+            focused: true,
+            minimized: false,
         }
     );
     Ok(())

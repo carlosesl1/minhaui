@@ -27,7 +27,17 @@ pub enum ShellEvent {
     /// Activates a dock entry using launch/focus/minimize semantics.
     ActivateDockItem(DockItemId),
     /// Records a newly observed running window.
-    WindowOpened { item: DockItemId, window: WindowId },
+    WindowOpened {
+        item: DockItemId,
+        window: WindowId,
+    },
+    WindowChanged {
+        item: DockItemId,
+        window: WindowId,
+        focused: bool,
+        minimized: bool,
+    },
+    WindowDiscovered(DockItem),
     /// Records that an item's running window closed.
     WindowClosed(DockItemId),
     /// Adds or pins a dock entry.

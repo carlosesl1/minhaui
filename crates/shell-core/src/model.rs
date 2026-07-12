@@ -114,6 +114,26 @@ impl DockItem {
         }
     }
 
+    #[must_use]
+    pub const fn running_unpinned(
+        id: DockItemId,
+        app: AppId,
+        window: WindowId,
+        focused: bool,
+        minimized: bool,
+    ) -> Self {
+        Self {
+            id,
+            app,
+            pin: PinState::Unpinned,
+            running: RunningState::Running {
+                window,
+                focused,
+                minimized,
+            },
+        }
+    }
+
     /// Returns the dock identity.
     #[must_use]
     pub const fn id(&self) -> DockItemId {
