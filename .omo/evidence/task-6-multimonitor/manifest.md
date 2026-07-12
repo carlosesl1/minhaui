@@ -111,4 +111,5 @@ Canonical pack only: old attempts, empty receipts, and stale QA screenshots were
 
 - Doneclaim / review artifact: `.omo/evidence/task-6-multimonitor/task-6-doneclaim-review.md`
 - Stop-hook verification artifact: `.omo/evidence/task-6-multimonitor/task-6-stop-hook-verification.txt`
+- Stop-hook verification 2 artifact: `.omo/evidence/task-6-multimonitor/task-6-stop-hook-verification-2.txt`
 - Hashes: `.omo/evidence/task-6-multimonitor/SHA256SUMS.txt`
