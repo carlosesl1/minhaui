@@ -5,5 +5,8 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[dependencies]
+shell-core = { path = "../shell-core", version = "0.1.0" }
+
 [lints]
 workspace = true

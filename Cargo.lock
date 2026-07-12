@@ -404,6 +404,9 @@ dependencies = [
 [[package]]
 name = "shell-watchdog"
 version = "0.1.0"
+dependencies = [
+ "shell-core",
+]
 
 [[package]]
 name = "syn"
