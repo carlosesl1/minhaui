@@ -69,7 +69,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Separate watchdog process, heartbeat, bounded restart/backoff, crash loop safe mode, local redacted logs and user-exportable diagnostics.
   - Manual QA: kill/crash/Explorer-restart matrix `.omo/evidence/task-10-recovery/` proving taskbar restoration.
 
-- [ ] 11. Harden resource ownership, concurrency, accessibility, and security boundaries
+- [x] 11. Harden resource ownership, concurrency, accessibility, and security boundaries
   - Depends on: 5-10. Audit Win32 handles/COM/thread apartments/device resources, cancellation and shutdown. Add keyboard-only paths, focus visuals, screen-reader names where supported, high contrast and reduced motion.
   - Fuzz/negative-test config/theme parsing; reject traversal/oversized payloads and never execute imported theme content.
   - Manual QA: accessibility and long-command interruption artifacts `.omo/evidence/task-11-hardening/`.
