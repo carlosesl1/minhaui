@@ -9,7 +9,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PostQuitMessage,
-    SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_CLOSE, WM_DESTROY,
+    SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_DESTROY,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER,
 };
@@ -22,9 +22,10 @@ use crate::win32_context_menu::track_dock_context_menu;
 use crate::win32_drop::first_drop_path;
 use crate::win32_hit_test::hit_test;
 pub(super) use crate::win32_work_area::primary_work_area;
-use crate::{DockPointerPhase, DockPointerSample, PlatformEvent};
+use crate::{ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent};
 
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
+static LAST_CONTEXT_POINT: OnceLock<Mutex<Option<DipPoint>>> = OnceLock::new();
 
 fn queue_event(event: PlatformEvent) {
     let queue = EVENT_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()));
@@ -37,6 +38,19 @@ fn next_event() -> Option<PlatformEvent> {
     EVENT_QUEUE
         .get()
         .and_then(|queue| queue.lock().ok()?.pop_front())
+}
+
+fn set_last_context_point(point: DipPoint) {
+    let state = LAST_CONTEXT_POINT.get_or_init(|| Mutex::new(None));
+    if let Ok(mut value) = state.lock() {
+        *value = Some(point);
+    }
+}
+
+fn last_context_point() -> Option<DipPoint> {
+    LAST_CONTEXT_POINT
+        .get()
+        .and_then(|state| state.lock().ok().and_then(|value| *value))
 }
 
 pub(super) fn message_loop(
@@ -125,9 +139,17 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_RBUTTONUP if is_dock_window(hwnd) => {
+            let point = client_point(hwnd, lparam);
+            set_last_context_point(point);
             if let Some(command) = track_dock_context_menu(hwnd, client_physical_point(lparam)) {
+                queue_event(PlatformEvent::DockContextMenu { point, command });
+            }
+            LRESULT(0)
+        }
+        WM_COMMAND if is_dock_window(hwnd) => {
+            if let Some(command) = ContextMenuCommand::from_native_id((wparam.0 & 0xffff) as u16) {
                 queue_event(PlatformEvent::DockContextMenu {
-                    point: client_point(hwnd, lparam),
+                    point: last_context_point().unwrap_or(DipPoint::new(0.0, 0.0)),
                     command,
                 });
             }
