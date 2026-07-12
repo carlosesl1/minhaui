@@ -45,7 +45,7 @@ Cargo workspace: `crates/shell-core` (pure domain/reducers), `shell-config` (ver
   - Pinned and running apps, launch/focus/minimize, reorder, separators, running indicators, context menu, drag/drop pinning, magnification, configurable alignment/size/spacing, autohide and reveal hit zone.
   - Ensure animation cannot block input/state thread. Manual QA: scripted desktop scenarios and screenshots in `.omo/evidence/task-5-dock/`.
 
-- [ ] 6. Add multi-monitor placement, fullscreen suppression, and window previews
+- [x] 6. Add multi-monitor placement, fullscreen suppression, and window previews
   - Depends on: 5. Support independent monitor placement/DPI, taskbar edge awareness, fullscreen hide policy, preview thumbnails and close/focus actions with graceful degradation where capture is restricted.
   - Verify mixed-DPI topology simulations and hot-plug recovery. Manual QA: `.omo/evidence/task-6-multimonitor/`.
 
