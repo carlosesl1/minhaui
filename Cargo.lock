@@ -388,6 +388,7 @@ version = "0.1.0"
 dependencies = [
  "shell-core",
  "shell-renderer",
+ "thiserror",
  "windows",
 ]
 

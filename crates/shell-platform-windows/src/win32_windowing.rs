@@ -3,11 +3,14 @@ use std::sync::atomic::Ordering;
 use shell_renderer::{DipPoint, PhysicalRect};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    VK_DOWN, VK_ESCAPE, VK_RETURN, VK_SPACE, VK_TAB, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PostQuitMessage,
     SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::Result;
 
@@ -26,8 +29,8 @@ pub(super) use crate::win32_work_area::{
     monitor_placement_inputs, window_monitor_id, window_work_area,
 };
 use crate::{
-    ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent, TopbarPointerPhase,
-    TopbarPointerSample,
+    ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent, PopoverKey,
+    TopbarPointerPhase, TopbarPointerSample,
 };
 
 pub(super) fn message_loop(
@@ -154,6 +157,15 @@ pub(super) unsafe extern "system" fn window_proc(
             );
             LRESULT(0)
         }
+        WM_KEYDOWN if is_popover_window(hwnd) => {
+            if let Some(key) = popover_key(wparam) {
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::PopoverKey(key),
+                ));
+            }
+            LRESULT(0)
+        }
         WM_RBUTTONUP if is_dock_window(hwnd) => {
             let point = client_point(hwnd, lparam);
             set_last_context_point(point);
@@ -269,9 +281,28 @@ fn is_topbar_window(hwnd: HWND) -> bool {
     crate::win32::is_topbar_window(hwnd)
 }
 
+fn is_popover_window(hwnd: HWND) -> bool {
+    crate::win32::is_popover_window(hwnd)
+}
+
 fn queue_topbar_pointer(hwnd: HWND, phase: TopbarPointerPhase, point: DipPoint) {
     queue_event(RoutedPlatformEvent::window(
         hwnd,
         PlatformEvent::TopbarPointer(TopbarPointerSample::new(phase, point)),
     ));
+}
+
+fn popover_key(wparam: WPARAM) -> Option<PopoverKey> {
+    let code = wparam.0 as u16;
+    if code == VK_TAB.0 || code == VK_DOWN.0 {
+        Some(PopoverKey::Next)
+    } else if code == VK_UP.0 {
+        Some(PopoverKey::Previous)
+    } else if code == VK_RETURN.0 || code == VK_SPACE.0 {
+        Some(PopoverKey::Activate)
+    } else if code == VK_ESCAPE.0 {
+        Some(PopoverKey::Escape)
+    } else {
+        None
+    }
 }

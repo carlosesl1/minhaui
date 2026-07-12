@@ -26,7 +26,7 @@ use windows::core::{Interface, Result};
 use crate::native_device::create_d3d_device;
 use crate::native_present::present_swap_chain;
 use crate::native_showcase::draw_showcase;
-use crate::{DockScene, TopbarScene};
+use crate::{DockScene, PopoverScene, TopbarScene};
 
 pub use crate::native_present::{
     DeviceLossKind, PresentOutcome, classify_present_hresult, device_loss_hresult,
@@ -43,12 +43,14 @@ pub enum DeviceKind {
 pub enum ShowcaseRole {
     Topbar,
     Dock,
+    Popover,
 }
 
 #[derive(Clone, Copy)]
 pub struct ShellScenes<'a> {
     pub topbar: Option<&'a TopbarScene>,
     pub dock: Option<&'a DockScene>,
+    pub popover: Option<&'a PopoverScene>,
 }
 
 pub struct CompositionRenderer {

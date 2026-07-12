@@ -6,6 +6,8 @@ mod dock_layout;
 mod dock_scene;
 mod geometry;
 mod lifecycle;
+mod popover_layout;
+mod popover_scene;
 mod showcase_model;
 mod topbar_layout;
 mod topbar_scene;
@@ -38,6 +40,9 @@ mod native_showcase_dock;
 #[cfg(windows)]
 mod native_showcase_topbar;
 
+#[cfg(windows)]
+mod native_showcase_popover;
+
 pub use color::{Rgba8, premultiply_srgb};
 pub use dock_layout::{
     DockLaidOutItem, DockLayout, WindowPreviewLayout, WindowPreviewRenderKind, layout_dock_scene,
@@ -52,6 +57,10 @@ pub use geometry::{
     dock_showcase_rect, physical_from_dip, rounded_content_hit, topbar_rect,
 };
 pub use lifecycle::{DeviceEvent, DeviceLifecycle};
+pub use popover_layout::{
+    PopoverLaidOutRow, PopoverLayout, layout_popover_scene, popover_anchor_rect,
+};
+pub use popover_scene::{PopoverContentState, PopoverRow, PopoverScene};
 pub use showcase_model::{
     ShowcaseItem, ShowcasePrimitive, ShowcaseState, ShowcaseTokens, showcase_primitives,
 };

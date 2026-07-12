@@ -21,11 +21,13 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
             MonitorId::new(10),
             NativeWindowId::new(100),
             NativeWindowId::new(101),
+            NativeWindowId::new(102),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
             NativeWindowId::new(200),
             NativeWindowId::new(201),
+            NativeWindowId::new(202),
         ),
     ];
     let mut first = DockController::new(state("first.exe")?, DockRuntimeConfig::default())?;
@@ -63,11 +65,13 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
             MonitorId::new(10),
             NativeWindowId::new(100),
             NativeWindowId::new(101),
+            NativeWindowId::new(102),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
             NativeWindowId::new(200),
             NativeWindowId::new(201),
+            NativeWindowId::new(202),
         ),
     ];
 

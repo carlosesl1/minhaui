@@ -1,20 +1,22 @@
 use shell_renderer::native::ShowcaseRole;
-use shell_renderer::{Dpi, PhysicalRect, ShellMetrics, dock_showcase_rect, topbar_rect};
+use shell_renderer::{
+    Dpi, PhysicalRect, ShellMetrics, dock_showcase_rect, popover_anchor_rect, topbar_rect,
+};
 use windows::Win32::Foundation::{HINSTANCE, HWND};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::DragAcceptFiles;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, IsWindowVisible, RegisterClassExW,
-    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
-    UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
+    ShowWindow, UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
 use crate::win32::{
-    LIVE_WINDOWS, register_dock_window, register_topbar_window, unregister_dock_window,
-    unregister_topbar_window,
+    LIVE_WINDOWS, register_dock_window, register_popover_window, register_topbar_window,
+    unregister_dock_window, unregister_popover_window, unregister_topbar_window,
 };
 use crate::win32_windowing::window_proc;
 use crate::{DockPhysicalPlacement, DockRuntimeConfig};
@@ -74,6 +76,7 @@ impl OwnedWindow {
         let (title_wide, title) = match role {
             ShowcaseRole::Topbar => (w!("Minha UI Topbar"), "Minha UI Topbar"),
             ShowcaseRole::Dock => (w!("Minha UI Dock"), "Minha UI Dock"),
+            ShowcaseRole::Popover => (w!("Minha UI Popover"), "Minha UI Popover"),
         };
         let ex_style: WINDOW_EX_STYLE = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         // SAFETY: Category 8 (FFI boundary). The class is registered, parameters are
@@ -104,6 +107,7 @@ impl OwnedWindow {
                 // on window destruction.
                 unsafe { DragAcceptFiles(hwnd, true) };
             }
+            ShowcaseRole::Popover => register_popover_window(hwnd),
         }
         // SAFETY: Category 8 (FFI boundary). `hwnd` was created successfully above
         // and therefore has a stable effective DPI on the primary monitor.
@@ -112,11 +116,19 @@ impl OwnedWindow {
         let rect = match role {
             ShowcaseRole::Topbar => topbar_rect(work, dpi, metrics),
             ShowcaseRole::Dock => dock_showcase_rect(work, dpi, metrics),
+            ShowcaseRole::Popover => {
+                popover_anchor_rect(topbar_rect(work, dpi, metrics), work, dpi)
+            }
         };
         set_rect(hwnd, rect)?;
         // SAFETY: Category 8 (FFI boundary). The live window is shown with the
         // documented non-activating command.
         let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+        if role == ShowcaseRole::Popover {
+            // SAFETY: Category 8 (FFI boundary). The popover owner starts hidden and
+            // is shown only after a typed topbar intent selects active content.
+            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+        }
         Ok(Self {
             hwnd,
             role,
@@ -134,8 +146,28 @@ impl OwnedWindow {
         self.rect = match self.role {
             ShowcaseRole::Topbar => topbar_rect(work, self.dpi, metrics),
             ShowcaseRole::Dock => dock_showcase_rect(work, self.dpi, metrics),
+            ShowcaseRole::Popover => {
+                popover_anchor_rect(topbar_rect(work, self.dpi, metrics), work, self.dpi)
+            }
         };
         set_rect(self.hwnd, self.rect)
+    }
+
+    pub(super) fn place_popover(&mut self, work: PhysicalRect, anchor: PhysicalRect) -> Result<()> {
+        if self.role != ShowcaseRole::Popover {
+            return Ok(());
+        }
+        // SAFETY: Category 8 (FFI boundary). The owned HWND is live while its
+        // current effective DPI is queried for popover placement.
+        self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
+        self.rect = popover_anchor_rect(anchor, work, self.dpi);
+        set_rect(self.hwnd, self.rect)
+    }
+
+    pub(super) fn hide(&self) {
+        // SAFETY: Category 8 (FFI boundary). The owned HWND remains valid for this
+        // idempotent visibility update.
+        let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
     }
 
     pub(super) fn apply_dock_visibility(
@@ -181,6 +213,7 @@ impl Drop for OwnedWindow {
         match self.role {
             ShowcaseRole::Topbar => unregister_topbar_window(self.hwnd),
             ShowcaseRole::Dock => unregister_dock_window(self.hwnd),
+            ShowcaseRole::Popover => unregister_popover_window(self.hwnd),
         }
         // SAFETY: Category 8 (FFI boundary). This guard is the sole owner of the
         // HWND; DestroyWindow is idempotently skipped by Windows if already closed.
@@ -230,5 +263,6 @@ const fn role_name(role: ShowcaseRole) -> &'static str {
     match role {
         ShowcaseRole::Topbar => "topbar",
         ShowcaseRole::Dock => "dock",
+        ShowcaseRole::Popover => "popover",
     }
 }

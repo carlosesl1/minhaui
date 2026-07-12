@@ -82,6 +82,9 @@ mod win32_preview_qa;
 #[cfg(windows)]
 mod win32_sample_state;
 
+#[cfg(windows)]
+mod win32_popover_render;
+
 mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
@@ -91,6 +94,9 @@ mod dock_types;
 mod dock_visuals;
 mod dock_window_sync;
 mod native_event_route;
+mod popover_adapters;
+mod popover_controller;
+mod popover_types;
 mod runtime;
 mod topbar_controller;
 mod topbar_types;
@@ -110,6 +116,13 @@ pub use dock_window_sync::ObservedWindow;
 pub use native_event_route::{
     NativeEventTarget, NativeRouteDecision, NativeWindowId, NativeWindowSlot,
     route_native_event_to_slot,
+};
+pub use popover_adapters::{DefaultPopoverDataProvider, OfflineWeatherProvider};
+pub use popover_controller::{PopoverController, PopoverControllerError};
+pub use popover_types::{
+    PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
+    PopoverLoadState, PopoverPayload, QueuedPopoverAction, SessionAction, WeatherAccess,
+    WeatherItem, WeatherProvider,
 };
 pub use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
@@ -145,6 +158,7 @@ pub enum PlatformEvent {
         point: DipPoint,
         path: String,
     },
+    PopoverKey(PopoverKey),
     SyncWindows,
     QaExitRequested,
     CloseRequested,

@@ -13,6 +13,7 @@ impl RuntimeSurfaces {
         observed: &[crate::ObservedWindow],
         topbar: &OwnedWindow,
         dock: &mut OwnedWindow,
+        popover: &OwnedWindow,
     ) -> Result<()> {
         let fullscreen = observed
             .iter()
@@ -31,6 +32,6 @@ impl RuntimeSurfaces {
             self.dock_controller.config().with_autohide(true),
             suppressed,
         )?;
-        self.rebuild(topbar, dock)
+        self.rebuild(topbar, dock, popover)
     }
 }

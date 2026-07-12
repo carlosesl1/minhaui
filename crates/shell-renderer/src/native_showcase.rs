@@ -10,6 +10,7 @@ use windows::core::{Result, w};
 
 use crate::native::{ShellScenes, ShowcaseRole};
 use crate::native_showcase_dock::{draw_dock_states, draw_functional_dock};
+use crate::native_showcase_popover::{PopoverBrushes, draw_functional_popover};
 use crate::native_showcase_topbar::{TopbarBrushes, draw_functional_topbar};
 use crate::{Rgba8, ShowcaseTokens};
 
@@ -34,10 +35,10 @@ pub(crate) fn draw_showcase(
     let focus = create_brush(context, tokens.focus_outer)?;
     let error = create_brush(context, tokens.error)?;
     let text_format = create_text_format(dwrite, role)?;
-    let radius = if role == ShowcaseRole::Dock {
-        tokens.dock_radius
-    } else {
-        12.0
+    let radius = match role {
+        ShowcaseRole::Dock => tokens.dock_radius,
+        ShowcaseRole::Topbar => 12.0,
+        ShowcaseRole::Popover => tokens.popover_radius,
     };
     // SAFETY: Category 8 (FFI boundary). A live target is installed and all draw
     // calls finish before the owned brushes are dropped.
@@ -79,6 +80,24 @@ pub(crate) fn draw_showcase(
                     bottom: height,
                 },
                 &primary,
+            );
+        }
+    } else if role == ShowcaseRole::Popover {
+        if let Some(scene) = scenes.popover {
+            draw_functional_popover(
+                context,
+                &text_format,
+                width,
+                height,
+                scene,
+                PopoverBrushes {
+                    raised: &raised,
+                    hover: &hover,
+                    primary: &primary,
+                    secondary: &secondary,
+                    accent: &accent,
+                    error: &error,
+                },
             );
         }
     } else if let Some(scene) = scenes.dock {
