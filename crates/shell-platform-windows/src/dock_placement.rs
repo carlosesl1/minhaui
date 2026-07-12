@@ -135,6 +135,13 @@ pub struct MonitorShellPlacement {
     suppressed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlotReconcileAction {
+    Remove(MonitorId),
+    Create(MonitorId),
+    Reuse(MonitorId),
+}
+
 impl MonitorShellPlacement {
     #[must_use]
     pub const fn monitor(self) -> MonitorId {
@@ -181,6 +188,27 @@ pub fn plan_monitor_placements(
             }
         })
         .collect()
+}
+
+#[must_use]
+pub fn reconcile_monitor_slots(
+    current: &[MonitorId],
+    monitors: &[MonitorPlacementInput],
+) -> Vec<SlotReconcileAction> {
+    let mut actions = current
+        .iter()
+        .copied()
+        .filter(|monitor| !monitors.iter().any(|next| next.monitor == *monitor))
+        .map(SlotReconcileAction::Remove)
+        .collect::<Vec<_>>();
+    actions.extend(monitors.iter().map(|monitor| {
+        if current.contains(&monitor.monitor) {
+            SlotReconcileAction::Reuse(monitor.monitor)
+        } else {
+            SlotReconcileAction::Create(monitor.monitor)
+        }
+    }));
+    actions
 }
 
 #[must_use]

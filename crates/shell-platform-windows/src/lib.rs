@@ -30,7 +30,20 @@ mod win32_discovery;
 mod win32_owner;
 
 #[cfg(windows)]
+mod win32_slots;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 pointer coordinate helpers are isolated here"
+)]
+mod win32_pointer;
+
+#[cfg(windows)]
 mod win32_dock_render;
+
+#[cfg(windows)]
+mod win32_event_queue;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 drop decoding is isolated here")]
@@ -56,6 +69,9 @@ mod win32_work_area;
 #[allow(unsafe_code, reason = "DWM thumbnail probing is isolated here")]
 mod win32_preview;
 
+#[cfg(windows)]
+mod win32_preview_qa;
+
 mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
@@ -64,19 +80,25 @@ mod dock_placement;
 mod dock_types;
 mod dock_visuals;
 mod dock_window_sync;
+mod native_event_route;
 mod runtime;
 mod window_preview;
 
 pub use dock_controller::DockController;
 pub use dock_placement::{
     DockPhysicalPlacement, FullscreenObservation, FullscreenPolicy, MonitorPlacementInput,
-    MonitorShellPlacement, TaskbarEdge, plan_monitor_placements, taskbar_edge,
+    MonitorShellPlacement, SlotReconcileAction, TaskbarEdge, plan_monitor_placements,
+    reconcile_monitor_slots, taskbar_edge,
 };
 pub use dock_types::{
     ContextMenuCommand, DockAnimator, DockControllerError, DockPointerPhase, DockPointerSample,
     DockRuntimeConfig, QueuedDockAction,
 };
 pub use dock_window_sync::ObservedWindow;
+pub use native_event_route::{
+    NativeEventTarget, NativeRouteDecision, NativeWindowId, NativeWindowSlot,
+    route_native_event_to_slot,
+};
 pub use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,

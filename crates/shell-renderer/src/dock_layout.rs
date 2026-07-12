@@ -1,4 +1,7 @@
-use crate::{DipPoint, DipRect, DockItemVisual, DockItemVisualKind, DockLayoutConfig, DockScene};
+use crate::{
+    DipPoint, DipRect, DockItemVisual, DockItemVisualKind, DockLayoutConfig, DockScene,
+    PreviewUnavailableReason, WindowPreviewCapture, WindowPreviewVisual,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockLaidOutItem {
@@ -38,6 +41,19 @@ pub struct DockLayout {
     items: Vec<DockLaidOutItem>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowPreviewRenderKind {
+    Thumbnail,
+    Unavailable(PreviewUnavailableReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowPreviewLayout {
+    visual: WindowPreviewVisual,
+    bounds: DipRect,
+    kind: WindowPreviewRenderKind,
+}
+
 impl DockLayout {
     #[must_use]
     pub fn items(&self) -> &[DockLaidOutItem] {
@@ -50,6 +66,23 @@ impl DockLayout {
             .iter()
             .find(|item| contains(item.bounds(), point))
             .map(DockLaidOutItem::id)
+    }
+}
+
+impl WindowPreviewLayout {
+    #[must_use]
+    pub const fn visual(self) -> WindowPreviewVisual {
+        self.visual
+    }
+
+    #[must_use]
+    pub const fn bounds(self) -> DipRect {
+        self.bounds
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> WindowPreviewRenderKind {
+        self.kind
     }
 }
 
@@ -77,6 +110,30 @@ pub fn layout_dock_scene(scene: &DockScene, surface: DipRect) -> DockLayout {
         })
         .collect();
     DockLayout { items }
+}
+
+#[must_use]
+pub fn layout_window_previews(scene: &DockScene, surface: DipRect) -> Vec<WindowPreviewLayout> {
+    scene
+        .window_previews()
+        .iter()
+        .copied()
+        .map(|visual| WindowPreviewLayout {
+            visual,
+            bounds: DipRect::new(
+                surface.x + 16.0,
+                surface.y + 8.0,
+                (surface.width - 32.0).clamp(1.0, 260.0),
+                (surface.height - 24.0).clamp(1.0, 132.0),
+            ),
+            kind: match visual.capture() {
+                WindowPreviewCapture::DwmThumbnail => WindowPreviewRenderKind::Thumbnail,
+                WindowPreviewCapture::Restricted(reason) => {
+                    WindowPreviewRenderKind::Unavailable(reason)
+                }
+            },
+        })
+        .collect()
 }
 
 fn total_width(scene: &DockScene) -> f32 {

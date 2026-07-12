@@ -3,7 +3,8 @@ use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrus
 use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 
 use crate::native_showcase::{draw_text, fill_round, rect};
-use crate::{DipRect, DockItemVisualKind, DockScene, RunningIndicator, layout_dock_scene};
+use crate::{DipRect, DockItemVisualKind, DockScene, RunningIndicator, WindowPreviewRenderKind};
+use crate::{layout_dock_scene, layout_window_previews};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_dock_states(
@@ -143,8 +144,48 @@ pub(crate) fn draw_functional_dock(
     primary: &ID2D1SolidColorBrush,
     secondary: &ID2D1SolidColorBrush,
     accent: &ID2D1SolidColorBrush,
+    error: &ID2D1SolidColorBrush,
     control_radius: f32,
 ) {
+    for preview in layout_window_previews(scene, DipRect::new(0.0, 0.0, width, height)) {
+        if let WindowPreviewRenderKind::Unavailable(_) = preview.kind() {
+            let bounds = preview.bounds();
+            fill_round(
+                context,
+                rect(
+                    bounds.x,
+                    bounds.y,
+                    bounds.x + bounds.width,
+                    bounds.y + bounds.height,
+                    control_radius,
+                ),
+                raised,
+            );
+            fill_round(
+                context,
+                rect(
+                    bounds.x + 12.0,
+                    bounds.y + 12.0,
+                    bounds.x + 20.0,
+                    bounds.y + 20.0,
+                    4.0,
+                ),
+                error,
+            );
+            draw_text(
+                context,
+                "Preview unavailable",
+                format,
+                D2D_RECT_F {
+                    left: bounds.x + 28.0,
+                    top: bounds.y + 8.0,
+                    right: bounds.x + bounds.width - 12.0,
+                    bottom: bounds.y + 36.0,
+                },
+                secondary,
+            );
+        }
+    }
     let layout = layout_dock_scene(scene, DipRect::new(0.0, 0.0, width, height));
     for item in layout.items() {
         match item.kind() {

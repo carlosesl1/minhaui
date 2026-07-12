@@ -1,13 +1,8 @@
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
-use std::sync::{Mutex, OnceLock};
 
-use shell_renderer::{DipPoint, Dpi, PhysicalRect};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
+use shell_renderer::{DipPoint, PhysicalRect};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PostQuitMessage,
     SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_DESTROY,
@@ -16,46 +11,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::Result;
 
-use crate::win32::{DOCK_DRAGGING, LIVE_WINDOWS, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID};
+use crate::win32::{LIVE_WINDOWS, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID};
 use crate::win32_context_menu::track_dock_context_menu;
 use crate::win32_drop::first_drop_path;
+use crate::win32_event_queue::{
+    RoutedPlatformEvent, is_dragging, last_context_point, next_event, queue_event, set_dragging,
+    set_last_context_point,
+};
 use crate::win32_hit_test::hit_test;
+use crate::win32_pointer::{
+    client_physical_point, client_point, cursor_client_point, track_mouse_leave,
+};
 pub(super) use crate::win32_work_area::{
     monitor_placement_inputs, window_monitor_id, window_work_area,
 };
 use crate::{ContextMenuCommand, DockPointerPhase, DockPointerSample, PlatformEvent};
 
-static EVENT_QUEUE: OnceLock<Mutex<VecDeque<PlatformEvent>>> = OnceLock::new();
-static LAST_CONTEXT_POINT: OnceLock<Mutex<Option<DipPoint>>> = OnceLock::new();
-
-fn queue_event(event: PlatformEvent) {
-    let queue = EVENT_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()));
-    if let Ok(mut events) = queue.lock() {
-        events.push_back(event);
-    }
-}
-
-fn next_event() -> Option<PlatformEvent> {
-    EVENT_QUEUE
-        .get()
-        .and_then(|queue| queue.lock().ok()?.pop_front())
-}
-
-fn set_last_context_point(point: DipPoint) {
-    let state = LAST_CONTEXT_POINT.get_or_init(|| Mutex::new(None));
-    if let Ok(mut value) = state.lock() {
-        *value = Some(point);
-    }
-}
-
-fn last_context_point() -> Option<DipPoint> {
-    LAST_CONTEXT_POINT
-        .get()
-        .and_then(|state| state.lock().ok().and_then(|value| *value))
-}
-
 pub(super) fn message_loop(
-    mut handle_event: impl FnMut(PlatformEvent) -> Result<bool>,
+    mut handle_event: impl FnMut(RoutedPlatformEvent) -> Result<bool>,
 ) -> Result<()> {
     let mut message = MSG::default();
     loop {
@@ -98,72 +71,95 @@ pub(super) unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if message == TASKBAR_CREATED.load(Ordering::Acquire) {
-        queue_event(PlatformEvent::TaskbarCreated);
+        queue_event(RoutedPlatformEvent::broadcast(
+            PlatformEvent::TaskbarCreated,
+        ));
         return LRESULT(0);
     }
     match message {
         WM_MOUSEMOVE if is_dock_window(hwnd) => {
             track_mouse_leave(hwnd);
-            let phase = if DOCK_DRAGGING.load(Ordering::Acquire) {
+            let phase = if is_dragging(hwnd) {
                 DockPointerPhase::Dragged
             } else {
                 DockPointerPhase::Moved
             };
-            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
-                phase,
-                client_point(hwnd, lparam),
-            )));
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DockPointer(DockPointerSample::new(
+                    phase,
+                    client_point(hwnd, lparam),
+                )),
+            ));
             LRESULT(0)
         }
         WM_MOUSELEAVE if is_dock_window(hwnd) => {
-            DOCK_DRAGGING.store(false, Ordering::Release);
-            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
-                DockPointerPhase::Exited,
-                DipPoint::new(-1.0, -1.0),
-            )));
+            set_dragging(hwnd, false);
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DockPointer(DockPointerSample::new(
+                    DockPointerPhase::Exited,
+                    DipPoint::new(-1.0, -1.0),
+                )),
+            ));
             LRESULT(0)
         }
         WM_LBUTTONDOWN if is_dock_window(hwnd) => {
-            DOCK_DRAGGING.store(true, Ordering::Release);
-            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
-                DockPointerPhase::Pressed,
-                client_point(hwnd, lparam),
-            )));
+            set_dragging(hwnd, true);
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DockPointer(DockPointerSample::new(
+                    DockPointerPhase::Pressed,
+                    client_point(hwnd, lparam),
+                )),
+            ));
             LRESULT(0)
         }
         WM_LBUTTONUP if is_dock_window(hwnd) => {
-            DOCK_DRAGGING.store(false, Ordering::Release);
-            queue_event(PlatformEvent::DockPointer(DockPointerSample::new(
-                DockPointerPhase::Released,
-                client_point(hwnd, lparam),
-            )));
+            set_dragging(hwnd, false);
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DockPointer(DockPointerSample::new(
+                    DockPointerPhase::Released,
+                    client_point(hwnd, lparam),
+                )),
+            ));
             LRESULT(0)
         }
         WM_RBUTTONUP if is_dock_window(hwnd) => {
             let point = client_point(hwnd, lparam);
             set_last_context_point(point);
             if let Some(command) = track_dock_context_menu(hwnd, client_physical_point(lparam)) {
-                queue_event(PlatformEvent::DockContextMenu { point, command });
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::DockContextMenu { point, command },
+                ));
             }
             LRESULT(0)
         }
         WM_COMMAND if is_dock_window(hwnd) => {
             if let Some(command) = ContextMenuCommand::from_native_id((wparam.0 & 0xffff) as u16) {
-                queue_event(PlatformEvent::DockContextMenu {
-                    point: cursor_client_point(hwnd)
-                        .or_else(last_context_point)
-                        .unwrap_or(DipPoint::new(0.0, 0.0)),
-                    command,
-                });
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::DockContextMenu {
+                        point: cursor_client_point(hwnd)
+                            .or_else(last_context_point)
+                            .unwrap_or(DipPoint::new(0.0, 0.0)),
+                        command,
+                    },
+                ));
             }
             LRESULT(0)
         }
         WM_DROPFILES if is_dock_window(hwnd) => {
             if let Some(path) = first_drop_path(wparam) {
-                queue_event(PlatformEvent::DockDrop {
-                    point: DipPoint::new(0.0, 0.0),
-                    path,
-                });
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::DockDrop {
+                        point: DipPoint::new(0.0, 0.0),
+                        path,
+                    },
+                ));
             }
             LRESULT(0)
         }
@@ -185,27 +181,39 @@ pub(super) unsafe extern "system" fn window_proc(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )
             };
-            queue_event(PlatformEvent::DpiChanged(rect_from_win32(recommended)));
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DpiChanged(rect_from_win32(recommended)),
+            ));
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {
-            queue_event(PlatformEvent::DisplayChanged);
+            queue_event(RoutedPlatformEvent::broadcast(
+                PlatformEvent::DisplayChanged,
+            ));
             LRESULT(0)
         }
         WM_POWERBROADCAST if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC => {
-            queue_event(PlatformEvent::PowerResumed);
+            queue_event(RoutedPlatformEvent::broadcast(PlatformEvent::PowerResumed));
             LRESULT(1)
         }
         WM_TIMER if wparam.0 == TIMER_ID => {
-            queue_event(PlatformEvent::QaExitRequested);
+            queue_event(RoutedPlatformEvent::broadcast(
+                PlatformEvent::QaExitRequested,
+            ));
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == SYNC_TIMER_ID => {
-            queue_event(PlatformEvent::SyncWindows);
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SyncWindows,
+            ));
             LRESULT(0)
         }
         WM_CLOSE => {
-            queue_event(PlatformEvent::CloseRequested);
+            queue_event(RoutedPlatformEvent::broadcast(
+                PlatformEvent::CloseRequested,
+            ));
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -214,7 +222,7 @@ pub(super) unsafe extern "system" fn window_proc(
                 // destroyed, so posting quit deterministically terminates this loop.
                 unsafe { PostQuitMessage(0) };
             }
-            queue_event(PlatformEvent::Destroyed);
+            queue_event(RoutedPlatformEvent::window(hwnd, PlatformEvent::Destroyed));
             LRESULT(0)
         }
         _ => {
@@ -227,52 +235,4 @@ pub(super) unsafe extern "system" fn window_proc(
 
 fn is_dock_window(hwnd: HWND) -> bool {
     crate::win32::is_dock_window(hwnd)
-}
-
-fn track_mouse_leave(hwnd: HWND) {
-    let mut event = TRACKMOUSEEVENT {
-        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-        dwFlags: TME_LEAVE,
-        hwndTrack: hwnd,
-        dwHoverTime: 0,
-    };
-    // SAFETY: Category 8 (FFI boundary). The tracked HWND is live during message
-    // dispatch and the structure contains the documented size and leave flag.
-    let _ = unsafe { TrackMouseEvent(&mut event) };
-}
-
-fn client_point(hwnd: HWND, lparam: LPARAM) -> DipPoint {
-    let point = client_physical_point(lparam);
-    // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
-    let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
-    let scale = dpi.scale();
-    DipPoint::new(point.x as f32 / scale, point.y as f32 / scale)
-}
-
-fn client_physical_point(lparam: LPARAM) -> POINT {
-    POINT {
-        x: (lparam.0 as u16) as i16 as i32,
-        y: ((lparam.0 >> 16) as u16) as i16 as i32,
-    }
-}
-
-fn cursor_client_point(hwnd: HWND) -> Option<DipPoint> {
-    let mut point = POINT::default();
-    // SAFETY: Category 8 (FFI boundary). The pointer to POINT is valid for the
-    // synchronous cursor-position query.
-    if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) }.is_err() {
-        return None;
-    }
-    // SAFETY: Category 8 (FFI boundary). The HWND is live during dispatch and
-    // `point` is valid mutable storage for the screen-to-client conversion.
-    if !unsafe { ScreenToClient(hwnd, &mut point) }.as_bool() {
-        return None;
-    }
-    // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
-    let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
-    let scale = dpi.scale();
-    Some(DipPoint::new(
-        point.x as f32 / scale,
-        point.y as f32 / scale,
-    ))
 }

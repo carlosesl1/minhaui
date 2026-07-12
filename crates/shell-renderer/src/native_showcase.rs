@@ -76,6 +76,7 @@ pub(crate) fn draw_showcase(
             &primary,
             &secondary,
             &accent,
+            &error,
             tokens.control_radius,
         );
     } else {

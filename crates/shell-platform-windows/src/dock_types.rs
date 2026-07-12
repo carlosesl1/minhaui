@@ -103,6 +103,8 @@ pub enum ContextMenuCommand {
     Open,
     Unpin,
     Pin,
+    PreviewFocus,
+    PreviewClose,
     Quit,
 }
 
@@ -114,6 +116,8 @@ impl ContextMenuCommand {
             2 => Some(Self::Pin),
             3 => Some(Self::Unpin),
             4 => Some(Self::Quit),
+            5 => Some(Self::PreviewFocus),
+            6 => Some(Self::PreviewClose),
             _ => None,
         }
     }
@@ -125,6 +129,8 @@ impl ContextMenuCommand {
             Self::Pin => 2,
             Self::Unpin => 3,
             Self::Quit => 4,
+            Self::PreviewFocus => 5,
+            Self::PreviewClose => 6,
         }
     }
 }

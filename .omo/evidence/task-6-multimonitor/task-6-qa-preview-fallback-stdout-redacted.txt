@@ -1,0 +1,14 @@
+﻿MONITOR_PLACEMENT id=73535469 edge=Top suppressed=false dock=760,1248,1040,180
+MONITOR_PLACEMENT id=1848643013 edge=Top suppressed=false dock=-1480,888,1040,180
+DOCK_STATE [redacted]
+RESOURCE generation=1 renderer=warp
+DOCK_STATE [redacted]
+RESOURCE generation=1 renderer=warp
+DOCK_STATE [redacted]
+RESOURCE generation=1 renderer=warp
+DOCK_STATE [redacted]
+WINDOW role=topbar hwnd=0x860982 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32 dpi=96 visible=true renderer=warp
+WINDOW role=dock hwnd=0x194080a title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=760,1420,1040,8 dpi=96 visible=true renderer=warp
+DOCK_STATE [redacted]
+WINDOW role=topbar hwnd=0x1790a1a title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=-1910,32,1900,32 dpi=96 visible=true renderer=warp
+WINDOW role=dock hwnd=0x1930b00 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=-1480,888,1040,180 dpi=96 visible=true renderer=warp

@@ -1,0 +1,3 @@
+Invocation: git diff --check && git diff --cached --check
+warning: in the working copy of '.omo/evidence/task-6-multimonitor/task-6-diff-check-working.txt', LF will be replaced by CRLF the next time Git touches it
+ExitCode: 0

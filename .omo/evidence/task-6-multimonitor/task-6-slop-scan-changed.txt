@@ -1,1 +1,0 @@
-No slop scan matches in changed Rust files.

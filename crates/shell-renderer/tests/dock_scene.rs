@@ -1,6 +1,7 @@
 use shell_renderer::{
     DipPoint, DipRect, DockAlignment, DockItemVisual, DockItemVisualKind, DockLayoutConfig,
-    DockScene, RunningIndicator, layout_dock_scene,
+    DockScene, PreviewUnavailableReason, RunningIndicator, WindowPreviewRenderKind,
+    WindowPreviewVisual, layout_dock_scene, layout_window_previews,
 };
 
 #[test]
@@ -87,4 +88,30 @@ fn alignment_changes_the_visual_origin_inside_the_same_surface() {
         left_layout.items()[0].bounds().width,
         right_layout.items()[0].bounds().width
     );
+}
+
+#[test]
+fn restricted_preview_has_visible_fallback_layout() {
+    // Given: a scene with a capture-restricted window preview.
+    let scene = DockScene::new(
+        DockLayoutConfig::new(DockAlignment::Center),
+        vec![DockItemVisual::app(1, "Notes", RunningIndicator::Running)],
+    )
+    .with_window_previews(vec![WindowPreviewVisual::restricted(
+        shell_core::WindowId::new(44),
+        shell_core::DockItemId::new(1),
+        PreviewUnavailableReason::CaptureRestricted,
+    )]);
+
+    // When: native preview render layout is derived for the dock surface.
+    let previews = layout_window_previews(&scene, DipRect::new(0.0, 0.0, 320.0, 180.0));
+
+    // Then: the restricted capture is a visible unavailable fallback, not omitted.
+    assert_eq!(previews.len(), 1);
+    assert_eq!(
+        previews[0].kind(),
+        WindowPreviewRenderKind::Unavailable(PreviewUnavailableReason::CaptureRestricted)
+    );
+    assert!(previews[0].bounds().width > 0.0);
+    assert!(previews[0].bounds().height > 0.0);
 }

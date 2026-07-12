@@ -164,3 +164,145 @@ fn hwnd_from_id(window: WindowId) -> HWND {
 const fn invalid_arg() -> windows::core::HRESULT {
     windows::core::HRESULT(0x8007_0057_u32 as i32)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use shell_core::{AppId, WindowId};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+        IsWindow, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, TranslateMessage, UnregisterClassW,
+        WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    };
+    use windows::core::{PCWSTR, Result, w};
+
+    use crate::PreviewQueuedAction;
+
+    use super::{apply_preview_action, window_matches_app};
+
+    const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.ActionTestWindow.v1");
+
+    #[test]
+    fn preview_focus_and_close_actions_use_native_window_input_path() -> Result<()> {
+        // Given: a safe Win32 test window owned by the current test process.
+        let window = TestWindow::create()?;
+        let app = current_test_app()?;
+        let id = WindowId::new(window.hwnd.0 as usize as u64);
+        assert!(window_matches_app(id, &app));
+
+        // When: preview focus and close actions are applied through native dispatch.
+        apply_preview_action(PreviewQueuedAction::Focus {
+            window: id,
+            app: app.clone(),
+        })?;
+        apply_preview_action(PreviewQueuedAction::Close { window: id, app })?;
+        pump_until_closed(window.hwnd);
+
+        // Then: WM_CLOSE reached the safe window and destroyed it.
+        // SAFETY: Category 8 (FFI boundary). The HWND value is the test window
+        // handle; IsWindow only queries handle liveness.
+        assert!(!unsafe { IsWindow(Some(window.hwnd)) }.as_bool());
+        Ok(())
+    }
+
+    struct TestWindow {
+        instance: HINSTANCE,
+        hwnd: HWND,
+    }
+
+    impl TestWindow {
+        fn create() -> Result<Self> {
+            // SAFETY: Category 8 (FFI boundary). Passing no module name returns the
+            // loaded test executable module for class registration.
+            let module = unsafe { GetModuleHandleW(None) }?;
+            let instance = HINSTANCE(module.0);
+            let class = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(test_window_proc),
+                hInstance: instance,
+                lpszClassName: CLASS_NAME,
+                ..Default::default()
+            };
+            // SAFETY: Category 8 (FFI boundary). The class structure is fully
+            // initialized and static strings outlive the registration.
+            unsafe { RegisterClassW(&class) };
+            // SAFETY: Category 8 (FFI boundary). The registered class and static
+            // title are valid; no application pointer crosses the API.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    CLASS_NAME,
+                    w!("Task6 Safe Action Window"),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    320,
+                    200,
+                    None,
+                    None,
+                    Some(instance),
+                    None,
+                )
+            }?;
+            Ok(Self { instance, hwnd })
+        }
+    }
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            // SAFETY: Category 8 (FFI boundary). This call targets a window owned
+            // by this test guard and tolerates an already-destroyed HWND.
+            let _ = unsafe { DestroyWindow(self.hwnd) };
+            // SAFETY: Category 8 (FFI boundary). The class was registered by this
+            // test guard and unregister tolerates an already-removed class.
+            let _ = unsafe { UnregisterClassW(CLASS_NAME, Some(self.instance)) };
+        }
+    }
+
+    fn current_test_app() -> Result<AppId> {
+        let exe = std::env::current_exe()
+            .map_err(|error| windows::core::Error::new(super::invalid_arg(), error.to_string()))?;
+        let file = Path::new(&exe)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| windows::core::Error::new(super::invalid_arg(), "missing test exe"))?
+            .to_ascii_lowercase();
+        AppId::parse(&file)
+            .map_err(|error| windows::core::Error::new(super::invalid_arg(), error.to_string()))
+    }
+
+    fn pump_until_closed(hwnd: HWND) {
+        let mut message = MSG::default();
+        for _ in 0..16 {
+            // SAFETY: Category 8 (FFI boundary). The message storage is writable
+            // and the filter is limited to the test HWND.
+            while unsafe { PeekMessageW(&mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                // SAFETY: Category 8 (FFI boundary). The message was initialized by
+                // PeekMessageW and is translated synchronously.
+                let _ = unsafe { TranslateMessage(&message) };
+                // SAFETY: Category 8 (FFI boundary). The message was initialized by
+                // PeekMessageW and is dispatched synchronously.
+                unsafe { DispatchMessageW(&message) };
+            }
+            // SAFETY: Category 8 (FFI boundary). The HWND is only queried for liveness.
+            if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    unsafe extern "system" fn test_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        // SAFETY: Category 8 (FFI boundary). The test callback forwards every
+        // message unchanged to the documented default window procedure.
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+}

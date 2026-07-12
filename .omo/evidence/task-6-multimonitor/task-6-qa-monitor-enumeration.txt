@@ -1,0 +1,4 @@
+SCREEN primary=True bounds=0,0,2560,1440 working=0,24,2560,1416
+SCREEN primary=False bounds=-1920,0,1920,1080 working=-1920,24,1920,1056
+WMI active=True instance=DISPLAY\SAM0F5E\7&[redacted-id]&0&UID264_0 size_cm=53x30
+WMI active=True instance=DISPLAY\AOCB403\7&[redacted-id]&0&UID260_0 size_cm=60x34

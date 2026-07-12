@@ -34,7 +34,10 @@ mod native_device;
 mod native_showcase_dock;
 
 pub use color::{Rgba8, premultiply_srgb};
-pub use dock_layout::{DockLaidOutItem, DockLayout, layout_dock_scene};
+pub use dock_layout::{
+    DockLaidOutItem, DockLayout, WindowPreviewLayout, WindowPreviewRenderKind, layout_dock_scene,
+    layout_window_previews,
+};
 pub use dock_scene::{
     DockAlignment, DockItemVisual, DockItemVisualKind, DockLayoutConfig, DockScene,
     PreviewUnavailableReason, RunningIndicator, WindowPreviewCapture, WindowPreviewVisual,

@@ -1,4 +1,0 @@
-﻿Surface: visual inspection skipped for privacy
-Invocation: screenshot artifact removed after direct inspection found live desktop content.
-Verdict: privacy-safe evidence must use redacted text logs only.
-Artifact: screenshot removed; see redacted text logs only.

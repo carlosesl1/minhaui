@@ -6,7 +6,7 @@ use shell_renderer::{DipPoint, DockLayout, layout_dock_scene};
 use crate::dock_launch::dropped_launch_target;
 use crate::{
     ContextMenuCommand, DockController, DockControllerError, DockPointerPhase, DockPointerSample,
-    QueuedDockAction,
+    PreviewAction, QueuedDockAction,
 };
 
 impl DockController {
@@ -56,6 +56,12 @@ impl DockController {
                     .cloned()
                     .map_or(Ok(Vec::new()), |entry| self.apply(ShellEvent::Pin(entry)))
             }),
+            ContextMenuCommand::PreviewFocus => {
+                self.handle_preview_action_at(point, PreviewAction::Focus)
+            }
+            ContextMenuCommand::PreviewClose => {
+                self.handle_preview_action_at(point, PreviewAction::Close)
+            }
             ContextMenuCommand::Quit => Ok(vec![QueuedDockAction::Quit]),
         }
     }
@@ -139,6 +145,19 @@ impl DockController {
                 shell_core::RunningState::Running { window, .. } => Some(*window),
                 shell_core::RunningState::Stopped => None,
             })
+    }
+
+    fn handle_preview_action_at(
+        &self,
+        point: DipPoint,
+        action: PreviewAction,
+    ) -> Result<Vec<QueuedDockAction>, DockControllerError> {
+        let Some(item) = self.hit_app(point) else {
+            return Ok(Vec::new());
+        };
+        self.window_for_item(item).map_or(Ok(Vec::new()), |window| {
+            self.handle_preview_action(window, action)
+        })
     }
 
     pub(crate) fn dock_item(&self, id: DockItemId) -> Option<&DockItem> {

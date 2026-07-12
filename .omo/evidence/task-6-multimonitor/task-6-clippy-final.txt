@@ -1,0 +1,5 @@
+Invocation: cargo clippy --workspace --all-targets --all-features -- -D warnings
+[1m[92m    Checking[0m shell-platform-windows v0.1.0 (C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\crates\shell-platform-windows)
+[1m[92m    Checking[0m shell-app v0.1.0 (C:\Users\Carlos\Documents\Codex\Minha UI APP-worktrees\windows-native-dock-v1\crates\shell-app)
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 1.30s
+ExitCode: 0

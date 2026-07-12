@@ -1,7 +1,8 @@
 use shell_core::{AppId, DockItem, DockItemId, RunningState, ShellState, WindowId};
 use shell_platform_windows::{
-    DockController, DockPointerPhase, DockPointerSample, DockRuntimeConfig, ObservedWindow,
-    PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason, QueuedDockAction,
+    ContextMenuCommand, DockController, DockPointerPhase, DockPointerSample, DockRuntimeConfig,
+    ObservedWindow, PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
+    QueuedDockAction,
 };
 use shell_renderer::{DipPoint, DipRect, WindowPreviewVisual};
 
@@ -77,7 +78,7 @@ fn preview_degrades_explicitly_when_capture_is_restricted() -> Result<(), Box<dy
         DipPoint::new(130.0, 48.0),
     ))?;
 
-    // Then: the scene carries the explicit restriction instead of a fake bitmap.
+    // Then: the scene carries the explicit restriction instead of an invented bitmap.
     assert_eq!(
         controller.scene().window_previews(),
         &[WindowPreviewVisual::restricted(
@@ -118,6 +119,48 @@ fn preview_actions_queue_focus_and_close_effects_without_blocking()
         close,
         vec![QueuedDockAction::Preview(PreviewQueuedAction::Close {
             window: WindowId::new(702),
+            app: app("notepad.exe")?
+        })]
+    );
+    Ok(())
+}
+
+#[test]
+fn preview_context_commands_route_to_hovered_window_actions()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: a hovered running app whose preview has a native context command.
+    let mut controller = DockController::new(state()?, DockRuntimeConfig::default())?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 260.0, 96.0));
+    controller.sync_running_windows_with_previews(&[ObservedWindow::new(
+        WindowId::new(703),
+        app("notepad.exe")?,
+        false,
+        false,
+    )
+    .with_preview(PreviewCapture::dwm_thumbnail())])?;
+    controller.handle_pointer(DockPointerSample::new(
+        DockPointerPhase::Moved,
+        DipPoint::new(130.0, 48.0),
+    ))?;
+
+    // When: native menu command IDs select preview focus and close.
+    let focus = controller
+        .handle_context_menu(DipPoint::new(130.0, 48.0), ContextMenuCommand::PreviewFocus)?;
+    let close = controller
+        .handle_context_menu(DipPoint::new(130.0, 48.0), ContextMenuCommand::PreviewClose)?;
+
+    // Then: the same safe preview platform actions are emitted through input routing.
+    assert_eq!(
+        focus,
+        vec![QueuedDockAction::Preview(PreviewQueuedAction::Focus {
+            window: WindowId::new(703),
+            app: app("notepad.exe")?
+        })]
+    );
+    assert_eq!(
+        close,
+        vec![QueuedDockAction::Preview(PreviewQueuedAction::Close {
+            window: WindowId::new(703),
             app: app("notepad.exe")?
         })]
     );

@@ -1,73 +1,113 @@
-# Task 6 Evidence Manifest
+# Task 6 Canonical Evidence Manifest
 
-Objective: multi-monitor placement, fullscreen suppression, and window previews for Windows native dock v1.
+Objective: finish Task 6 for the Windows native dock: multi-monitor slot routing, hotplug reconciliation, DWM preview safety, native preview actions, capture-restricted fallback, fullscreen suppression, and clean gates.
 
-Environment: Windows native worktree, MSVC target, release binary at `target/x86_64-pc-windows-msvc/release/shell-app.exe`.
+Canonical pack only: old attempts, empty receipts, and stale QA screenshots were removed before commit.
 
-Scenarios:
+## TDD Red
 
-1. TDD RED
-   Invocation: `cargo test -p shell-platform-windows --test multimonitor_placement --test window_previews`
-   Observable: compile failed for missing Task 6 placement and preview APIs before implementation.
-   Artifact: `task-6-red.txt`
+- Platform RED
+  - Scenario: native routing / hotplug / preview APIs did not exist yet.
+  - Invocation: `cargo test -p shell-platform-windows --test native_event_routing --test multimonitor_placement --test window_previews`
+  - Binary observable: compile/test failure captured before implementation.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-red-fix-gate.txt`
 
-2. Mixed-DPI signed-coordinate topology simulation
-   Invocation: `cargo test -p shell-platform-windows --test multimonitor_placement`
-   Observable: tests passed for independent primary/negative-origin monitor placement, per-monitor DPI, taskbar work-area insets, and fullscreen suppression only on the covered monitor.
-   Artifact: `task-6-green-placement.txt`
+- Renderer RED
+  - Scenario: capture-restricted preview fallback layout API did not exist yet.
+  - Invocation: `cargo test -p shell-renderer --test dock_scene restricted_preview_has_visible_fallback_layout`
+  - Binary observable: unresolved renderer fallback imports before implementation.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-red-renderer-fallback.txt`
 
-3. Window preview behavior and actions
-   Invocation: `cargo test -p shell-platform-windows --test window_previews`
-   Observable: tests passed for DWM thumbnail preview state, explicit restricted-capture degradation, and non-blocking focus/close queued actions with current app identity.
-   Artifact: `task-6-green-previews.txt`
+## Green Scenarios
 
-4. Final focused regression
-   Invocation: `cargo test -p shell-platform-windows --test window_previews --test multimonitor_placement`
-   Observable: 5 Task 6 tests passed after final runtime routing changes.
-   Artifact: `task-6-fix-focused.txt`
+- Preview and fallback behavior
+  - Scenario: restricted preview state reaches the renderer fallback layout.
+  - Invocation: `cargo test -p shell-platform-windows --test window_previews && cargo test -p shell-renderer --test dock_scene restricted_preview_has_visible_fallback_layout`
+  - Binary observable: 4 platform preview tests and 1 renderer fallback test passed.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-green-preview-focused-after-visual-fix.txt`
 
-5. Workspace formatting
-   Invocation: `cargo fmt --all -- --check`
-   Observable: exit code 0, no formatter diffs.
-   Artifact: `task-6-fmt.txt`
+- Renderer fallback focused test
+  - Scenario: restricted preview has a visible unavailable layout.
+  - Invocation: `cargo test -p shell-renderer --test dock_scene restricted_preview_has_visible_fallback_layout`
+  - Binary observable: `restricted_preview_has_visible_fallback_layout ... ok`.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-green-renderer-fallback.txt`
 
-6. Workspace clippy
-   Invocation: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-   Observable: exit code 0.
-   Artifact: `task-6-clippy.txt`
+- DWM thumbnail RAII
+  - Scenario: failed `DwmUpdateThumbnailProperties` unregisters the already registered thumbnail.
+  - Invocation: `cargo test -p shell-platform-windows failed_dwm_update_unregisters_registered_thumbnail`
+  - Binary observable: fake API call sequence test passed.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-green-dwm-raii.txt`
 
-7. Workspace tests
-   Invocation: `cargo test --workspace --all-targets --all-features`
-   Observable: exit code 0; full workspace tests passed, including Task 6 tests and existing lifecycle recovery tests for display change, DPI change, power resume, TaskbarCreated, and hover redraw without resource generation.
-   Artifact: `task-6-tests.txt`
+- Native preview actions
+  - Scenario: focus and close preview actions use native HWND/app validation.
+  - Invocation: `cargo test -p shell-platform-windows preview_focus_and_close_actions_use_native_window_input_path`
+  - Binary observable: safe Win32 test window accepted focus path and was destroyed by close path.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-green-native-preview-actions.txt`
 
-8. Release build
-   Invocation: `cargo build --workspace --all-targets --all-features --release`
-   Observable: exit code 0.
-   Artifact: `task-6-release.txt`
+- Strict Miri
+  - Scenario: DWM RAII fake path under strict provenance/alignment checks.
+  - Invocation: `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check" cargo +nightly miri test -p shell-platform-windows failed_dwm_update_unregisters_registered_thumbnail`
+  - Binary observable: Miri test passed.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-miri-dwm-raii-strict.txt`
 
-9. Manual desktop QA, privacy-safe
-   Invocation: `target/x86_64-pc-windows-msvc/release/shell-app.exe --window-smoke --force-warp --simulate-lifecycle-events --qa-exit-ms 1500` with `MINHA_UI_QA_TRACE=1`.
-   Observable: release binary enumerated two physical monitors, created two topbar/dock pairs with signed coordinates, showed a fullscreen-suppressed primary dock strip (`height=8`) and normal secondary dock, processed simulated DisplayChanged/PowerResumed/TaskbarCreated lifecycle recovery, and exited automatically. External running-window entries were redacted.
-   Artifact: `task-6-manual-window-smoke-redacted.txt`
+## Final Gates
 
-10. Cleanup
-    Invocation: `Get-Process shell-app -ErrorAction SilentlyContinue`
-    Observable: no shell-app process remained after manual QA.
-    Artifact: `task-6-cleanup.txt`
+- Format
+  - Invocation: `cargo fmt --all -- --check`
+  - Binary observable: exit code 0.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-fmt-final.txt`
 
-11. Size and slop checks
-    Invocation: changed-Rust pure LOC scan and changed-Rust placeholder scan.
-    Observable: all changed Rust modules are <=250 pure LOC; no slop scan matches in changed Rust files.
-    Artifacts: `task-6-loc.txt`, `task-6-slop-scan-changed.txt`, `task-6-slop-scan.txt`
+- Clippy
+  - Invocation: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  - Binary observable: exit code 0.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-clippy-final.txt`
 
-12. Evidence privacy and integrity checks
-    Invocation: evidence privacy scan, empty-file scan, `git diff --check`, SHA-256 hash generation.
-    Observable: no removed screenshot reference or sensitive external-window terms remained, no empty evidence files remained, whitespace check passed except benign CRLF warnings, and hashes were generated for every evidence file except the hash list itself.
-    Artifacts: `task-6-privacy-scan.txt`, `task-6-empty-file-check.txt`, `task-6-diff-check.txt`, `SHA256SUMS.txt`
+- Workspace tests
+  - Invocation: `cargo test --workspace --all-targets --all-features`
+  - Binary observable: exit code 0; includes multi-monitor, HWND routing, preview, DWM RAII, and renderer fallback tests.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-tests-workspace-final.txt`
 
-Review notes:
-- `task-6-programming-remove-ai-slops-review.md` records the programming/remove-AI-slops review.
-- `qa-review/` contains the earlier manual QA lane artifacts; the screenshot artifact was removed after inspection and the remaining QA text artifacts were redacted.
+- Release build
+  - Invocation: `cargo build --release --workspace --all-targets --all-features`
+  - Binary observable: exit code 0.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-release-final.txt`
 
-Hashes: `SHA256SUMS.txt`.
+- Size / scan gates
+  - Invocation: changed Rust pure-LOC scan and changed Rust slop scan.
+  - Binary observable: every changed Rust file is <=250 pure LOC; no scanned slop terms remain.
+  - Artifacts: `.omo/evidence/task-6-multimonitor/task-6-loc-final.txt`, `.omo/evidence/task-6-multimonitor/task-6-slop-scan-final.txt`
+
+- Empty evidence check
+  - Invocation: `find .omo/evidence/task-6-multimonitor -type f -size 0`
+  - Binary observable: no zero-byte canonical evidence files listed.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-empty-file-check-final.txt`
+
+## Native QA
+
+- Physical monitor enumeration
+  - Invocation: PowerShell monitor/WMI enumeration.
+  - Binary observable: two active monitors recorded, including negative-origin secondary monitor and work areas.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-qa-monitor-enumeration.txt`
+
+- Fullscreen 8px visual
+  - Scenario: a safe fullscreen WinForms window covers the primary monitor while the dock runs.
+  - Invocation: `task-6-native-qa.ps1 -Scenario Suppressed`
+  - Binary observable: primary dock rect `760,1420,1040,8`; `task-6-qa-fullscreen8-window-2.png` is a 1040x8 PNG; secondary dock remains 1040x180.
+  - Artifacts: `.omo/evidence/task-6-multimonitor/task-6-qa-fullscreen8-run.txt`, `.omo/evidence/task-6-multimonitor/task-6-qa-fullscreen8-windows.txt`, `.omo/evidence/task-6-multimonitor/task-6-qa-fullscreen8-window-2.png`
+
+- Preview fallback visual
+  - Scenario: QA restricted-preview seed exercises the production fallback drawing path.
+  - Invocation: `task-6-native-qa.ps1 -Scenario PreviewFallback`
+  - Binary observable: 1040x180 dock screenshot visibly contains `Preview unavailable`; stdout shows the release binary ran with WARP and dock windows on both monitors.
+  - Artifacts: `.omo/evidence/task-6-multimonitor/task-6-qa-preview-fallback-run.txt`, `.omo/evidence/task-6-multimonitor/task-6-qa-preview-fallback-window-0.png`, `.omo/evidence/task-6-multimonitor/task-6-qa-preview-fallback-stdout-redacted.txt`
+
+- Lifecycle recovery
+  - Scenario: release binary processes simulated DisplayChanged / power / TaskbarCreated path.
+  - Invocation: `task-6-native-qa.ps1 -Scenario Lifecycle`
+  - Binary observable: stdout shows initial fullscreen 8px primary dock, recovery to 1040x180, and `RESOURCE generation=2`.
+  - Artifact: `.omo/evidence/task-6-multimonitor/task-6-qa-lifecycle-stdout-redacted.txt`
+
+## Review
+
+- Doneclaim / review artifact: `.omo/evidence/task-6-multimonitor/task-6-doneclaim-review.md`
+- Hashes: `.omo/evidence/task-6-multimonitor/SHA256SUMS.txt`

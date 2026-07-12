@@ -33,6 +33,8 @@ fn populate_and_track(
     point: POINT,
 ) -> Option<ContextMenuCommand> {
     append(menu, ContextMenuCommand::Open, w!("Open"));
+    append(menu, ContextMenuCommand::PreviewFocus, w!("Focus preview"));
+    append(menu, ContextMenuCommand::PreviewClose, w!("Close preview"));
     append(menu, ContextMenuCommand::Pin, w!("Pin"));
     append(menu, ContextMenuCommand::Unpin, w!("Unpin"));
     append(menu, ContextMenuCommand::Quit, w!("Quit"));

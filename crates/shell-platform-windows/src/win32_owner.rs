@@ -9,6 +9,7 @@ use crate::win32_actions::apply_dock_actions;
 use crate::win32_discovery::discover_running_windows;
 use crate::win32_dock_render::dip_surface;
 use crate::win32_preview::DwmPreviewThumbnail;
+use crate::win32_preview_qa::seed_restricted_preview_for_qa;
 use crate::win32_window::OwnedWindow;
 use crate::win32_windowing::{monitor_placement_inputs, window_monitor_id, window_work_area};
 use crate::{DockController, FullscreenPolicy, PlatformEvent, RuntimeAction, RuntimeOrchestrator};
@@ -100,12 +101,13 @@ impl RuntimeSurfaces {
             PlatformEvent::SyncWindows => {
                 let before = self.dock_controller.state().clone();
                 let visual_before = self.dock_controller.visual_generation();
-                let observed =
+                let mut observed =
                     discover_running_windows(&[topbar.hwnd, dock.hwnd], Some(dock.hwnd))?;
+                seed_restricted_preview_for_qa(&mut observed)?;
                 self.sync_fullscreen_suppression(&observed, topbar, dock)?;
                 let actions = self
                     .dock_controller
-                    .sync_running_windows(&observed)
+                    .sync_running_windows_with_previews(&observed)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
                 if !apply_dock_actions(&actions)? {
                     return Ok(false);

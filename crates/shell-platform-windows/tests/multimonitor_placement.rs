@@ -1,7 +1,7 @@
 use shell_core::{MonitorId, WindowId};
 use shell_platform_windows::{
-    DockRuntimeConfig, FullscreenObservation, FullscreenPolicy, MonitorPlacementInput, TaskbarEdge,
-    plan_monitor_placements,
+    DockRuntimeConfig, FullscreenObservation, FullscreenPolicy, MonitorPlacementInput,
+    SlotReconcileAction, TaskbarEdge, plan_monitor_placements, reconcile_monitor_slots,
 };
 use shell_renderer::{Dpi, PhysicalRect};
 
@@ -75,4 +75,38 @@ fn fullscreen_policy_suppresses_only_the_covered_monitor() {
     // Then: the secondary dock is suppressed while the primary remains visible.
     assert!(!placements[0].suppressed());
     assert!(placements[1].suppressed());
+}
+
+#[test]
+fn hotplug_reconcile_adds_removes_and_reorders_monitor_slots() {
+    // Given: two existing slots and a new topology that removes one, keeps one,
+    // and adds a third monitor before the reused slot.
+    let current = [MonitorId::new(1), MonitorId::new(2)];
+    let monitors = [
+        MonitorPlacementInput::new(
+            MonitorId::new(3),
+            PhysicalRect::new(-1280, 0, 1280, 720),
+            PhysicalRect::new(-1280, 0, 1280, 680),
+            Dpi::from_raw(96),
+        ),
+        MonitorPlacementInput::new(
+            MonitorId::new(2),
+            PhysicalRect::new(0, 0, 1920, 1080),
+            PhysicalRect::new(0, 0, 1920, 1040),
+            Dpi::from_raw(144),
+        ),
+    ];
+
+    // When: the current slots are reconciled against the new monitor order.
+    let actions = reconcile_monitor_slots(&current, &monitors);
+
+    // Then: removed slots are dropped and remaining slots follow current topology.
+    assert_eq!(
+        actions,
+        vec![
+            SlotReconcileAction::Remove(MonitorId::new(1)),
+            SlotReconcileAction::Create(MonitorId::new(3)),
+            SlotReconcileAction::Reuse(MonitorId::new(2)),
+        ]
+    );
 }
