@@ -5,7 +5,7 @@ mod resize;
 
 pub use animation::SurfaceVisibilityAnimation;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{E_INVALIDARG, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -85,6 +85,7 @@ pub struct CompositionRenderer {
 
 pub struct WindowSurface {
     pub(super) swap_chain: IDXGISwapChain1,
+    pub(super) back_buffers: RefCell<BackBufferCache<ID2D1Bitmap1>>,
     device: ID3D11Device,
     dcomp: IDCompositionDevice,
     _target: IDCompositionTarget,
@@ -94,6 +95,38 @@ pub struct WindowSurface {
     pub(super) height: u32,
     pub(super) dpi: Dpi,
     dock_inset: Option<DockInsetBitmap>,
+}
+
+pub(super) struct BackBufferCache<T> {
+    slots: [Option<T>; 2],
+}
+
+impl<T> Default for BackBufferCache<T> {
+    fn default() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+impl<T> BackBufferCache<T> {
+    fn get_or_try_insert_with<E>(
+        &mut self,
+        index: usize,
+        create: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<Option<&T>, E> {
+        let Some(slot) = self.slots.get_mut(index) else {
+            return Ok(None);
+        };
+        if slot.is_none() {
+            *slot = Some(create()?);
+        }
+        Ok(slot.as_ref())
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.slots.fill_with(|| None);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,7 +223,14 @@ impl CompositionRenderer {
         // flip-model composition combination and the device outlives the chain.
         let swap_chain =
             unsafe { factory.CreateSwapChainForComposition(&self._d3d, &description, None) }?;
-        let bitmap = self.create_target_bitmap(&swap_chain, dpi)?;
+        let index = Self::current_back_buffer_index(&swap_chain)?;
+        let mut back_buffers = BackBufferCache::default();
+        let bitmap = back_buffers
+            .get_or_try_insert_with(index, || {
+                self.create_target_bitmap(&swap_chain, dpi, index as u32)
+            })?
+            .cloned()
+            .ok_or_else(|| windows::core::Error::from_hresult(E_INVALIDARG))?;
         // SAFETY: Category 8 (FFI boundary). The bitmap and context are live COM
         // interfaces from the same D2D device.
         unsafe {
@@ -242,6 +282,7 @@ impl CompositionRenderer {
         unsafe { self.dcomp.Commit() }?;
         let surface = WindowSurface {
             swap_chain,
+            back_buffers: RefCell::new(back_buffers),
             device: self._d3d.clone(),
             dcomp: self.dcomp.clone(),
             _target: target,
@@ -268,7 +309,7 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> Result<PresentOutcome> {
-        let bitmap = self.create_target_bitmap(&surface.swap_chain, surface.dpi)?;
+        let bitmap = self.current_target_bitmap(surface)?;
         // SAFETY: Category 8 (FFI boundary). The freshly acquired back-buffer
         // bitmap belongs to this D2D device; its DPI matches the logical scene.
         unsafe {
@@ -288,11 +329,32 @@ impl CompositionRenderer {
         surface.present()
     }
 
-    fn create_target_bitmap(&self, swap_chain: &IDXGISwapChain1, dpi: Dpi) -> Result<ID2D1Bitmap1> {
+    fn current_target_bitmap(&self, surface: &WindowSurface) -> Result<ID2D1Bitmap1> {
+        let index = Self::current_back_buffer_index(&surface.swap_chain)?;
+        surface
+            .back_buffers
+            .borrow_mut()
+            .get_or_try_insert_with(index, || {
+                self.create_target_bitmap(&surface.swap_chain, surface.dpi, index as u32)
+            })?
+            .cloned()
+            .ok_or_else(|| windows::core::Error::from_hresult(E_INVALIDARG))
+    }
+
+    fn current_back_buffer_index(swap_chain: &IDXGISwapChain1) -> Result<usize> {
         let rotating_chain: IDXGISwapChain3 = swap_chain.cast()?;
         // SAFETY: Category 8 (FFI boundary). The typed swapchain is live and
         // reports the current writable back-buffer index without mutation.
         let index = unsafe { rotating_chain.GetCurrentBackBufferIndex() };
+        Ok(index as usize)
+    }
+
+    fn create_target_bitmap(
+        &self,
+        swap_chain: &IDXGISwapChain1,
+        dpi: Dpi,
+        index: u32,
+    ) -> Result<ID2D1Bitmap1> {
         // SAFETY: Category 8 (FFI boundary). The reported index belongs to this
         // live flip-model chain and is queried as its documented DXGI surface.
         let surface: IDXGISurface = unsafe { swap_chain.GetBuffer(index) }?;
@@ -383,7 +445,49 @@ impl WindowSurface {
 mod tests {
     use crate::Dpi;
 
-    use super::{SurfaceMetrics, WindowSurface};
+    use super::{BackBufferCache, SurfaceMetrics, WindowSurface};
+
+    #[test]
+    fn back_buffer_cache_reuses_each_slot_and_clears_before_resize() {
+        let mut cache = BackBufferCache::default();
+        let mut creates = 0;
+
+        assert_eq!(
+            cache
+                .get_or_try_insert_with(0, || Ok::<_, ()>({
+                    creates += 1;
+                    10
+                }))
+                .unwrap(),
+            Some(&10)
+        );
+        assert_eq!(
+            cache.get_or_try_insert_with(0, || Ok::<_, ()>(99)).unwrap(),
+            Some(&10)
+        );
+        assert_eq!(
+            cache
+                .get_or_try_insert_with(1, || Ok::<_, ()>({
+                    creates += 1;
+                    20
+                }))
+                .unwrap(),
+            Some(&20)
+        );
+        assert_eq!(creates, 2);
+
+        cache.clear();
+        assert_eq!(
+            cache
+                .get_or_try_insert_with(0, || Ok::<_, ()>({
+                    creates += 1;
+                    30
+                }))
+                .unwrap(),
+            Some(&30)
+        );
+        assert_eq!(creates, 3);
+    }
 
     #[test]
     fn surface_metrics_report_pixel_size() {

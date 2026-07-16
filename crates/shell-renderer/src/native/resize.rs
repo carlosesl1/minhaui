@@ -21,6 +21,7 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). Releasing the current D2D target
         // drops its back-buffer reference before DXGI resizes the live chain.
         unsafe { self.d2d_context.SetTarget(None) };
+        surface.back_buffers.borrow_mut().clear();
         // SAFETY: Category 8 (FFI boundary). The swap chain is live, dimensions
         // are non-zero HWND metrics, and existing flags/buffer count are retained.
         unsafe {
