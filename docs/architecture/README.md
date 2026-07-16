@@ -29,7 +29,8 @@ atualizar ambos ou registrar uma exceção temporária explícita.
   exceções, releases e higiene.
 - [ADRs](adr/README.md): decisões estruturais e seu histórico.
 - [Auditorias](audits/2026-07-15-baseline.md): fotografias factuais do estado do
-  repositório, sem substituir regras atuais.
+  repositório e o [checkpoint de consolidação](audits/2026-07-15-baseline-consolidation.md),
+  sem substituir regras atuais.
 
 ## Regra central
 
