@@ -1,2 +1,0 @@
-Invocation: cargo fmt --all -- --check
-ExitCode: 0

@@ -1,9 +1,0 @@
-2026-07-11T22:25:00.3510321-03:00 prepared drop script C:\Users\Carlos\AppData\Local\Temp\Minha UI QA Space\drop-target.cmd and external unpinned app C:\Windows\System32\charmap.exe
-2026-07-11T22:25:00.9600326-03:00 started external unpinned app pid=17648
-2026-07-11T22:25:01.1230327-03:00 privacy backdrop hwnd=54593950
-2026-07-11T22:25:01.1950335-03:00 started shell pid=34880
-2026-07-11T22:25:02.0090316-03:00 posted WM_COMMAND Pin result=True
-2026-07-11T22:25:03.1550323-03:00 drop-target center x=1547 y=1338
-2026-07-11T22:25:05.5930315-03:00 focus charmap center x=1135 y=1338
-2026-07-11T22:25:06.4630316-03:00 minimize charmap center x=1135 y=1338
-2026-07-11T22:25:12.5830322-03:00 captured native context menu

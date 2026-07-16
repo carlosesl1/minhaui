@@ -1,8 +1,0 @@
-Changed source file pure LOC review
-crates/shell-renderer/src/native.rs pure_loc=184
-crates/shell-platform-windows/src/lib.rs pure_loc=130
-crates/shell-platform-windows/src/runtime.rs pure_loc=77
-crates/shell-platform-windows/src/win32_owner.rs pure_loc=192
-crates/shell-platform-windows/src/win32_dock_render.rs pure_loc=89
-crates/shell-platform-windows/tests/native_slice.rs pure_loc=115
-EXIT_CODE=0

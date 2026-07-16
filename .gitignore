@@ -1,4 +1,8 @@
 /target/
+/.omo/
+/.worktrees/
+/.agents/
+/.codegraph/
 /packaging/msix/out/
 /packaging/steam/out/
 *.pdb

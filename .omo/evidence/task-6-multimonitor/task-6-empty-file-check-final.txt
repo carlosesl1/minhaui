@@ -1,2 +1,0 @@
-Invocation: find .omo/evidence/task-6-multimonitor -type f -size 0
-Observable: no zero-byte canonical evidence files are listed.

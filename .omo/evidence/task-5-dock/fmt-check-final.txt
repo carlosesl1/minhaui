@@ -1,5 +1,0 @@
-﻿COMMAND: C:\Users\Carlos\.cargo\bin\cargo.exe fmt --all -- --check
-STDOUT: <empty>
-STDERR: <empty>
-EXIT_CODE: 0
-RECORDED_AT: 2026-07-11T21:21:25.9976936-03:00

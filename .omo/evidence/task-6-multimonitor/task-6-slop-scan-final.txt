@@ -1,2 +1,0 @@
-Invocation: changed Rust placeholder/slop scan for TODO/FIXME/HACK/XXX/stub/fake/dummy/placeholder/temporary/expect/unwrap/panic.
-Observable: no changed Rust files contain the scanned slop terms.

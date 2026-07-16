@@ -1,2 +1,0 @@
-Invocation: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .omo/evidence/task-6-multimonitor/task-6-native-qa.ps1 -RepoRoot C:/Users/Carlos/Documents/Codex/Minha UI APP-worktrees/windows-native-dock-v1 -Scenario Suppressed
-ExitCode: 0

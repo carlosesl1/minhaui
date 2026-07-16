@@ -1,8 +1,0 @@
-﻿WINDOW hwnd=0xbf606b8 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=-1480,888,1040,180
-SCREENSHOT task-6-qa-lifecycle-window-0.png
-WINDOW hwnd=0x60370 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=-1910,32,1900,32
-SCREENSHOT task-6-qa-lifecycle-window-1.png
-WINDOW hwnd=0xcc0284 title="Minha UI Dock" class="MinhaUi.NativeShell.Window.v1" rect=760,1248,1040,180
-SCREENSHOT task-6-qa-lifecycle-window-2.png
-WINDOW hwnd=0x180940 title="Minha UI Topbar" class="MinhaUi.NativeShell.Window.v1" rect=10,32,2540,32
-SCREENSHOT task-6-qa-lifecycle-window-3.png
