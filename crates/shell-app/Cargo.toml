@@ -5,6 +5,10 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+default = []
+native-validation = ["shell-platform-windows/native-validation"]
+
 [dependencies]
 shell-platform-windows = { path = "../shell-platform-windows", version = "0.1.0" }
 

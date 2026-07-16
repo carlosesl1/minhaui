@@ -1,26 +1,67 @@
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
 
-use shell_core::{AppId, MonitorId, WindowId};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use shell_core::{MonitorId, WindowId};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
-use windows::Win32::System::Threading::{
-    GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    QueryFullProcessImageNameW,
-};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    WS_EX_TOOLWINDOW,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, WS_EX_TOOLWINDOW,
 };
-use windows::core::{BOOL, PWSTR, Result};
+use windows::core::{BOOL, Result};
 
 use crate::{FullscreenObservation, ObservedWindow, PreviewCapture};
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct WindowIdentityKey {
+    hwnd: isize,
+    process: u32,
+}
+
+impl WindowIdentityKey {
+    const fn new(hwnd: isize, process: u32) -> Self {
+        Self { hwnd, process }
+    }
+}
+
+pub(super) struct WindowIdentityCache<T = crate::win32_app_identity::ResolvedAppIdentity> {
+    entries: HashMap<WindowIdentityKey, Option<T>>,
+}
+
+impl<T> Default for WindowIdentityCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+}
+
+impl<T: Clone> WindowIdentityCache<T> {
+    fn resolve_with(
+        &mut self,
+        key: WindowIdentityKey,
+        resolve: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
+        if let Some(identity) = self.entries.get(&key) {
+            return identity.clone();
+        }
+        let identity = resolve();
+        self.entries.insert(key, identity.clone());
+        identity
+    }
+
+    fn retain_keys(&mut self, live: &HashSet<WindowIdentityKey>) {
+        self.entries.retain(|key, _| live.contains(key));
+    }
+}
+
 pub(super) fn discover_running_windows(
     excluded: &[HWND],
-    preview_host: Option<HWND>,
+    previews_enabled: bool,
+    identity_cache: &mut WindowIdentityCache,
 ) -> Result<Vec<ObservedWindow>> {
     let mut state = EnumState {
         excluded: excluded.iter().map(|hwnd| hwnd.0 as isize).collect(),
@@ -34,20 +75,25 @@ pub(super) fn discover_running_windows(
             // returns the current process identifier.
             unsafe { GetCurrentProcessId() }
         },
-        preview_host,
+        previews_enabled,
+        identity_cache,
+        live_identity_keys: HashSet::new(),
         windows: Vec::new(),
     };
     // SAFETY: Category 8 (FFI boundary). `state` lives for the whole synchronous
     // enumeration call and the callback only casts the lparam back to this type.
     unsafe { EnumWindows(Some(enum_window), LPARAM(&mut state as *mut _ as isize)) }?;
+    state.identity_cache.retain_keys(&state.live_identity_keys);
     Ok(state.windows)
 }
 
-struct EnumState {
+struct EnumState<'cache> {
     excluded: Vec<isize>,
     foreground: isize,
     current_process: u32,
-    preview_host: Option<HWND>,
+    previews_enabled: bool,
+    identity_cache: &'cache mut WindowIdentityCache,
+    live_identity_keys: HashSet<WindowIdentityKey>,
     windows: Vec<ObservedWindow>,
 }
 
@@ -61,7 +107,7 @@ unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
     true.into()
 }
 
-fn observed_window(hwnd: HWND, state: &EnumState) -> Option<ObservedWindow> {
+fn observed_window(hwnd: HWND, state: &mut EnumState<'_>) -> Option<ObservedWindow> {
     if state.excluded.contains(&(hwnd.0 as isize)) || !eligible_window(hwnd) {
         return None;
     }
@@ -69,25 +115,51 @@ fn observed_window(hwnd: HWND, state: &EnumState) -> Option<ObservedWindow> {
     if process == state.current_process {
         return None;
     }
-    let app = process_app(process)?;
+    let identity_key = WindowIdentityKey::new(hwnd.0 as isize, process);
+    state.live_identity_keys.insert(identity_key);
+    let identity = state.identity_cache.resolve_with(identity_key, || {
+        crate::win32_app_identity::app_for_window(hwnd)
+    })?;
     let window_id = WindowId::new(hwnd.0 as usize as u64);
-    let observed = ObservedWindow::new(window_id, app, hwnd.0 as isize == state.foreground, {
+    let observed = ObservedWindow::new(
+        window_id,
+        identity.app().clone(),
+        hwnd.0 as isize == state.foreground,
         // SAFETY: Category 8 (FFI boundary). The HWND is from EnumWindows and
         // still valid for this synchronous minimized-state query.
-        unsafe { IsIconic(hwnd) }.as_bool()
-    });
-    Some(match state.preview_host {
-        Some(host) => observed.with_preview(probe_preview(host, hwnd)),
-        None => observed,
-    })
+        unsafe { IsIconic(hwnd) }.as_bool(),
+    )
+    .with_aliases(identity.aliases().to_vec())
+    .with_title(window_title(hwnd));
+    Some(
+        match preview_capture_for_discovery(state.previews_enabled) {
+            Some(capture) => observed.with_preview(capture),
+            None => observed,
+        },
+    )
     .map(|window| match fullscreen_observation(hwnd, window_id) {
         Some(fullscreen) => window.with_fullscreen(fullscreen),
         None => window,
     })
 }
 
-fn probe_preview(host: HWND, source: HWND) -> PreviewCapture {
-    crate::win32_preview::probe_dwm_thumbnail(host, source)
+fn window_title(hwnd: HWND) -> String {
+    // SAFETY: Category 8 (FFI boundary). The HWND comes from synchronous
+    // EnumWindows enumeration; the length query does not retain the handle.
+    let length = unsafe { GetWindowTextLengthW(hwnd) }.max(0) as usize;
+    let mut buffer = vec![0_u16; length.saturating_add(1)];
+    // SAFETY: Category 8 (FFI boundary). The UTF-16 buffer is writable for its
+    // full capacity and the call copies at most that capacity synchronously.
+    let copied = unsafe { GetWindowTextW(hwnd, &mut buffer) }.max(0) as usize;
+    String::from_utf16_lossy(&buffer[..copied.min(buffer.len())])
+}
+
+const fn preview_capture_for_discovery(previews_enabled: bool) -> Option<PreviewCapture> {
+    if previews_enabled {
+        Some(PreviewCapture::dwm_thumbnail())
+    } else {
+        None
+    }
 }
 
 fn eligible_window(hwnd: HWND) -> bool {
@@ -118,31 +190,6 @@ fn process_id(hwnd: HWND) -> Option<u32> {
     // the duration of the call and the HWND came from EnumWindows.
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process)) };
     (process != 0).then_some(process)
-}
-
-fn process_app(process: u32) -> Option<AppId> {
-    // SAFETY: Category 8 (FFI boundary). PROCESS_QUERY_LIMITED_INFORMATION is a
-    // documented read-only access right for process image-name queries.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process) }.ok()?;
-    let mut buffer = vec![0_u16; 32_768];
-    let mut length = buffer.len() as u32;
-    // SAFETY: Category 8 (FFI boundary). The buffer is writable and `length`
-    // points to its capacity on input and receives the UTF-16 length on output.
-    let result = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut length,
-        )
-    };
-    // SAFETY: Category 8 (FFI boundary). The handle was returned by OpenProcess
-    // in this function and is closed exactly once.
-    let _ = unsafe { CloseHandle(handle) };
-    result.ok()?;
-    let path = String::from_utf16_lossy(&buffer[..length as usize]);
-    let file = Path::new(&path).file_name()?.to_str()?.to_ascii_lowercase();
-    AppId::parse(&file).ok()
 }
 
 fn fullscreen_observation(hwnd: HWND, window: WindowId) -> Option<FullscreenObservation> {
@@ -180,4 +227,56 @@ const fn rect_from_win32(rect: RECT) -> shell_renderer::PhysicalRect {
         rect.right - rect.left,
         rect.bottom - rect.top,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use crate::PreviewCapture;
+
+    use super::{WindowIdentityCache, WindowIdentityKey, preview_capture_for_discovery};
+
+    #[test]
+    fn stable_window_identity_is_resolved_only_once() {
+        let calls = Cell::new(0);
+        let mut cache = WindowIdentityCache::default();
+        let key = WindowIdentityKey::new(55, 9001);
+
+        for _ in 0..3 {
+            let identity = cache.resolve_with(key, || {
+                calls.set(calls.get() + 1);
+                Some("browser.exe".to_owned())
+            });
+            assert_eq!(identity.as_deref(), Some("browser.exe"));
+        }
+
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn inaccessible_window_identity_failure_is_cached() {
+        let calls = Cell::new(0);
+        let mut cache = WindowIdentityCache::<String>::default();
+        let key = WindowIdentityKey::new(77, 9002);
+
+        for _ in 0..3 {
+            let identity = cache.resolve_with(key, || {
+                calls.set(calls.get() + 1);
+                None
+            });
+            assert_eq!(identity, None);
+        }
+
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn discovery_defers_dwm_validation_until_preview_open() {
+        assert_eq!(
+            preview_capture_for_discovery(true),
+            Some(PreviewCapture::dwm_thumbnail())
+        );
+        assert_eq!(preview_capture_for_discovery(false), None);
+    }
 }

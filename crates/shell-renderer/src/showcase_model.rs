@@ -3,6 +3,7 @@
 use crate::Rgba8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub enum ShowcaseState {
     Rest,
     Hover,
@@ -14,6 +15,7 @@ pub enum ShowcaseState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub enum ShowcasePrimitive {
     Button,
     Slider,
@@ -23,12 +25,14 @@ pub enum ShowcasePrimitive {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub struct ShowcaseItem {
     kind: ShowcasePrimitive,
     state: ShowcaseState,
     label: &'static str,
 }
 
+#[cfg(test)]
 impl ShowcaseItem {
     #[must_use]
     pub const fn kind(self) -> ShowcasePrimitive {
@@ -41,6 +45,10 @@ impl ShowcaseItem {
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "showcase labels remain metadata for future diagnostics"
+    )]
     pub const fn label(self) -> &'static str {
         self.label
     }
@@ -53,11 +61,20 @@ pub struct ShowcaseTokens {
     pub surface_hover: Rgba8,
     pub surface_pressed: Rgba8,
     pub surface_selected: Rgba8,
+    pub dock_luminance: Rgba8,
+    pub dock_veil: Rgba8,
+    pub dock_reflection: Rgba8,
+    pub dock_depth: Rgba8,
+    pub dock_inset_edge: Rgba8,
+    pub topbar_tint: Rgba8,
     pub text_primary: Rgba8,
     pub text_secondary: Rgba8,
     pub text_disabled: Rgba8,
     pub accent: Rgba8,
     pub focus_outer: Rgba8,
+    pub rim_outer: Rgba8,
+    pub rim_inner: Rgba8,
+    pub warning: Rgba8,
     pub error: Rgba8,
     pub dock_radius: f32,
     pub control_radius: f32,
@@ -68,25 +85,95 @@ impl ShowcaseTokens {
     #[must_use]
     pub const fn obsidian_glass() -> Self {
         Self {
-            surface_base: Rgba8::new(0x11, 0x15, 0x1B, 0xEF),
-            surface_raised: Rgba8::new(0x18, 0x1D, 0x24, 0xF2),
+            surface_base: Rgba8::new(0x20, 0x22, 0x26, 0xD2),
+            surface_raised: Rgba8::new(0xFF, 0xFF, 0xFF, 0x0A),
             surface_hover: Rgba8::new(0xFF, 0xFF, 0xFF, 0x12),
             surface_pressed: Rgba8::new(0xFF, 0xFF, 0xFF, 0x1F),
             surface_selected: Rgba8::new(0x2D, 0x7D, 0xFF, 0x2E),
+            dock_luminance: Rgba8::new(0x4D, 0x4D, 0x4D, 0x4D),
+            dock_veil: Rgba8::new(0x1A, 0x1A, 0x1A, 0x1A),
+            dock_reflection: Rgba8::new(0xFF, 0xFF, 0xFF, 0x14),
+            dock_depth: Rgba8::new(0x16, 0x16, 0x16, 0x18),
+            dock_inset_edge: Rgba8::new(0x80, 0x80, 0x80, 0xFF),
+            topbar_tint: Rgba8::new(0x11, 0x15, 0x1B, 0x8F),
             text_primary: Rgba8::new(0xF5, 0xF7, 0xFA, 0xFF),
             text_secondary: Rgba8::new(0xB8, 0xC0, 0xCC, 0xFF),
             text_disabled: Rgba8::new(0x68, 0x71, 0x7D, 0xFF),
             accent: Rgba8::new(0x4C, 0x9A, 0xFF, 0xFF),
             focus_outer: Rgba8::new(0x9D, 0xCA, 0xFF, 0xFF),
+            rim_outer: Rgba8::new(0x00, 0x00, 0x00, 0x40),
+            rim_inner: Rgba8::new(0xFF, 0xFF, 0xFF, 0x24),
+            warning: Rgba8::new(0xF2, 0xB8, 0x4B, 0xFF),
             error: Rgba8::new(0xFF, 0x73, 0x73, 0xFF),
-            dock_radius: 18.0,
+            dock_radius: 15.0,
             control_radius: 6.0,
-            popover_radius: 14.0,
+            popover_radius: 12.0,
         }
+    }
+
+    #[must_use]
+    pub const fn solid_fallback() -> Self {
+        let mut tokens = Self::obsidian_glass();
+        tokens.surface_base = Rgba8::new(0x1C, 0x21, 0x29, 0xFF);
+        tokens.dock_luminance = Rgba8::new(0x25, 0x2A, 0x32, 0xFF);
+        tokens.dock_veil = Rgba8::new(0x00, 0x00, 0x00, 0x00);
+        tokens.topbar_tint = Rgba8::new(0x1C, 0x21, 0x29, 0xFF);
+        tokens
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DockInsetShadow {
+    offset_y: f32,
+    blur: f32,
+    spread: f32,
+    color: Rgba8,
+}
+
+impl DockInsetShadow {
+    #[must_use]
+    pub const fn new(offset_y: f32, blur: f32, spread: f32, color: Rgba8) -> Self {
+        Self {
+            offset_y,
+            blur,
+            spread,
+            color,
+        }
+    }
+
+    #[must_use]
+    pub const fn offset_y(self) -> f32 {
+        self.offset_y
+    }
+
+    #[must_use]
+    pub const fn blur(self) -> f32 {
+        self.blur
+    }
+
+    #[must_use]
+    pub const fn spread(self) -> f32 {
+        self.spread
+    }
+
+    #[must_use]
+    pub const fn color(self) -> Rgba8 {
+        self.color
     }
 }
 
 #[must_use]
+pub const fn dock_inset_shadows() -> [DockInsetShadow; 4] {
+    [
+        DockInsetShadow::new(2.5, 1.5, -2.5, Rgba8::new(0x80, 0x80, 0x80, 0xFF)),
+        DockInsetShadow::new(-2.5, 1.5, -2.5, Rgba8::new(0x80, 0x80, 0x80, 0xFF)),
+        DockInsetShadow::new(16.0, 16.0, -16.0, Rgba8::new(0x16, 0x16, 0x16, 0xFF)),
+        DockInsetShadow::new(-16.0, 16.0, -16.0, Rgba8::new(0x16, 0x16, 0x16, 0xFF)),
+    ]
+}
+
+#[must_use]
+#[cfg(test)]
 pub const fn showcase_primitives() -> [ShowcaseItem; 9] {
     [
         ShowcaseItem {

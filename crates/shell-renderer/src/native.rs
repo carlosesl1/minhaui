@@ -1,3 +1,10 @@
+use std::cell::RefCell;
+
+mod animation;
+mod resize;
+
+pub use animation::SurfaceVisibilityAnimation;
+
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
@@ -9,7 +16,8 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionEffectGroup, IDCompositionTarget,
+    IDCompositionVisual,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
@@ -20,13 +28,20 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Dxgi::{
     DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
+    IDXGISwapChain3,
 };
 use windows::core::{Interface, Result};
 
+use crate::ShowcaseTokens;
 use crate::native_device::create_d3d_device;
-use crate::native_present::present_swap_chain;
-use crate::native_showcase::draw_showcase;
-use crate::{DockScene, PopoverScene, SettingsScene, TopbarScene};
+use crate::native_icons::NativeIconCache;
+use crate::native_present::{present_swap_chain, present_swap_chain_blocking};
+use crate::native_showcase::{ShowcaseStyle, draw_showcase};
+use crate::native_showcase_resources::{DockInsetBitmap, create_dock_inset_bitmap};
+use crate::{
+    ContextMenuScene, DockScene, Dpi, PopoverScene, SettingsScene, TopbarScene, WindowPreviewScene,
+    logical_surface_rect,
+};
 
 pub use crate::native_present::{
     DeviceLossKind, PresentOutcome, classify_present_hresult, device_loss_hresult,
@@ -44,6 +59,7 @@ pub enum ShowcaseRole {
     Topbar,
     Dock,
     Popover,
+    Preview,
     Settings,
 }
 
@@ -52,29 +68,55 @@ pub struct ShellScenes<'a> {
     pub topbar: Option<&'a TopbarScene>,
     pub dock: Option<&'a DockScene>,
     pub popover: Option<&'a PopoverScene>,
+    pub context_menu: Option<&'a ContextMenuScene>,
     pub settings: Option<&'a SettingsScene>,
+    pub preview: Option<&'a WindowPreviewScene>,
 }
 
 pub struct CompositionRenderer {
     _d3d: ID3D11Device,
-    d2d_context: ID2D1DeviceContext,
+    pub(super) d2d_context: ID2D1DeviceContext,
     dwrite: IDWriteFactory,
     dcomp: IDCompositionDevice,
     device_kind: DeviceKind,
+    icons: RefCell<NativeIconCache>,
+    solid_material: bool,
 }
 
 pub struct WindowSurface {
-    swap_chain: IDXGISwapChain1,
+    pub(super) swap_chain: IDXGISwapChain1,
     device: ID3D11Device,
-    bitmap: ID2D1Bitmap1,
+    dcomp: IDCompositionDevice,
     _target: IDCompositionTarget,
-    _visual: IDCompositionVisual,
+    visual: IDCompositionVisual,
+    opacity_effect: IDCompositionEffectGroup,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) dpi: Dpi,
+    dock_inset: Option<DockInsetBitmap>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceMetrics {
     width: u32,
     height: u32,
+    dpi: Dpi,
+}
+
+impl SurfaceMetrics {
+    #[must_use]
+    pub const fn new(width: u32, height: u32, dpi: Dpi) -> Self {
+        Self { width, height, dpi }
+    }
+
+    #[must_use]
+    pub const fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 impl CompositionRenderer {
-    pub fn new(force_warp: bool) -> Result<Self> {
+    pub fn new(force_warp: bool, solid_material: bool) -> Result<Self> {
         let (d3d, device_kind) = create_d3d_device(force_warp)?;
         let dxgi_device: IDXGIDevice = d3d.cast()?;
 
@@ -95,6 +137,7 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). DirectComposition accepts the live
         // DXGI device and the generic interface type supplies its documented IID.
         let dcomp: IDCompositionDevice = unsafe { DCompositionCreateDevice(&dxgi_device) }?;
+        let icons = NativeIconCache::new(&d2d_context)?;
 
         Ok(Self {
             _d3d: d3d,
@@ -102,6 +145,8 @@ impl CompositionRenderer {
             dwrite,
             dcomp,
             device_kind,
+            icons: RefCell::new(icons),
+            solid_material,
         })
     }
 
@@ -114,10 +159,10 @@ impl CompositionRenderer {
         &self,
         hwnd: HWND,
         role: ShowcaseRole,
-        width: u32,
-        height: u32,
+        metrics: SurfaceMetrics,
         scenes: ShellScenes<'_>,
     ) -> Result<WindowSurface> {
+        let SurfaceMetrics { width, height, dpi } = metrics;
         let dxgi_device: IDXGIDevice = self._d3d.cast()?;
         // SAFETY: Category 8 (FFI boundary). `dxgi_device` is live and its adapter
         // and factory parent interfaces are queried through COM QueryInterface.
@@ -145,34 +190,31 @@ impl CompositionRenderer {
         // flip-model composition combination and the device outlives the chain.
         let swap_chain =
             unsafe { factory.CreateSwapChainForComposition(&self._d3d, &description, None) }?;
-        // SAFETY: Category 8 (FFI boundary). Buffer zero exists because the swap
-        // chain has two buffers and is queried as its documented DXGI surface type.
-        let surface: IDXGISurface = unsafe { swap_chain.GetBuffer(0) }?;
-        let bitmap_properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            ..Default::default()
-        };
-        // SAFETY: Category 8 (FFI boundary). The DXGI surface format and alpha mode
-        // exactly match the bitmap properties and remain alive through `swap_chain`.
-        let bitmap = unsafe {
-            self.d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&bitmap_properties))
-        }?;
+        let bitmap = self.create_target_bitmap(&swap_chain, dpi)?;
         // SAFETY: Category 8 (FFI boundary). The bitmap and context are live COM
         // interfaces from the same D2D device.
-        unsafe { self.d2d_context.SetTarget(&bitmap) };
+        unsafe {
+            self.d2d_context.SetTarget(&bitmap);
+            self.d2d_context.SetDpi(dpi.raw() as f32, dpi.raw() as f32);
+        }
+        let mut icons = self.icons.borrow_mut();
+        let logical_surface = logical_surface_rect(width, height, dpi);
+        let dock_inset = if role == ShowcaseRole::Dock && !self.solid_material {
+            Some(create_dock_inset_bitmap(
+                &self.d2d_context,
+                logical_surface.width,
+                logical_surface.height,
+                ShowcaseTokens::obsidian_glass().dock_radius,
+            )?)
+        } else {
+            None
+        };
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
-            role,
-            width as f32,
-            height as f32,
+            &mut icons,
+            ShowcaseStyle::new(role, self.solid_material, dock_inset.as_ref()),
+            logical_surface,
             scenes,
         )?;
 
@@ -185,6 +227,13 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). A composition swap chain is a supported
         // visual content object and remains owned by this surface.
         unsafe { visual.SetContent(&swap_chain) }?;
+        // SAFETY: Category 8 (FFI boundary). Both COM objects come from this
+        // composition device and remain retained by the returned surface.
+        let opacity_effect = unsafe {
+            let effect = self.dcomp.CreateEffectGroup()?;
+            visual.SetEffect(&effect)?;
+            effect
+        };
         // SAFETY: Category 8 (FFI boundary). `visual` belongs to the same composition
         // device as `target` and remains alive in the returned owner.
         unsafe { target.SetRoot(&visual) }?;
@@ -194,14 +243,17 @@ impl CompositionRenderer {
         let surface = WindowSurface {
             swap_chain,
             device: self._d3d.clone(),
-            bitmap,
+            dcomp: self.dcomp.clone(),
             _target: target,
-            _visual: visual,
+            opacity_effect,
+            visual,
             width,
             height,
+            dpi,
+            dock_inset,
         };
-        match surface.present()? {
-            PresentOutcome::Presented => Ok(surface),
+        match surface.present_blocking()? {
+            PresentOutcome::Presented | PresentOutcome::FrameSkipped => Ok(surface),
             PresentOutcome::DeviceLost(kind) => Err(windows::core::Error::new(
                 device_loss_hresult(kind),
                 format!("recoverable device loss during initial present: {kind:?}"),
@@ -216,18 +268,50 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> Result<PresentOutcome> {
-        // SAFETY: Category 8 (FFI boundary). The retained bitmap was created from
-        // this renderer's D2D device and remains owned by the live surface.
-        unsafe { self.d2d_context.SetTarget(&surface.bitmap) };
+        let bitmap = self.create_target_bitmap(&surface.swap_chain, surface.dpi)?;
+        // SAFETY: Category 8 (FFI boundary). The freshly acquired back-buffer
+        // bitmap belongs to this D2D device; its DPI matches the logical scene.
+        unsafe {
+            self.d2d_context.SetTarget(&bitmap);
+            self.d2d_context
+                .SetDpi(surface.dpi.raw() as f32, surface.dpi.raw() as f32);
+        }
+        let mut icons = self.icons.borrow_mut();
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
-            role,
-            surface.width as f32,
-            surface.height as f32,
+            &mut icons,
+            ShowcaseStyle::new(role, self.solid_material, surface.dock_inset.as_ref()),
+            logical_surface_rect(surface.width, surface.height, surface.dpi),
             scenes,
         )?;
         surface.present()
+    }
+
+    fn create_target_bitmap(&self, swap_chain: &IDXGISwapChain1, dpi: Dpi) -> Result<ID2D1Bitmap1> {
+        let rotating_chain: IDXGISwapChain3 = swap_chain.cast()?;
+        // SAFETY: Category 8 (FFI boundary). The typed swapchain is live and
+        // reports the current writable back-buffer index without mutation.
+        let index = unsafe { rotating_chain.GetCurrentBackBufferIndex() };
+        // SAFETY: Category 8 (FFI boundary). The reported index belongs to this
+        // live flip-model chain and is queried as its documented DXGI surface.
+        let surface: IDXGISurface = unsafe { swap_chain.GetBuffer(index) }?;
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: dpi.raw() as f32,
+            dpiY: dpi.raw() as f32,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            ..Default::default()
+        };
+        // SAFETY: Category 8 (FFI boundary). The current DXGI back buffer and
+        // bitmap properties share format, alpha mode, device and effective DPI.
+        unsafe {
+            self.d2d_context
+                .CreateBitmapFromDxgiSurface(&surface, Some(&properties))
+        }
     }
 }
 
@@ -237,7 +321,81 @@ impl WindowSurface {
         (self.width, self.height)
     }
 
+    #[must_use]
+    pub const fn metrics(&self) -> SurfaceMetrics {
+        SurfaceMetrics::new(self.width, self.height, self.dpi)
+    }
+
     pub fn present(&self) -> Result<PresentOutcome> {
         present_swap_chain(&self.swap_chain, &self.device)
+    }
+
+    fn present_blocking(&self) -> Result<PresentOutcome> {
+        present_swap_chain_blocking(&self.swap_chain, &self.device)
+    }
+
+    pub fn set_opacity(&self, opacity: f32) -> Result<()> {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        // SAFETY: Category 8 (FFI boundary). The visual belongs to this live
+        // composition device and receives a finite normalized opacity.
+        unsafe { self.opacity_effect.SetOpacity2(opacity) }?;
+        // SAFETY: Category 8 (FFI boundary). The visual update references only
+        // resources owned by this surface.
+        unsafe { self.dcomp.Commit() }
+    }
+
+    pub fn animate_entrance(&self, reduced_motion: bool) -> Result<()> {
+        if reduced_motion {
+            // SAFETY: Category 8 (FFI boundary). The visual belongs to this live
+            // composition device and accepts a finite immediate offset.
+            unsafe { self.visual.SetOffsetY2(0.0) }?;
+        } else {
+            let duration = 0.18_f64;
+            let start = -6.0_f32;
+            // SAFETY: Category 8 (FFI boundary). The device returns an owned
+            // animation and all polynomial coefficients are finite.
+            let animation = unsafe { self.dcomp.CreateAnimation() }?;
+            // SAFETY: Category 8 (FFI boundary). The cubic segment and terminal
+            // value form one bounded 180 ms ease-out animation.
+            unsafe {
+                animation.AddCubic(
+                    0.0,
+                    start,
+                    0.0,
+                    -3.0 * start / (duration * duration) as f32,
+                    2.0 * start / (duration * duration * duration) as f32,
+                )?;
+                animation.End(duration, 0.0)?;
+                self.visual.SetOffsetY(&animation)?;
+            }
+        }
+        // SAFETY: Category 8 (FFI boundary). All pending animation operations
+        // reference resources owned by this surface.
+        unsafe { self.dcomp.Commit() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Dpi;
+
+    use super::{SurfaceMetrics, WindowSurface};
+
+    #[test]
+    fn surface_metrics_report_pixel_size() {
+        let metrics = SurfaceMetrics::new(21, 22, Dpi::from_raw(144));
+
+        assert_eq!(metrics.size(), (21, 22));
+    }
+
+    #[test]
+    fn window_surface_exposes_complete_metrics() {
+        let accessor: fn(&WindowSurface) -> SurfaceMetrics = WindowSurface::metrics;
+
+        let _ = accessor;
     }
 }

@@ -2,7 +2,7 @@ use shell_config::{
     ConfigLoad, MAX_CONFIG_BYTES, PerformancePreset, RecoveryKind, ShellConfigV1, decode_config,
     encode_config,
 };
-use shell_core::TaskbarPolicy;
+use shell_core::{AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, TaskbarPolicy};
 
 #[test]
 fn defaults_are_safe_and_valid() {
@@ -12,6 +12,8 @@ fn defaults_are_safe_and_valid() {
 
     // Then: the taskbar remains untouched and validation succeeds.
     assert_eq!(config.taskbar_policy(), TaskbarPolicy::Off);
+    assert_eq!(config.dock().item_size(), 36);
+    assert_eq!(config.dock().spacing(), 9);
     assert!(config.validate().is_ok());
 }
 
@@ -26,6 +28,49 @@ fn current_schema_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
 
     // Then: no recovery is needed and all data round-trips.
     assert_eq!(loaded, ConfigLoad::Current(config));
+    Ok(())
+}
+
+#[test]
+fn separator_layout_roundtrips_and_old_v1_documents_default_to_legacy_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let separator = DockLayoutEntry::Separator(DockSeparatorId::new(90));
+    let config = ShellConfigV1::default().with_dock_layout(vec![separator]);
+
+    let encoded = encode_config(&config)?;
+    let ConfigLoad::Current(decoded) = decode_config(&encoded) else {
+        return Err("separator layout must decode as current config".into());
+    };
+    assert_eq!(decoded.dock_layout(), &[separator]);
+
+    let legacy = encode_config(&ShellConfigV1::default())?;
+    let mut legacy: serde_json::Value = serde_json::from_slice(&legacy)?;
+    legacy
+        .as_object_mut()
+        .ok_or("config must encode as an object")?
+        .remove("dock_layout");
+    let ConfigLoad::Current(decoded) = decode_config(&serde_json::to_vec(&legacy)?) else {
+        return Err("legacy V1 must remain readable".into());
+    };
+    assert!(decoded.dock_layout().is_empty());
+    Ok(())
+}
+
+#[test]
+fn app_and_separator_cannot_share_a_renderer_identity() -> Result<(), Box<dyn std::error::Error>> {
+    let id = DockItemId::new(7);
+    let config = ShellConfigV1::default()
+        .with_dock_items(vec![DockItem::pinned(id, AppId::parse("safe.exe")?)])
+        .with_dock_layout(vec![
+            DockLayoutEntry::App(id),
+            DockLayoutEntry::Separator(DockSeparatorId::new(id.value())),
+        ]);
+
+    assert!(config.validate().is_err());
+    assert!(matches!(
+        decode_config(&serde_json::to_vec(&config)?),
+        ConfigLoad::Recovered { .. }
+    ));
     Ok(())
 }
 

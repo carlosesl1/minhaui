@@ -5,7 +5,41 @@ shell companion for Windows 10 22H2 and Windows 11 on x64 hardware. The app
 provides a native dock, top bar, popovers, settings, portable themes, safe mode,
 and a separate recovery watchdog.
 
+## Repository layout
+
+This directory is the single canonical checkout of the project. Persistent
+sibling or nested Git worktrees are not part of the project structure.
+
+```text
+Minha UI APP/
+|-- crates/
+|   |-- shell-app/               Main executable and dependency composition
+|   |-- shell-config/            Settings, migrations, and portable themes
+|   |-- shell-core/              Pure domain state and reducers
+|   |-- shell-platform-windows/  Windows integration and native input
+|   |-- shell-renderer/          D3D11 and DirectComposition rendering
+|   `-- shell-watchdog/          Recovery and taskbar restoration
+|-- docs/                        Product references, specifications, and plans
+|-- packaging/
+|   |-- msix/                    Microsoft Store and sideloading layout
+|   `-- steam/                   Steam distribution layout
+|-- .cargo/                      Workspace target and toolchain configuration
+|-- .github/                     Continuous-integration workflows
+|-- Cargo.toml                   Rust workspace definition
+|-- DESIGN.md                    Visual and interaction design system
+`-- README.md                    Setup, quality gates, and project map
+```
+
+Generated artifacts stay in `target/` or the packaging `out/` directories and
+must not be mixed with source files. If a temporary worktree is ever required,
+remove it after its changes are integrated into this canonical checkout.
+
 ## Workspace architecture
+
+The architecture governance source of truth lives in
+[`docs/architecture/`](docs/architecture/README.md). It defines dependency
+direction, delivery rules, quality gates, architectural decision records, and
+the current stabilization baseline. This README remains a concise project map.
 
 | Package | Responsibility |
 | --- | --- |
@@ -39,14 +73,28 @@ Rustup may require a new terminal before `%USERPROFILE%\.cargo\bin` appears in
 Run from the repository root:
 
 ```powershell
+powershell -NoProfile -File scripts/Check-Architecture.ps1
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo test --workspace
 cargo build --workspace --release
 cargo metadata --format-version 1 --no-deps
 cargo audit
 cargo deny check advisories bans licenses sources
 ```
+
+Tests that require installed Windows packages, an interactive desktop, DWM, or
+real AppBar registration are intentionally separate from the deterministic
+workspace gate:
+
+```powershell
+cargo test -p shell-platform-windows --features native-validation --lib
+cargo test -p shell-app --features native-validation --test showcase_startup
+```
+
+Run native validation only on the controlled `obsidian-native-validation`
+Windows image. It must include Calculator and Windows Terminal, have DWM active,
+and have no existing Obsidian Glass instance or conflicting AppBar registration.
 
 Release builds use abort-on-panic, fat LTO, one codegen unit, and stripped
 symbols. The two process skeletons currently print an explicit bootstrap status

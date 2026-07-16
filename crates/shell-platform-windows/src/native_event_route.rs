@@ -12,6 +12,10 @@ impl NativeWindowId {
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained for native-route diagnostics without exposing the wrapper field"
+    )]
     pub const fn value(self) -> isize {
         self.0
     }
@@ -24,6 +28,7 @@ pub struct NativeWindowSlot {
     dock: NativeWindowId,
     popover: NativeWindowId,
     settings: NativeWindowId,
+    preview: NativeWindowId,
 }
 
 impl NativeWindowSlot {
@@ -34,6 +39,7 @@ impl NativeWindowSlot {
         dock: NativeWindowId,
         popover: NativeWindowId,
         settings: NativeWindowId,
+        preview: NativeWindowId,
     ) -> Self {
         Self {
             monitor,
@@ -41,6 +47,7 @@ impl NativeWindowSlot {
             dock,
             popover,
             settings,
+            preview,
         }
     }
 }
@@ -72,6 +79,7 @@ pub fn route_native_event_to_slot(
                     || slot.dock == window
                     || slot.popover == window
                     || slot.settings == window
+                    || slot.preview == window
             })
             .map_or(NativeRouteDecision::UnknownWindow, |slot| {
                 NativeRouteDecision::Slot(slot.monitor)

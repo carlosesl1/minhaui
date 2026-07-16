@@ -40,6 +40,10 @@ impl DefaultPopoverDataProvider<OfflineWeatherProvider> {
 
 impl<W: WeatherProvider> DefaultPopoverDataProvider<W> {
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "opt-in weather remains an adapter seam while offline is the product default"
+    )]
     pub const fn with_weather(weather: W, weather_access: WeatherAccess) -> Self {
         Self {
             weather,
@@ -96,14 +100,14 @@ fn system_rows() -> Vec<PopoverItem> {
     vec![
         PopoverItem::new(
             "Settings",
-            "Open preferences",
+            "Ctrl+,",
             true,
             Some(PopoverAction::OpenSettings),
         ),
-        PopoverItem::new("Control Center", "Status toggles", true, None),
+        PopoverItem::new("Control Center", "", true, None),
         PopoverItem::new(
             "Lock",
-            "Requires confirmation",
+            "Win+L",
             true,
             Some(PopoverAction::ConfirmSession(SessionAction::Lock)),
         ),

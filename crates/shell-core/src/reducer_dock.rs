@@ -1,7 +1,7 @@
 use crate::events::{applied, no_op};
 use crate::{
-    DockItem, DockItemId, Effect, NoOpReason, PinState, RunningState, ShellState, TransitionError,
-    TransitionOutcome, WindowId,
+    DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, Effect, NoOpReason, PinState,
+    RunningState, ShellState, TransitionError, TransitionOutcome, WindowId,
 };
 
 pub(crate) fn activate(
@@ -51,6 +51,11 @@ pub(crate) fn window_discovered(
         return Err(TransitionError::DuplicateDockItem(item.id));
     }
     state.dock_items.push(item);
+    if let Some(item) = state.dock_items.last()
+        && item.pin == PinState::Pinned
+    {
+        state.dock_layout.push(DockLayoutEntry::App(item.id));
+    }
     Ok(applied(Vec::new()))
 }
 
@@ -78,7 +83,8 @@ pub(crate) fn window_closed(
     if state.dock_items[index].pin == PinState::Pinned {
         state.dock_items[index].running = RunningState::Stopped;
     } else {
-        state.dock_items.remove(index);
+        let removed = state.dock_items.remove(index);
+        remove_app_from_layout(state, removed.id);
     }
     Ok(applied(Vec::new()))
 }
@@ -99,9 +105,16 @@ pub(crate) fn pin(
             return Ok(no_op(NoOpReason::AlreadyConfigured));
         }
         existing.pin = PinState::Pinned;
+        if !state
+            .dock_layout
+            .contains(&DockLayoutEntry::App(existing.id))
+        {
+            state.dock_layout.push(DockLayoutEntry::App(existing.id));
+        }
         return Ok(applied(vec![Effect::PersistConfiguration]));
     }
     item.pin = PinState::Pinned;
+    state.dock_layout.push(DockLayoutEntry::App(item.id));
     state.dock_items.push(item);
     Ok(applied(vec![Effect::PersistConfiguration]))
 }
@@ -111,9 +124,11 @@ pub(crate) fn unpin(state: &mut ShellState, id: DockItemId) -> (Vec<Effect>, Tra
         return no_op(NoOpReason::ItemNotPresent);
     };
     if matches!(state.dock_items[index].running, RunningState::Stopped) {
-        state.dock_items.remove(index);
+        let removed = state.dock_items.remove(index);
+        remove_app_from_layout(state, removed.id);
     } else {
         state.dock_items[index].pin = PinState::Unpinned;
+        remove_app_from_layout(state, id);
     }
     applied(vec![Effect::PersistConfiguration])
 }
@@ -137,7 +152,102 @@ pub(crate) fn reorder(
         None => state.dock_items.len(),
     };
     state.dock_items.insert(target, item);
+    if state.dock_layout.contains(&DockLayoutEntry::App(id)) {
+        let before = before.map(DockLayoutEntry::App);
+        move_layout_entry(state, DockLayoutEntry::App(id), before)?;
+    }
     Ok(applied(vec![Effect::PersistConfiguration]))
+}
+
+pub(crate) fn add_separator(
+    state: &mut ShellState,
+    separator: DockSeparatorId,
+    before: Option<DockLayoutEntry>,
+) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    let entry = DockLayoutEntry::Separator(separator);
+    if state.dock_layout.contains(&entry) {
+        return Err(TransitionError::DuplicateDockSeparator(separator));
+    }
+    let target = layout_target_index(state, before)?;
+    state.dock_layout.insert(target, entry);
+    Ok(applied(vec![Effect::PersistConfiguration]))
+}
+
+pub(crate) fn remove_separator(
+    state: &mut ShellState,
+    separator: DockSeparatorId,
+) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    let entry = DockLayoutEntry::Separator(separator);
+    let index = state
+        .dock_layout
+        .iter()
+        .position(|current| *current == entry)
+        .ok_or(TransitionError::UnknownDockLayoutEntry(entry))?;
+    state.dock_layout.remove(index);
+    Ok(applied(vec![Effect::PersistConfiguration]))
+}
+
+pub(crate) fn reorder_entry(
+    state: &mut ShellState,
+    entry: DockLayoutEntry,
+    before: Option<DockLayoutEntry>,
+) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    if before == Some(entry) {
+        return Ok(no_op(NoOpReason::AlreadyConfigured));
+    }
+    move_layout_entry(state, entry, before)?;
+    sync_pinned_item_order(state);
+    Ok(applied(vec![Effect::PersistConfiguration]))
+}
+
+fn move_layout_entry(
+    state: &mut ShellState,
+    entry: DockLayoutEntry,
+    before: Option<DockLayoutEntry>,
+) -> Result<(), TransitionError> {
+    let source = state
+        .dock_layout
+        .iter()
+        .position(|current| *current == entry)
+        .ok_or(TransitionError::UnknownDockLayoutEntry(entry))?;
+    let entry = state.dock_layout.remove(source);
+    let target = layout_target_index(state, before)?;
+    state.dock_layout.insert(target, entry);
+    Ok(())
+}
+
+fn layout_target_index(
+    state: &ShellState,
+    before: Option<DockLayoutEntry>,
+) -> Result<usize, TransitionError> {
+    before.map_or(Ok(state.dock_layout.len()), |target| {
+        state
+            .dock_layout
+            .iter()
+            .position(|current| *current == target)
+            .ok_or(TransitionError::UnknownDockLayoutEntry(target))
+    })
+}
+
+fn sync_pinned_item_order(state: &mut ShellState) {
+    let ranks = state
+        .dock_layout
+        .iter()
+        .enumerate()
+        .filter_map(|(rank, entry)| match entry {
+            DockLayoutEntry::App(id) => Some((*id, rank)),
+            DockLayoutEntry::Separator(_) => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    state
+        .dock_items
+        .sort_by_key(|item| ranks.get(&item.id).copied().unwrap_or(usize::MAX));
+}
+
+fn remove_app_from_layout(state: &mut ShellState, id: DockItemId) {
+    state
+        .dock_layout
+        .retain(|entry| *entry != DockLayoutEntry::App(id));
 }
 
 fn find_item(state: &mut ShellState, id: DockItemId) -> Result<&mut DockItem, TransitionError> {

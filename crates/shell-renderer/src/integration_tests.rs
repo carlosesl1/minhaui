@@ -1,0 +1,15 @@
+#[path = "../tests/context_menu_scene.rs"]
+mod context_menu_scene;
+#[path = "../tests/dock_scene.rs"]
+mod dock_scene;
+#[path = "../tests/identity.rs"]
+mod identity;
+#[cfg(windows)]
+#[path = "../tests/native_slice.rs"]
+mod native_slice;
+#[path = "../tests/topbar_scene.rs"]
+mod topbar_scene;
+#[path = "../tests/window_preview_layout.rs"]
+mod window_preview_layout;
+#[path = "../tests/window_preview_scene.rs"]
+mod window_preview_scene;

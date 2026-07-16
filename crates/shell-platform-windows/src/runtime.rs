@@ -17,7 +17,12 @@ pub enum RuntimeAction {
 pub enum DockRenderAction {
     None,
     RedrawDock,
-    RebuildSurfaces,
+    #[expect(
+        dead_code,
+        reason = "kept distinct from full rebuild for native surface recovery"
+    )]
+    RebuildDockSurface,
+    RebuildAllSurfaces,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,9 +35,9 @@ pub struct DockRenderChange {
 
 #[must_use]
 pub const fn classify_dock_render_action(change: DockRenderChange) -> DockRenderAction {
-    if change.rebuild_requested || change.dock_visibility_changed {
-        DockRenderAction::RebuildSurfaces
-    } else if change.state_changed || change.visual_changed {
+    if change.rebuild_requested {
+        DockRenderAction::RebuildAllSurfaces
+    } else if change.visual_changed || (change.state_changed && !change.dock_visibility_changed) {
         DockRenderAction::RedrawDock
     } else {
         DockRenderAction::None
@@ -67,12 +72,25 @@ impl RuntimeOrchestrator {
             PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated => {
                 RuntimeAction::RepositionAndRebuild
             }
+            PlatformEvent::AppBarPositionChanged => RuntimeAction::None,
             PlatformEvent::DpiChanged(rect) => RuntimeAction::ResizeAndRebuild(rect),
             PlatformEvent::DockPointer(_)
+            | PlatformEvent::DockEdgeProbe
+            | PlatformEvent::DockAnimationFrame
+            | PlatformEvent::PreviewTimer
+            | PlatformEvent::PreviewPointerMoved(_)
+            | PlatformEvent::PreviewPointerPressed(_)
+            | PlatformEvent::PreviewPointerReleased(_)
+            | PlatformEvent::PreviewDismissed
             | PlatformEvent::DockKey(_)
-            | PlatformEvent::DockContextMenu { .. } => RuntimeAction::None,
+            | PlatformEvent::DockContextMenu { .. }
+            | PlatformEvent::DockContextMenuRequested { .. } => RuntimeAction::None,
             PlatformEvent::TopbarPointer(_) | PlatformEvent::TopbarKey(_) => RuntimeAction::None,
             PlatformEvent::PopoverKey(_) => RuntimeAction::None,
+            PlatformEvent::PopoverPointer(_) | PlatformEvent::PopoverPointerMoved(_) => {
+                RuntimeAction::None
+            }
+            PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. } | PlatformEvent::SyncWindows => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,

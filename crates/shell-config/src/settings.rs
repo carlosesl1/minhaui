@@ -24,8 +24,8 @@ pub struct DockSettings {
 impl Default for DockSettings {
     fn default() -> Self {
         Self {
-            item_size: 52,
-            spacing: 8,
+            item_size: 36,
+            spacing: 9,
             alignment: DockAlignmentPreference::Center,
             magnification: 122,
             animation_ms: 140,
@@ -62,7 +62,7 @@ impl DockSettings {
     }
 
     pub(crate) const fn validate(&self) -> bool {
-        matches!(self.item_size, 44..=72)
+        matches!(self.item_size, 36..=72)
             && matches!(self.spacing, 4..=20)
             && matches!(self.magnification, 100..=140)
             && matches!(self.animation_ms, 0..=280)

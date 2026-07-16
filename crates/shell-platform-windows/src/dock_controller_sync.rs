@@ -5,7 +5,7 @@ use shell_core::{AppId, DockItem, DockItemId, RunningState, ShellEvent, WindowId
 use crate::dock_window_sync::stable_item_id;
 use crate::{
     DockController, DockControllerError, ObservedWindow, PreviewAction, PreviewQueuedAction,
-    QueuedDockAction,
+    PreviewWindowState, QueuedDockAction,
 };
 
 impl DockController {
@@ -16,7 +16,19 @@ impl DockController {
         self.sync_previews(observed);
         let mut actions = Vec::new();
         for window in observed {
-            let item = if let Some(item) = self.item_for_app(window.app()) {
+            let matching = self.items_for_window(window);
+            let item = if let Some(item) = self.preferred_matching_item(&matching) {
+                for duplicate in matching
+                    .iter()
+                    .copied()
+                    .filter(|candidate| *candidate != item)
+                {
+                    actions.extend(self.apply(ShellEvent::WindowClosed(duplicate))?);
+                    if self.is_dock_item(duplicate) {
+                        actions.extend(self.apply(ShellEvent::Unpin(duplicate))?);
+                    }
+                    self.launch_targets.remove(&duplicate);
+                }
                 item
             } else {
                 self.discover_running_window(window, &mut actions)?
@@ -52,12 +64,18 @@ impl DockController {
         if !self.previews.contains_key(&window) {
             return Ok(Vec::new());
         }
-        let Some(app) = self.app_for_window(window) else {
+        let Some(app) = self.previews.get(&window).map(PreviewWindowState::app) else {
             return Ok(Vec::new());
         };
         let queued = match action {
-            PreviewAction::Focus => PreviewQueuedAction::Focus { window, app },
-            PreviewAction::Close => PreviewQueuedAction::Close { window, app },
+            PreviewAction::Focus => PreviewQueuedAction::Focus {
+                window,
+                app: app.clone(),
+            },
+            PreviewAction::Close => PreviewQueuedAction::Close {
+                window,
+                app: app.clone(),
+            },
         };
         Ok(vec![QueuedDockAction::Preview(queued)])
     }
@@ -66,9 +84,38 @@ impl DockController {
         self.previews.clear();
         for window in observed {
             if let Some(preview) = window.preview() {
-                self.previews.insert(window.window(), preview);
+                self.previews.insert(
+                    window.window(),
+                    PreviewWindowState::from_observed(window, preview),
+                );
             }
         }
+    }
+
+    #[must_use]
+    pub fn preview_windows_for_item(&self, item: DockItemId) -> Vec<&PreviewWindowState> {
+        let Some(app) = self
+            .state
+            .dock_items()
+            .iter()
+            .find(|entry| entry.id() == item)
+            .map(DockItem::app)
+        else {
+            return Vec::new();
+        };
+        let mut windows = self
+            .previews
+            .values()
+            .filter(|window| window.matches_app(app))
+            .collect::<Vec<_>>();
+        windows.sort_by(|left, right| {
+            right
+                .foreground()
+                .cmp(&left.foreground())
+                .then_with(|| left.title().cmp(right.title()))
+                .then_with(|| left.window().value().cmp(&right.window().value()))
+        });
+        windows
     }
 
     fn discover_running_window(
@@ -90,29 +137,31 @@ impl DockController {
         Ok(item)
     }
 
-    fn item_for_app(&self, app: &AppId) -> Option<DockItemId> {
+    fn items_for_window(&self, window: &ObservedWindow) -> Vec<DockItemId> {
         self.state
             .dock_items()
             .iter()
-            .find(|item| item.app() == app)
+            .filter(|item| window.matches_app(item.app()))
             .map(DockItem::id)
+            .collect()
     }
 
-    fn app_for_window(&self, target: WindowId) -> Option<AppId> {
-        self.state
-            .dock_items()
+    fn preferred_matching_item(&self, matching: &[DockItemId]) -> Option<DockItemId> {
+        matching
             .iter()
-            .find_map(|item| match item.running() {
-                RunningState::Running { window, .. } if *window == target => {
-                    Some(item.app().clone())
-                }
-                RunningState::Stopped | RunningState::Running { .. } => None,
+            .copied()
+            .find(|id| {
+                self.dock_item(*id)
+                    .is_some_and(|item| item.pin() == shell_core::PinState::Pinned)
             })
+            .or_else(|| matching.first().copied())
     }
 
     fn stable_item_for_app(&self, app: &AppId) -> DockItemId {
         let mut id = stable_item_id(app);
-        while self.state.dock_items().iter().any(|item| item.id() == id) {
+        while self.state.dock_items().iter().any(|item| item.id() == id)
+            || self.separator_visual_id_exists(id.value())
+        {
             id = DockItemId::new(id.value().wrapping_add(1));
         }
         id

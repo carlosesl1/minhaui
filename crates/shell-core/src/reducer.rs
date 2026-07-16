@@ -1,6 +1,7 @@
 use crate::events::{applied, no_op};
 use crate::reducer_dock::{
-    activate, pin, reorder, unpin, window_changed, window_closed, window_discovered, window_opened,
+    activate, add_separator, pin, remove_separator, reorder, reorder_entry, unpin, window_changed,
+    window_closed, window_discovered, window_opened,
 };
 use crate::{
     DockVisibility, Effect, Monitor, NoOpReason, PerformancePreset, ShellEvent, ShellState,
@@ -25,6 +26,11 @@ pub fn reduce(state: &ShellState, event: ShellEvent) -> Result<Transition, Trans
         ShellEvent::Pin(item) => pin(&mut next, item)?,
         ShellEvent::Unpin(id) => unpin(&mut next, id),
         ShellEvent::ReorderDockItem { item, before } => reorder(&mut next, item, before)?,
+        ShellEvent::AddDockSeparator { separator, before } => {
+            add_separator(&mut next, separator, before)?
+        }
+        ShellEvent::RemoveDockSeparator(separator) => remove_separator(&mut next, separator)?,
+        ShellEvent::ReorderDockEntry { entry, before } => reorder_entry(&mut next, entry, before)?,
         ShellEvent::OpenPopover(popover) => {
             if next.active_popover == Some(popover) {
                 no_op(NoOpReason::AlreadyConfigured)

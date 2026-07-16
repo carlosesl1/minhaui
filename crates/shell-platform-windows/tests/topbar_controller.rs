@@ -1,8 +1,8 @@
-use shell_core::{Popover, ShellState, TopbarModuleKind};
-use shell_platform_windows::{
+use crate::{
     PollBudget, QueuedTopbarAction, TopbarController, TopbarKey, TopbarPointerPhase,
     TopbarPointerSample, TopbarSnapshot,
 };
+use shell_core::{Popover, ShellState, TopbarModuleKind};
 use shell_renderer::{DipPoint, DipRect, TopbarDensity};
 
 #[test]
@@ -67,10 +67,6 @@ fn topbar_keyboard_focus_opens_visible_modules_without_pointer_input()
         controller.handle_key(TopbarKey::Next)?,
         vec![QueuedTopbarAction::RedrawTopbar]
     );
-    assert_eq!(
-        controller.handle_key(TopbarKey::Next)?,
-        vec![QueuedTopbarAction::RedrawTopbar]
-    );
     let actions = controller.handle_key(TopbarKey::Activate)?;
 
     // Then: the focused module is visible in the scene and opens a typed popover.
@@ -91,6 +87,25 @@ fn topbar_keyboard_focus_opens_visible_modules_without_pointer_input()
 
     // Then: keyboard focus is cleared.
     assert_eq!(controller.scene().focused_module(), None);
+    Ok(())
+}
+
+#[test]
+fn topbar_uses_windows_symbol_glyphs_instead_of_placeholder_words()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Given: the default topbar modules are composed for native rendering.
+    let controller = TopbarController::new(ShellState::default(), TopbarDensity::Compact)?;
+
+    // When: the scene exposes its visual modules.
+    let scene = controller.scene();
+
+    // Then: every icon is a single non-ASCII Windows symbol glyph.
+    assert!(
+        scene
+            .modules()
+            .iter()
+            .all(|module| { module.icon().chars().count() == 1 && !module.icon().is_ascii() })
+    );
     Ok(())
 }
 

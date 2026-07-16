@@ -71,6 +71,60 @@ fn diagnostics_redact_posix_paths_and_profile_names() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn diagnostics_redact_profile_paths_case_insensitively() -> Result<(), Box<dyn std::error::Error>> {
+    let event = DiagnosticEvent::new(
+        "shell.failure",
+        [DiagnosticField::new(
+            "detail",
+            r"failed at c:\uSeRs\Carlos\private.txt",
+        )],
+    );
+    let path = std::env::temp_dir().join(format!(
+        "shell-watchdog-case-insensitive-diagnostics-{}.jsonl",
+        std::process::id()
+    ));
+
+    export_diagnostics(&path, &[event])?;
+    let exported = fs::read_to_string(&path)?;
+    fs::remove_file(&path)?;
+
+    assert!(exported.contains("[redacted]"));
+    assert!(!exported.contains("Carlos"));
+    Ok(())
+}
+
+#[test]
+fn diagnostics_apply_the_shared_field_and_value_limits() -> Result<(), Box<dyn std::error::Error>> {
+    let oversized = "x".repeat(2_048);
+    let event = DiagnosticEvent::new(
+        "shell.bounded",
+        [
+            DiagnosticField::new("field_1", &oversized),
+            DiagnosticField::new("field_2", "2"),
+            DiagnosticField::new("field_3", "3"),
+            DiagnosticField::new("field_4", "4"),
+            DiagnosticField::new("field_5", "5"),
+            DiagnosticField::new("field_6", "6"),
+            DiagnosticField::new("field_7", "7"),
+            DiagnosticField::new("field_8", "8"),
+            DiagnosticField::new("field_9", "9"),
+        ],
+    );
+    let path = std::env::temp_dir().join(format!(
+        "shell-watchdog-bounded-diagnostics-{}.jsonl",
+        std::process::id()
+    ));
+
+    export_diagnostics(&path, &[event])?;
+    let exported = fs::read_to_string(&path)?;
+    fs::remove_file(&path)?;
+
+    assert_eq!(exported.matches('x').count(), 1_024);
+    assert!(!exported.contains("field_9"));
+    Ok(())
+}
+
+#[test]
 fn log_rotation_keeps_newest_segments_within_bounds() {
     let given_policy = RotationPolicy::new(2, 100);
     let given_segments = [40_u64, 90, 20];

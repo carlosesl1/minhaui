@@ -3,6 +3,7 @@ members = [
     "crates/shell-app",
     "crates/shell-config",
     "crates/shell-core",
+    "crates/shell-diagnostics",
     "crates/shell-platform-windows",
     "crates/shell-renderer",
     "crates/shell-watchdog",

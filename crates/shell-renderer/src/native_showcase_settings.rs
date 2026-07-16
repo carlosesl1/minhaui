@@ -3,7 +3,7 @@ use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrus
 use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 
 use crate::SettingsScene;
-use crate::native_showcase::{draw_text, fill_round, rect};
+use crate::native_showcase_primitives::{draw_text, fill_round, rect};
 
 pub(crate) struct SettingsBrushes<'a> {
     pub raised: &'a ID2D1SolidColorBrush,

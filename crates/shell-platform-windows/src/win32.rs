@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicI32, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::HWND;
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
@@ -10,7 +11,7 @@ use windows::core::{Result, w};
 
 use crate::PlatformEvent;
 use crate::win32_slots::{
-    create_slots, dispatch_event, handle_broadcast_event, print_monitor_placements,
+    SlotFeatures, create_slots, dispatch_event, handle_broadcast_event, print_monitor_placements,
 };
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::WindowClass;
@@ -29,18 +30,61 @@ pub struct ShowcaseRunConfig {
 
 pub(super) const TIMER_ID: usize = 0x4D55;
 pub(super) const SYNC_TIMER_ID: usize = 0x4D56;
+pub(super) const DOCK_ANIMATION_TIMER_ID: usize = 0x4D57;
+pub(super) const PREVIEW_TIMER_ID: usize = 0x4D58;
+pub(super) const DRAG_ESCAPE_TIMER_ID: usize = 0x4D59;
+pub(super) const DOCK_EDGE_PROBE_TIMER_ID: usize = 0x4D5A;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
 pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static TOPBAR_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static POPOVER_WINDOW: AtomicIsize = AtomicIsize::new(0);
+pub(super) static PREVIEW_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static SETTINGS_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static DOCK_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static TOPBAR_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static POPOVER_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
+static PREVIEW_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static SETTINGS_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 
 pub fn run_showcase(config: ShowcaseRunConfig) -> Result<()> {
+    let safe_mode = config.safe_mode.to_string();
+    let high_contrast = config.high_contrast.to_string();
+    let reduced_motion = config.reduced_motion.to_string();
+    crate::diagnostics::record(
+        crate::diagnostics::DiagnosticModule::AppLifecycle,
+        crate::diagnostics::LogLevel::Info,
+        "app.started",
+        &[
+            ("safe_mode", &safe_mode),
+            ("high_contrast", &high_contrast),
+            ("reduced_motion", &reduced_motion),
+        ],
+    );
+    let result = run_showcase_runtime(config);
+    match &result {
+        Ok(()) => crate::diagnostics::record(
+            crate::diagnostics::DiagnosticModule::AppLifecycle,
+            crate::diagnostics::LogLevel::Info,
+            "app.stopped",
+            &[],
+        ),
+        Err(error) => {
+            let message = error.to_string();
+            crate::diagnostics::record(
+                crate::diagnostics::DiagnosticModule::AppLifecycle,
+                crate::diagnostics::LogLevel::Error,
+                "app.runtime.failed",
+                &[("error", &message)],
+            );
+        }
+    }
+    crate::diagnostics::shutdown();
+    result
+}
+
+fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
+    let _com = ComApartment::initialize()?;
     // SAFETY: Category 8 (FFI boundary). DPI awareness is set before any HWND is
     // created and uses the documented process-wide per-monitor-v2 constant.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }?;
@@ -62,13 +106,23 @@ pub fn run_showcase(config: ShowcaseRunConfig) -> Result<()> {
         "ACCESSIBILITY safe_mode={} high_contrast={} reduced_motion={}",
         config.safe_mode, config.high_contrast, config.reduced_motion
     );
-    let mut slots = create_slots(&class, &monitors, config.force_warp, config.safe_mode)?;
+    let backdrop_enabled = !config.safe_mode
+        && !config.high_contrast
+        && std::env::var_os("MINHA_UI_DISABLE_BACKDROP").is_none();
+    let features = SlotFeatures {
+        force_warp: config.force_warp,
+        safe_mode: config.safe_mode,
+        backdrop_enabled,
+        reduced_motion: config.reduced_motion,
+    };
+    let mut slots = create_slots(&class, &monitors, features)?;
     let timer = config
         .qa_exit_ms
         .map(|milliseconds| TimerGuard::start(slots[0].topbar_hwnd(), milliseconds))
         .transpose()?;
     for slot in &mut slots {
         slot.handle_event(PlatformEvent::SyncWindows)?;
+        slot.show_shells();
         slot.print_windows();
     }
     if config.simulate_device_loss_once {
@@ -82,28 +136,33 @@ pub fn run_showcase(config: ShowcaseRunConfig) -> Result<()> {
             PlatformEvent::PowerResumed,
             PlatformEvent::TaskbarCreated,
         ] {
-            handle_broadcast_event(
-                &class,
-                config.force_warp,
-                config.safe_mode,
-                &mut slots,
-                event,
-            )?;
+            handle_broadcast_event(&class, features, &mut slots, event)?;
         }
     }
-    let result = message_loop(|event| {
-        dispatch_event(
-            &class,
-            config.force_warp,
-            config.safe_mode,
-            &mut slots,
-            event,
-        )
-    });
+    let result = message_loop(|event| dispatch_event(&class, features, &mut slots, event));
     drop(slots);
     drop(timer);
     drop(class);
     result
+}
+
+struct ComApartment;
+
+impl ComApartment {
+    fn initialize() -> Result<Self> {
+        // SAFETY: Category 8 (FFI boundary). The UI thread initializes one STA
+        // before creating shell, WIC, or composition resources.
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        // SAFETY: Category 8 (FFI boundary). This balances the successful
+        // CoInitializeEx call on the same UI thread.
+        unsafe { CoUninitialize() };
+    }
 }
 
 pub(super) fn register_dock_window(hwnd: HWND) {
@@ -130,6 +189,14 @@ pub(super) fn unregister_popover_window(hwnd: HWND) {
     unregister_window(hwnd, &POPOVER_WINDOWS, &POPOVER_WINDOW);
 }
 
+pub(super) fn register_preview_window(hwnd: HWND) {
+    register_window(hwnd, &PREVIEW_WINDOWS, &PREVIEW_WINDOW);
+}
+
+pub(super) fn unregister_preview_window(hwnd: HWND) {
+    unregister_window(hwnd, &PREVIEW_WINDOWS, &PREVIEW_WINDOW);
+}
+
 pub(super) fn register_settings_window(hwnd: HWND) {
     register_window(hwnd, &SETTINGS_WINDOWS, &SETTINGS_WINDOW);
 }
@@ -148,6 +215,10 @@ pub(super) fn is_topbar_window(hwnd: HWND) -> bool {
 
 pub(super) fn is_popover_window(hwnd: HWND) -> bool {
     contains_window(hwnd, &POPOVER_WINDOWS, &POPOVER_WINDOW)
+}
+
+pub(super) fn is_preview_window(hwnd: HWND) -> bool {
+    contains_window(hwnd, &PREVIEW_WINDOWS, &PREVIEW_WINDOW)
 }
 
 pub(super) fn is_settings_window(hwnd: HWND) -> bool {

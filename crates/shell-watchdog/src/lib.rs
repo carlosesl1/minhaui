@@ -6,13 +6,14 @@ mod recovery;
 mod supervisor;
 
 pub use diagnostics::{
-    DiagnosticEvent, DiagnosticField, RotationPolicy, export_diagnostics, retained_log_segments,
+    DiagnosticEvent, DiagnosticField, export_diagnostics, retained_log_segments,
 };
 pub use instance::{InstanceDecision, InstanceProbe, classify_instance};
 pub use recovery::{
     Consent, ExplorerTaskbarState, RecoveryHook, RecoveryShortcut, SafeModeProfile, TaskbarAction,
     TaskbarMutation, TaskbarRequest, TaskbarTransaction, begin_taskbar_transaction,
 };
+pub use shell_diagnostics::RetentionPolicy as RotationPolicy;
 pub use supervisor::{
     ChildCleanup, ChildEvent, RestartDelay, SupervisorAction, SupervisorConfig, SupervisorState,
 };

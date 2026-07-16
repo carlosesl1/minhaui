@@ -82,8 +82,16 @@ impl PopoverItem {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PopoverLoadState {
+    #[expect(
+        dead_code,
+        reason = "the controller supports asynchronous adapters although current adapters are synchronous"
+    )]
     Loading,
     Ready(Vec<PopoverItem>),
+    #[expect(
+        dead_code,
+        reason = "empty adapter results remain a distinct renderer state"
+    )]
     Empty,
     Error(String),
     Offline(Vec<PopoverItem>),
@@ -134,6 +142,10 @@ pub struct WeatherItem {
 
 impl WeatherItem {
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "constructor belongs to the opt-in WeatherProvider adapter seam"
+    )]
     pub fn new(label: &str, detail: &str) -> Self {
         Self {
             label: label.to_owned(),
@@ -145,5 +157,9 @@ impl WeatherItem {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WeatherAccess {
     Offline,
+    #[expect(
+        dead_code,
+        reason = "online weather is explicitly opt-in and currently disabled by default"
+    )]
     OptIn,
 }

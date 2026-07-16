@@ -1,9 +1,9 @@
-use shell_config::{
-    AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
-};
-use shell_platform_windows::{
+use crate::{
     QueuedSettingsAction, SettingsController, SettingsEdit, SettingsError, SettingsKey,
     SettingsSection,
+};
+use shell_config::{
+    AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
 };
 
 fn qa_path(name: &str) -> std::path::PathBuf {

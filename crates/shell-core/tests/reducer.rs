@@ -1,7 +1,7 @@
 use shell_core::{
-    AppId, DockItem, DockItemId, Effect, Monitor, MonitorId, NoOpReason, PinState, Popover,
-    RunningState, ShellEvent, ShellState, TaskbarPolicy, TopbarModuleKind, TransitionError,
-    TransitionOutcome, WindowId, reduce,
+    AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, Effect, Monitor, MonitorId,
+    NoOpReason, PinState, Popover, RunningState, ShellEvent, ShellState, TaskbarPolicy,
+    TopbarModuleKind, TransitionError, TransitionOutcome, WindowId, reduce,
 };
 
 fn app(value: &str) -> Result<AppId, Box<dyn std::error::Error>> {
@@ -199,6 +199,92 @@ fn pin_reorder_unpin_sequence_preserves_unique_order() -> Result<(), Box<dyn std
     assert_eq!(unpinned.state.dock_items().len(), 1);
     assert!(unpinned.state.validate().is_ok());
     assert_eq!(unpinned.effects, vec![Effect::PersistConfiguration]);
+    Ok(())
+}
+
+#[test]
+fn separators_can_be_added_moved_and_removed_without_becoming_apps()
+-> Result<(), Box<dyn std::error::Error>> {
+    let state =
+        ShellState::default().with_dock_items(vec![item(1, "app.one")?, item(2, "app.two")?]);
+    let separator = DockSeparatorId::new(70);
+
+    let added = reduce(
+        &state,
+        ShellEvent::AddDockSeparator {
+            separator,
+            before: Some(DockLayoutEntry::App(DockItemId::new(2))),
+        },
+    )?;
+    assert_eq!(
+        added.state.dock_layout(),
+        &[
+            DockLayoutEntry::App(DockItemId::new(1)),
+            DockLayoutEntry::Separator(separator),
+            DockLayoutEntry::App(DockItemId::new(2)),
+        ]
+    );
+    assert_eq!(added.effects, vec![Effect::PersistConfiguration]);
+
+    let moved = reduce(
+        &added.state,
+        ShellEvent::ReorderDockEntry {
+            entry: DockLayoutEntry::Separator(separator),
+            before: Some(DockLayoutEntry::App(DockItemId::new(1))),
+        },
+    )?;
+    assert_eq!(
+        moved.state.dock_layout(),
+        &[
+            DockLayoutEntry::Separator(separator),
+            DockLayoutEntry::App(DockItemId::new(1)),
+            DockLayoutEntry::App(DockItemId::new(2)),
+        ]
+    );
+    assert_eq!(moved.state.dock_items().len(), 2);
+
+    let removed = reduce(&moved.state, ShellEvent::RemoveDockSeparator(separator))?;
+    assert_eq!(
+        removed.state.dock_layout(),
+        &[
+            DockLayoutEntry::App(DockItemId::new(1)),
+            DockLayoutEntry::App(DockItemId::new(2)),
+        ]
+    );
+    assert_eq!(removed.effects, vec![Effect::PersistConfiguration]);
+    Ok(())
+}
+
+#[test]
+fn moving_an_app_across_a_separator_updates_app_order_once()
+-> Result<(), Box<dyn std::error::Error>> {
+    let separator = DockSeparatorId::new(71);
+    let state = ShellState::default()
+        .with_dock_items(vec![item(1, "app.one")?, item(2, "app.two")?])
+        .with_dock_layout(vec![
+            DockLayoutEntry::App(DockItemId::new(1)),
+            DockLayoutEntry::Separator(separator),
+            DockLayoutEntry::App(DockItemId::new(2)),
+        ]);
+
+    let moved = reduce(
+        &state,
+        ShellEvent::ReorderDockEntry {
+            entry: DockLayoutEntry::App(DockItemId::new(2)),
+            before: Some(DockLayoutEntry::App(DockItemId::new(1))),
+        },
+    )?;
+
+    assert_eq!(
+        moved.state.dock_layout(),
+        &[
+            DockLayoutEntry::App(DockItemId::new(2)),
+            DockLayoutEntry::App(DockItemId::new(1)),
+            DockLayoutEntry::Separator(separator),
+        ]
+    );
+    assert_eq!(moved.state.dock_items()[0].id(), DockItemId::new(2));
+    assert_eq!(moved.effects, vec![Effect::PersistConfiguration]);
     Ok(())
 }
 

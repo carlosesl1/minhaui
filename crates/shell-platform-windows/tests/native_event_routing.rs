@@ -1,8 +1,8 @@
-use shell_core::{AppId, DockItem, DockItemId, MonitorId, ShellState};
-use shell_platform_windows::{
+use crate::{
     DockController, DockPointerPhase, DockPointerSample, DockRuntimeConfig, NativeEventTarget,
     NativeRouteDecision, NativeWindowId, NativeWindowSlot, route_native_event_to_slot,
 };
+use shell_core::{AppId, DockItem, DockItemId, MonitorId, ShellState};
 use shell_renderer::{DipPoint, DipRect};
 
 fn state(label: &str) -> Result<ShellState, Box<dyn std::error::Error>> {
@@ -23,6 +23,7 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
             NativeWindowId::new(101),
             NativeWindowId::new(102),
             NativeWindowId::new(103),
+            NativeWindowId::new(104),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
@@ -30,6 +31,7 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
             NativeWindowId::new(201),
             NativeWindowId::new(202),
             NativeWindowId::new(203),
+            NativeWindowId::new(204),
         ),
     ];
     let mut first = DockController::new(state("first.exe")?, DockRuntimeConfig::default())?;
@@ -43,13 +45,13 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
     if route == NativeRouteDecision::Slot(MonitorId::new(10)) {
         first.handle_pointer(DockPointerSample::new(
             DockPointerPhase::Moved,
-            DipPoint::new(130.0, 48.0),
+            DipPoint::new(130.0, 26.0),
         ))?;
     }
     if route == NativeRouteDecision::Slot(MonitorId::new(20)) {
         second.handle_pointer(DockPointerSample::new(
             DockPointerPhase::Moved,
-            DipPoint::new(130.0, 48.0),
+            DipPoint::new(130.0, 26.0),
         ))?;
     }
 
@@ -69,6 +71,7 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
             NativeWindowId::new(101),
             NativeWindowId::new(102),
             NativeWindowId::new(103),
+            NativeWindowId::new(104),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
@@ -76,6 +79,7 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
             NativeWindowId::new(201),
             NativeWindowId::new(202),
             NativeWindowId::new(203),
+            NativeWindowId::new(204),
         ),
     ];
 
@@ -83,6 +87,8 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
     let route = route_native_event_to_slot(&slots, NativeEventTarget::Broadcast);
     let settings_route =
         route_native_event_to_slot(&slots, NativeEventTarget::Window(NativeWindowId::new(203)));
+    let preview_route =
+        route_native_event_to_slot(&slots, NativeEventTarget::Window(NativeWindowId::new(204)));
 
     // Then: the shell manager handles it as a broadcast instead of slot mutation.
     assert_eq!(route, NativeRouteDecision::Broadcast);
@@ -90,4 +96,5 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
         settings_route,
         NativeRouteDecision::Slot(MonitorId::new(20))
     );
+    assert_eq!(preview_route, NativeRouteDecision::Slot(MonitorId::new(20)));
 }

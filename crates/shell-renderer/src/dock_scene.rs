@@ -1,5 +1,7 @@
 use shell_core::{DockItemId, WindowId};
 
+use crate::dock_item_visual::DockItemVisual;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DockAlignment {
     Left,
@@ -21,10 +23,10 @@ impl DockLayoutConfig {
     pub const fn new(alignment: DockAlignment) -> Self {
         Self {
             alignment,
-            item_size: 52.0,
-            spacing: 8.0,
-            padding: 14.0,
-            magnified_item_size: 76.0,
+            item_size: 36.0,
+            spacing: 9.0,
+            padding: 8.0,
+            magnified_item_size: 43.92,
         }
     }
 
@@ -84,75 +86,20 @@ impl Default for DockLayoutConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DockItemVisualKind {
-    App,
-    Separator,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunningIndicator {
-    Stopped,
-    Running,
-    Focused,
-    Minimized,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct DockItemVisual {
-    id: u64,
-    label: String,
-    kind: DockItemVisualKind,
-    indicator: RunningIndicator,
-}
-
-impl DockItemVisual {
-    #[must_use]
-    pub fn app(id: u64, label: &str, indicator: RunningIndicator) -> Self {
-        Self {
-            id,
-            label: label.to_owned(),
-            kind: DockItemVisualKind::App,
-            indicator,
-        }
-    }
-
-    #[must_use]
-    pub fn separator(id: u64) -> Self {
-        Self {
-            id,
-            label: String::new(),
-            kind: DockItemVisualKind::Separator,
-            indicator: RunningIndicator::Stopped,
-        }
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> u64 {
-        self.id
-    }
-
-    #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    #[must_use]
-    pub const fn kind(&self) -> DockItemVisualKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub const fn indicator(&self) -> RunningIndicator {
-        self.indicator
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockScene {
     config: DockLayoutConfig,
     items: Vec<DockItemVisual>,
     hovered_item: Option<u64>,
+    hover_position_x: Option<f32>,
+    hover_strength: f32,
+    material_motion_strength: f32,
+    pressed_item: Option<u64>,
+    dragged_item: Option<u64>,
+    drag_position_x: Option<f32>,
+    drag_insertion_x: Option<f32>,
+    drag_target_valid: bool,
+    item_offsets: Vec<(u64, f32)>,
     focused_item: Option<u64>,
     window_previews: Vec<WindowPreviewVisual>,
 }
@@ -164,6 +111,15 @@ impl DockScene {
             config,
             items,
             hovered_item: None,
+            hover_position_x: None,
+            hover_strength: 0.0,
+            material_motion_strength: 0.0,
+            pressed_item: None,
+            dragged_item: None,
+            drag_position_x: None,
+            drag_insertion_x: None,
+            drag_target_valid: true,
+            item_offsets: Vec::new(),
             focused_item: None,
             window_previews: Vec::new(),
         }
@@ -185,19 +141,119 @@ impl DockScene {
     }
 
     #[must_use]
+    pub const fn hover_strength(&self) -> f32 {
+        self.hover_strength
+    }
+
+    #[must_use]
+    pub const fn hover_position_x(&self) -> Option<f32> {
+        self.hover_position_x
+    }
+
+    #[must_use]
+    pub const fn material_motion_strength(&self) -> f32 {
+        self.material_motion_strength
+    }
+
+    #[must_use]
     pub const fn focused_item(&self) -> Option<u64> {
         self.focused_item
     }
 
     #[must_use]
+    pub const fn pressed_item(&self) -> Option<u64> {
+        self.pressed_item
+    }
+
+    #[must_use]
+    pub const fn dragged_item(&self) -> Option<u64> {
+        self.dragged_item
+    }
+
+    #[must_use]
+    pub const fn drag_position_x(&self) -> Option<f32> {
+        self.drag_position_x
+    }
+
+    #[must_use]
+    pub const fn drag_insertion_x(&self) -> Option<f32> {
+        self.drag_insertion_x
+    }
+
+    #[must_use]
+    pub const fn drag_target_valid(&self) -> bool {
+        self.drag_target_valid
+    }
+
+    #[must_use]
+    pub fn item_offset(&self, id: u64) -> f32 {
+        self.item_offsets
+            .iter()
+            .find_map(|(item, offset)| (*item == id).then_some(*offset))
+            .unwrap_or(0.0)
+    }
+
+    #[must_use]
     pub const fn with_hovered_item(mut self, hovered_item: Option<u64>) -> Self {
         self.hovered_item = hovered_item;
+        self.hover_strength = if hovered_item.is_some() { 1.0 } else { 0.0 };
+        self
+    }
+
+    #[must_use]
+    pub fn with_hover_strength(mut self, hover_strength: f32) -> Self {
+        self.hover_strength = hover_strength.clamp(0.0, 1.0);
+        self
+    }
+
+    #[must_use]
+    pub fn with_hover_position_x(mut self, hover_position_x: f32) -> Self {
+        self.hover_position_x = hover_position_x.is_finite().then_some(hover_position_x);
+        self
+    }
+
+    #[must_use]
+    pub fn with_material_motion_strength(mut self, strength: f32) -> Self {
+        self.material_motion_strength = if strength.is_finite() {
+            strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self
     }
 
     #[must_use]
     pub const fn with_focused_item(mut self, focused_item: Option<u64>) -> Self {
         self.focused_item = focused_item;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_pressed_item(mut self, pressed_item: Option<u64>) -> Self {
+        self.pressed_item = pressed_item;
+        self
+    }
+
+    #[must_use]
+    pub fn with_dragged_item(mut self, dragged_item: Option<u64>, position_x: f32) -> Self {
+        self.dragged_item = dragged_item;
+        self.drag_position_x = position_x.is_finite().then_some(position_x);
+        self
+    }
+
+    #[must_use]
+    pub fn with_drag_target(mut self, insertion_x: f32, valid: bool) -> Self {
+        self.drag_insertion_x = insertion_x.is_finite().then_some(insertion_x);
+        self.drag_target_valid = valid;
+        self
+    }
+
+    #[must_use]
+    pub fn with_item_offsets(mut self, offsets: Vec<(u64, f32)>) -> Self {
+        self.item_offsets = offsets
+            .into_iter()
+            .filter(|(_, offset)| offset.is_finite())
+            .collect();
         self
     }
 

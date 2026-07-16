@@ -26,6 +26,7 @@ impl DockRuntimeConfig {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn alignment(self) -> DockAlignment {
         self.layout.alignment()
     }
@@ -46,12 +47,14 @@ impl DockRuntimeConfig {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn with_item_size(mut self, value: f32) -> Self {
         self.layout = self.layout.with_item_size(value);
         self
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn with_spacing(mut self, value: f32) -> Self {
         self.layout = self.layout.with_spacing(value);
         self
@@ -64,6 +67,7 @@ impl DockRuntimeConfig {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn with_reveal_zone_height(mut self, value: f32) -> Self {
         self.reveal_zone_height = value;
         self
@@ -82,6 +86,7 @@ pub enum DockPointerPhase {
     Pressed,
     Released,
     Dragged,
+    Cancelled,
     Exited,
 }
 
@@ -102,6 +107,7 @@ impl DockPointerSample {
 pub enum DockKey {
     Next,
     Previous,
+    Preview,
     Activate,
     Escape,
 }
@@ -111,13 +117,23 @@ pub enum ContextMenuCommand {
     Open,
     Unpin,
     Pin,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reserved for the legacy native preview menu")
+    )]
     PreviewFocus,
     PreviewClose,
+    AddSeparator,
+    RemoveSeparator,
+    MoveLeft,
+    MoveRight,
+    OpenTaskManager,
     Quit,
 }
 
 impl ContextMenuCommand {
     #[must_use]
+    #[cfg(test)]
     pub const fn from_native_id(value: u16) -> Option<Self> {
         match value {
             1 => Some(Self::Open),
@@ -126,11 +142,20 @@ impl ContextMenuCommand {
             4 => Some(Self::Quit),
             5 => Some(Self::PreviewFocus),
             6 => Some(Self::PreviewClose),
+            7 => Some(Self::AddSeparator),
+            8 => Some(Self::RemoveSeparator),
+            9 => Some(Self::MoveLeft),
+            10 => Some(Self::MoveRight),
+            11 => Some(Self::OpenTaskManager),
             _ => None,
         }
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained for the isolated Win32 native-menu adapter"
+    )]
     pub const fn native_id(self) -> u16 {
         match self {
             Self::Open => 1,
@@ -139,6 +164,11 @@ impl ContextMenuCommand {
             Self::Quit => 4,
             Self::PreviewFocus => 5,
             Self::PreviewClose => 6,
+            Self::AddSeparator => 7,
+            Self::RemoveSeparator => 8,
+            Self::MoveLeft => 9,
+            Self::MoveRight => 10,
+            Self::OpenTaskManager => 11,
         }
     }
 }
@@ -151,36 +181,200 @@ pub enum QueuedDockAction {
     Quit,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DockAnimator {
-    active_until_ms: u64,
+    position: ScalarSpring,
+    strength: ScalarSpring,
+    material_strength: ScalarSpring,
+    initialized: bool,
+    active: bool,
 }
 
 impl DockAnimator {
     #[must_use]
     pub const fn new() -> Self {
-        Self { active_until_ms: 0 }
+        Self {
+            position: ScalarSpring::new(0.0),
+            strength: ScalarSpring::new(0.0),
+            material_strength: ScalarSpring::new(0.0),
+            initialized: false,
+            active: false,
+        }
     }
 
     #[must_use]
     pub const fn is_idle(self) -> bool {
-        self.active_until_ms == 0
+        !self.active
     }
 
-    pub const fn start(&mut self, now_ms: u64, duration_ms: u64) {
-        self.active_until_ms = now_ms + duration_ms;
+    #[must_use]
+    pub const fn position_x(self) -> f32 {
+        self.position.value
     }
 
-    pub const fn advance(&mut self, now_ms: u64) {
-        if now_ms >= self.active_until_ms {
-            self.active_until_ms = 0;
+    #[must_use]
+    pub const fn strength(self) -> f32 {
+        self.strength.value
+    }
+
+    #[must_use]
+    pub const fn material_strength(self) -> f32 {
+        self.material_strength.value
+    }
+
+    pub fn retarget(&mut self, position_x: f32, strength: f32) {
+        if !position_x.is_finite() || !strength.is_finite() {
+            *self = Self::new();
+            return;
         }
+        let strength = strength.clamp(0.0, 1.0);
+        if !self.initialized
+            || (self.strength.value <= STRENGTH_EPSILON && self.strength.target <= STRENGTH_EPSILON)
+        {
+            self.position.snap(position_x);
+            self.initialized = true;
+        } else {
+            self.position.target = position_x;
+        }
+        self.strength.target = strength;
+        self.material_strength.target = strength;
+        self.active = !self.is_settled();
+    }
+
+    pub fn retarget_strength(&mut self, strength: f32) {
+        let strength = if strength.is_finite() {
+            strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.strength.target = strength;
+        self.material_strength.target = strength;
+        self.active = !self.is_settled();
+    }
+
+    pub fn advance(&mut self, delta_seconds: f32) -> bool {
+        if !self.is_finite() {
+            *self = Self::new();
+            return true;
+        }
+        if !self.active || !delta_seconds.is_finite() || delta_seconds <= 0.0 {
+            return false;
+        }
+        let previous_position = self.position.value;
+        let previous_strength = self.strength.value;
+        let previous_material_strength = self.material_strength.value;
+        let step = delta_seconds.min(MAX_FRAME_SECONDS);
+        self.position.integrate(step, POSITION_SPRING_FREQUENCY_HZ);
+        self.strength.integrate(step, STRENGTH_SPRING_FREQUENCY_HZ);
+        self.material_strength
+            .integrate(step, MATERIAL_SPRING_FREQUENCY_HZ);
+        self.settle_components();
+        self.active = !self.is_settled();
+        (self.position.value - previous_position).abs() > f32::EPSILON
+            || (self.strength.value - previous_strength).abs() > f32::EPSILON
+            || (self.material_strength.value - previous_material_strength).abs() > f32::EPSILON
+    }
+
+    pub fn snap_to_target(&mut self) -> bool {
+        let changed = (self.position.value - self.position.target).abs() > f32::EPSILON
+            || (self.strength.value - self.strength.target).abs() > f32::EPSILON
+            || (self.material_strength.value - self.material_strength.target).abs() > f32::EPSILON;
+        self.position.snap(self.position.target);
+        self.strength.snap(self.strength.target);
+        self.material_strength.snap(self.material_strength.target);
+        self.active = false;
+        changed
+    }
+
+    fn settle_components(&mut self) {
+        if self
+            .position
+            .is_settled(POSITION_EPSILON, POSITION_VELOCITY_EPSILON)
+        {
+            self.position.snap(self.position.target);
+        }
+        if self
+            .strength
+            .is_settled(STRENGTH_EPSILON, STRENGTH_VELOCITY_EPSILON)
+        {
+            self.strength.snap(self.strength.target);
+        }
+        if self
+            .material_strength
+            .is_settled(STRENGTH_EPSILON, STRENGTH_VELOCITY_EPSILON)
+        {
+            self.material_strength.snap(self.material_strength.target);
+        }
+    }
+
+    fn is_settled(self) -> bool {
+        self.position
+            .is_settled(POSITION_EPSILON, POSITION_VELOCITY_EPSILON)
+            && self
+                .strength
+                .is_settled(STRENGTH_EPSILON, STRENGTH_VELOCITY_EPSILON)
+            && self
+                .material_strength
+                .is_settled(STRENGTH_EPSILON, STRENGTH_VELOCITY_EPSILON)
+    }
+
+    fn is_finite(self) -> bool {
+        self.position.is_finite() && self.strength.is_finite() && self.material_strength.is_finite()
     }
 }
 
 impl Default for DockAnimator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+const POSITION_SPRING_FREQUENCY_HZ: f32 = 14.0;
+const STRENGTH_SPRING_FREQUENCY_HZ: f32 = 10.0;
+const MATERIAL_SPRING_FREQUENCY_HZ: f32 = 7.5;
+const MAX_FRAME_SECONDS: f32 = 1.0 / 20.0;
+const POSITION_EPSILON: f32 = 0.01;
+const POSITION_VELOCITY_EPSILON: f32 = 0.05;
+const STRENGTH_EPSILON: f32 = 0.0005;
+const STRENGTH_VELOCITY_EPSILON: f32 = 0.0025;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScalarSpring {
+    value: f32,
+    target: f32,
+    velocity: f32,
+}
+
+impl ScalarSpring {
+    const fn new(value: f32) -> Self {
+        Self {
+            value,
+            target: value,
+            velocity: 0.0,
+        }
+    }
+
+    fn integrate(&mut self, delta_seconds: f32, frequency_hz: f32) {
+        let omega = std::f32::consts::TAU * frequency_hz;
+        let displacement = self.value - self.target;
+        let decay = (-omega * delta_seconds).exp();
+        let impulse = (self.velocity + omega * displacement) * delta_seconds;
+        self.value = self.target + (displacement + impulse) * decay;
+        self.velocity = (self.velocity - omega * impulse) * decay;
+    }
+
+    fn snap(&mut self, value: f32) {
+        self.value = value;
+        self.target = value;
+        self.velocity = 0.0;
+    }
+
+    fn is_settled(self, value_epsilon: f32, velocity_epsilon: f32) -> bool {
+        (self.target - self.value).abs() <= value_epsilon && self.velocity.abs() <= velocity_epsilon
+    }
+
+    fn is_finite(self) -> bool {
+        self.value.is_finite() && self.target.is_finite() && self.velocity.is_finite()
     }
 }
 

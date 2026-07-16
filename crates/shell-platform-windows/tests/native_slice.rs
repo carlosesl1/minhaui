@@ -1,6 +1,6 @@
-use shell_platform_windows::{
+use crate::{
     DockRenderAction, DockRenderChange, HitRegion, LifecycleMessage, PlatformEvent, RuntimeAction,
-    RuntimeOrchestrator, classify_dock_render_action, classify_hit_test,
+    RuntimeOrchestrator, classify_dock_render_action, classify_hit_test, popover_activation_event,
     translate_lifecycle_message,
 };
 use shell_renderer::{DipPoint, DipRect, PhysicalRect};
@@ -10,6 +10,15 @@ fn translates_taskbarcreated_to_typed_lifecycle_event() {
     let taskbar_created = LifecycleMessage::TaskbarCreated(0xC123);
     let event = translate_lifecycle_message(0xC123, taskbar_created);
     assert_eq!(event, Some(PlatformEvent::TaskbarCreated));
+}
+
+#[test]
+fn popover_deactivation_requests_dismissal() {
+    assert_eq!(popover_activation_event(true), None);
+    assert_eq!(
+        popover_activation_event(false),
+        Some(PlatformEvent::DismissTransientOverlays)
+    );
 }
 
 #[test]
@@ -103,8 +112,8 @@ fn dock_hover_visual_change_requests_redraw_without_resource_generation() {
 }
 
 #[test]
-fn dock_visibility_change_still_requests_rebuild_for_resized_strip() {
-    // Given: autohide changes the dock HWND size.
+fn dock_visibility_change_moves_the_native_window_without_rebuilding_a_surface() {
+    // Given: autohide moves and clips the dock HWND independently of its surface.
     // When: the dock visibility flag changed while handling a pointer event.
     let action = classify_dock_render_action(DockRenderChange {
         state_changed: true,
@@ -113,8 +122,23 @@ fn dock_visibility_change_still_requests_rebuild_for_resized_strip() {
         rebuild_requested: false,
     });
 
-    // Then: the swap-chain-sized surface must still be rebuilt.
-    assert_eq!(action, DockRenderAction::RebuildSurfaces);
+    // Then: the native motion path handles visibility without a swap-chain rebuild.
+    assert_eq!(action, DockRenderAction::None);
+}
+
+#[test]
+fn explicit_resource_effect_still_requests_a_global_rebuild() {
+    // Given: a dock action explicitly requested all native resources to rebuild.
+    // When: the runtime classifies that request.
+    let action = classify_dock_render_action(DockRenderChange {
+        state_changed: false,
+        visual_changed: false,
+        dock_visibility_changed: false,
+        rebuild_requested: true,
+    });
+
+    // Then: device-wide recovery remains separate from dock-local resizing.
+    assert_eq!(action, DockRenderAction::RebuildAllSurfaces);
 }
 
 #[test]

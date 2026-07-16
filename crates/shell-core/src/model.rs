@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{AppId, DockItemId, MonitorId, WindowId};
+use crate::{AppId, DockItemId, DockSeparatorId, MonitorId, WindowId};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum DockLayoutEntry {
+    App(DockItemId),
+    Separator(DockSeparatorId),
+}
+
+impl DockLayoutEntry {
+    #[must_use]
+    pub const fn visual_id(self) -> u64 {
+        match self {
+            Self::App(id) => id.value(),
+            Self::Separator(id) => id.value(),
+        }
+    }
+}
 
 /// Defines how the native Windows taskbar is treated.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +117,8 @@ pub struct DockItem {
     pub(crate) app: AppId,
     pub(crate) pin: PinState,
     pub(crate) running: RunningState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) launch_target: Option<String>,
 }
 
 impl DockItem {
@@ -111,6 +130,7 @@ impl DockItem {
             app,
             pin: PinState::Pinned,
             running: RunningState::Stopped,
+            launch_target: None,
         }
     }
 
@@ -131,7 +151,15 @@ impl DockItem {
                 focused,
                 minimized,
             },
+            launch_target: None,
         }
+    }
+
+    /// Associates the canonical launch resource with this entry.
+    #[must_use]
+    pub fn with_launch_target(mut self, launch_target: impl Into<String>) -> Self {
+        self.launch_target = Some(launch_target.into());
+        self
     }
 
     /// Returns the dock identity.
@@ -156,6 +184,12 @@ impl DockItem {
     #[must_use]
     pub const fn running(&self) -> &RunningState {
         &self.running
+    }
+
+    /// Borrows the canonical launch resource, when one was persisted.
+    #[must_use]
+    pub fn launch_target(&self) -> Option<&str> {
+        self.launch_target.as_deref()
     }
 }
 

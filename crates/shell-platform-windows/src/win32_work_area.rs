@@ -17,6 +17,24 @@ pub(super) fn window_work_area(hwnd: windows::Win32::Foundation::HWND) -> Result
     monitor_work_area(monitor)
 }
 
+pub(super) fn window_monitor_bounds(
+    hwnd: windows::Win32::Foundation::HWND,
+) -> Result<PhysicalRect> {
+    // SAFETY: Category 8 (FFI boundary). The nearest-monitor fallback always
+    // provides geometry for an owned shell window during topology changes.
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: Category 8 (FFI boundary). The monitor info buffer has the
+    // documented size and remains writable for the synchronous query.
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return Err(windows::core::Error::from_thread());
+    }
+    Ok(rect_from_win32(info.rcMonitor))
+}
+
 pub(super) fn window_monitor_id(hwnd: windows::Win32::Foundation::HWND) -> MonitorId {
     // SAFETY: Category 8 (FFI boundary). The default-nearest flag gives a stable
     // monitor handle for a live or recently moved shell HWND.

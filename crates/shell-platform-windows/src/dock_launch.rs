@@ -11,7 +11,14 @@ pub(crate) fn initial_launch_targets(state: &ShellState) -> HashMap<DockItemId, 
     state
         .dock_items()
         .iter()
-        .map(|item| (item.id(), item.app().as_str().to_owned()))
+        .map(|item| {
+            (
+                item.id(),
+                item.launch_target()
+                    .unwrap_or(item.app().as_str())
+                    .to_owned(),
+            )
+        })
         .collect()
 }
 

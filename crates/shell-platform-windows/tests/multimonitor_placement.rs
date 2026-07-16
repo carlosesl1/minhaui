@@ -1,9 +1,48 @@
-use shell_core::{MonitorId, WindowId};
-use shell_platform_windows::{
-    DockRuntimeConfig, FullscreenObservation, FullscreenPolicy, MonitorPlacementInput,
-    SlotReconcileAction, TaskbarEdge, plan_monitor_placements, reconcile_monitor_slots,
+use crate::{
+    DockEdgeGeometry, DockPhysicalPlacement, DockRuntimeConfig, FullscreenObservation,
+    FullscreenPolicy, MonitorPlacementInput, SlotReconcileAction, TaskbarEdge,
+    plan_monitor_placements, reconcile_monitor_slots,
 };
-use shell_renderer::{Dpi, PhysicalRect};
+use shell_core::{MonitorId, WindowId};
+use shell_renderer::{Dpi, PhysicalRect, ShellMetrics, dock_showcase_rect};
+
+#[test]
+fn hidden_reveal_strip_is_flush_with_the_secondary_monitor_work_area() {
+    // Given: a high-DPI secondary monitor whose visible dock has a bottom margin.
+    let work = PhysicalRect::new(1920, 0, 2560, 1400);
+    let dpi = Dpi::from_raw(144);
+    let normal = dock_showcase_rect(work, dpi, ShellMetrics::default());
+    let config = DockRuntimeConfig::default().with_autohide(true);
+
+    // When: the dock collapses to its reveal strip at that monitor's edge.
+    let hidden = DockPhysicalPlacement::from_visibility_at_edge(
+        normal,
+        config,
+        true,
+        dpi.scale(),
+        work.y + work.height,
+    );
+
+    // Then: the full-height HWND starts at the reveal edge and extends off-screen.
+    assert_eq!(hidden.rect().y, work.y + work.height - 12);
+    assert_eq!(hidden.rect().height, normal.height);
+}
+
+#[test]
+fn hidden_sensor_spans_the_physical_monitor_edge_when_the_work_area_is_inset() {
+    // Given: a dock inside an inset work area on a negative-coordinate monitor.
+    let monitor = PhysicalRect::new(-2560, -120, 2560, 1440);
+    let normal = PhysicalRect::new(-1760, 1200, 960, 83);
+    let geometry = DockEdgeGeometry::new(normal, monitor, 1.5);
+    let config = DockRuntimeConfig::default().with_autohide(true);
+
+    // When: the hidden edge sensor placement is calculated.
+    let hidden = DockPhysicalPlacement::from_visibility_at_monitor_edge(geometry, config, true);
+
+    // Then: the input surface spans the monitor and reaches its last physical row.
+    assert_eq!(hidden.rect(), PhysicalRect::new(-2560, 1308, 2560, 83));
+    assert!(hidden.is_hidden_strip());
+}
 
 #[test]
 fn positions_each_monitor_independently_with_signed_coordinates_and_dpi() {
@@ -32,13 +71,13 @@ fn positions_each_monitor_independently_with_signed_coordinates_and_dpi() {
     assert_eq!(placements[0].taskbar_edge(), TaskbarEdge::Bottom);
     assert_eq!(
         placements[0].dock().rect(),
-        PhysicalRect::new(440, 848, 1040, 180)
+        PhysicalRect::new(580, 981, 760, 55)
     );
     assert_eq!(placements[1].monitor(), MonitorId::new(2));
     assert_eq!(placements[1].taskbar_edge(), TaskbarEdge::Left);
     assert_eq!(
         placements[1].dock().rect(),
-        PhysicalRect::new(-2020, 1032, 1560, 270)
+        PhysicalRect::new(-1810, 1231, 1140, 83)
     );
 }
 

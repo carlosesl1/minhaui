@@ -9,6 +9,8 @@ This document is the visual and interaction contract for the Windows-native dock
 - Taste route: loaded the frontend design architecture, static image-to-code analysis, and premium/glass guidance. Retained dimensional glass, compact anchored surfaces, clear hierarchy, and one restrained dock-magnification signature; rejected website-scale whitespace, decorative spectacle, and non-native typography as inappropriate for a system utility.
 - Direction alternatives considered: (A) neutral Fluent utility, (B) bright acrylic shelf, (C) Obsidian Glass. Chose C because dark mineral tint makes status surfaces legible over varied desktops while remaining distinct from the references; Windows-native type, icons, focus, terminology, and adaptive-material behavior keep it original.
 - External research: no Lazyweb or Imagen lane was run because the user supplied a complete eight-image concrete reference set and explicitly requested an original translation. No Apple or MyDockFinder brand system was used.
+- Material reference update (2026-07-12): direct Figma MCP access to the user-supplied Materials node was validated after the app restart. The study confirmed transferable layering principles: moderate tint, background blur, a fine outer rim, restrained inner highlights, low-opacity shadow, and separate light/dark material strengths. No Figma assets, Apple symbols, names, or component geometry are shipped; Obsidian Glass retains Windows typography, Segoe MDL2 glyphs, original tokens, geometry, and Direct2D implementation.
+- Interaction reference update (2026-07-12): the user-supplied `apple-design` guidance was accepted only as a principles checklist. Obsidian Glass adopts immediate pointer-down feedback, interruptible state changes, source-anchored surfaces, restrained critically damped motion, hierarchy through material weight, and explicit reduced-motion/transparency behavior. Web APIs, Apple geometry, branded assets, fixed motion recipes, and platform-specific visual conventions are not implementation inputs.
 - Verification artifact: `.omo/evidence/task-1-reference-contact-sheet.png` is documentation QA only.
 
 ## 1. Atmosphere & Identity
@@ -67,8 +69,8 @@ Tokens are logical roles. Implementations may convert the values to the platform
 | Role | Token | Dark/default | Light | High-contrast behavior |
 |---|---|---:|---:|---|
 | Desktop scrim | `color.backdrop.scrim` | `#0A0D12B8` | `#FFFFFFA6` | Transparent; system canvas owns background. |
-| Surface base | `color.surface.base` | `#11151BEF` | `#F7F9FCEF` | `Canvas`. |
-| Surface raised | `color.surface.raised` | `#181D24F2` | `#FFFFFFF2` | `Canvas`. |
+| Surface base | `color.surface.base` | `#202226D2` | `#F7F9FCEF` | `Canvas`. |
+| Surface raised | `color.surface.raised` | `#FFFFFF0A` | `#FFFFFFF2` | `Canvas`. |
 | Surface solid fallback | `color.surface.solid` | `#171B21` | `#F5F7FA` | `Canvas`. |
 | Surface hover | `color.surface.hover` | `#FFFFFF12` | `#0B122012` | `Highlight` only when selected; otherwise system button face. |
 | Surface pressed | `color.surface.pressed` | `#FFFFFF1F` | `#0B12201F` | `Highlight`. |
@@ -77,8 +79,13 @@ Tokens are logical roles. Implementations may convert the values to the platform
 | Text secondary | `color.text.secondary` | `#B8C0CC` | `#4C5563` | `CanvasText`. |
 | Text muted | `color.text.muted` | `#8892A0` | `#687180` | `GrayText`. |
 | Text disabled | `color.text.disabled` | `#68717D` | `#929AA5` | `GrayText`. |
-| Rim outer | `color.rim.outer` | `#FFFFFF2B` | `#FFFFFFCC` | `ButtonBorder`. |
-| Rim inner | `color.rim.inner` | `#8FC2FF17` | `#0F6CBD12` | Omit decorative inner rim. |
+| Rim outer | `color.rim.outer` | `#00000040` | `#FFFFFFCC` | `ButtonBorder`. |
+| Rim inner | `color.rim.inner` | `#FFFFFF24` | `#0F6CBD12` | Omit decorative inner rim. |
+| Glass luminance | `color.glass.luminance` | `#4D4D4D4D` | `#FFFFFF3D` | Omit; use system canvas. |
+| Glass veil | `color.glass.veil` | `#1A1A1A1A` | `#FFFFFF1A` | Omit; use system canvas. |
+| Glass reflection | `color.glass.reflection` | `#FFFFFF14` | `#FFFFFF38` | Omit decorative reflection. |
+| Glass depth | `color.glass.depth` | `#16161618` | `#00000012` | Use system border. |
+| Glass inset edge | `color.glass.inset-edge` | `#808080` | `#808080` | Use system border. |
 | Divider | `color.divider` | `#FFFFFF1A` | `#121A241F` | `ButtonBorder`. |
 | Accent | `color.accent.default` | `#4C9AFF` | `#0F6CBD` | `Highlight`. |
 | Accent hover | `color.accent.hover` | `#71ADFF` | `#0B5CAD` | `Highlight`. |
@@ -153,18 +160,18 @@ All dimensions are DIPs and derive from 4px unless a 1px optical stroke or a mat
 |---|---:|---|
 | `radius.control` | 6 | Inputs, compact buttons, selected rows. |
 | `radius.tile` | 10 | Quick-setting tiles, media rows. |
-| `radius.popover` | 14 | Popovers and preview cards. |
-| `radius.dock` | 18 | Dock shell at default size. |
+| `radius.popover` | 12 | Compact top-bar menus and popovers. |
+| `radius.dock` | 15 | Responsive dock shell at the default 55 DIP height. |
 | `radius.round` | 999 | Circular icon button or slider thumb only. |
 
 Nested radii are concentric: inner radius equals outer radius minus inset. Do not apply pill geometry to ordinary panels, list rows, or text buttons.
 
 ### System-layer geometry
 
-- Top bar height: `32 DIP` default, optionally `36 DIP` compact-touch mode. Minimum target per item: `32 × 32 DIP`; settings touch mode raises targets to `40 × 40 DIP`.
-- Dock icon slot: `44 DIP` compact, `52 DIP` default, `60 DIP` large. Shell padding: `8 DIP`; item gap: `4 DIP`; separators have `16 DIP` visual height and `1 DIP` stroke.
+- Top bar height: `32 DIP` at 100% text scale, growing as `24 × text scale + 8 DIP` up to `68 DIP` at 250%. The fixed `4 DIP` top and bottom insets are preserved so enlarged text never overflows vertically. Minimum target per item: `32 × 32 DIP`; settings touch mode raises targets to `40 × 40 DIP`.
+- Dock icon slot: `36 DIP` default with contained hover magnification up to `43.92 DIP`. Shell padding: `8 DIP`; item gap: `9 DIP`; separators reserve `11 DIP` and use a centered `1 DIP` stroke. The default shell height is `55 DIP`.
 - Dock maximum width: work-area width minus `32 DIP` per side. Overflow becomes a labeled “More apps” item; never shrink targets below configured compact size.
-- Popover widths: `320 DIP` compact, `360 DIP` standard, `440 DIP` detailed. Maximum height: work-area height minus `32 DIP`; internal content scrolls while header/footer remain stable.
+- Top-bar menu width: `244 DIP`, with `12 DIP` horizontal insets and `24 DIP` rows. Rich popovers remain `320 DIP` compact, `360 DIP` standard, or `440 DIP` detailed. Maximum height: work-area height minus `32 DIP`; internal content scrolls while header/footer remain stable.
 - Preview card: `320 × 200 DIP` preferred, up to `400 × 240 DIP`; preview groups wrap into a bounded grid before scrolling.
 - Settings: navigation rail `232 DIP`, content max `760 DIP`, outer gutters `24 DIP` at standard and `16 DIP` below `720 DIP` available width. Collapse to a navigation page rather than icon-only rail when narrow.
 
@@ -335,6 +342,16 @@ The strategy is **mixed tonal shift plus restrained elevation**. Glass is a five
 
 No scrolling child panel applies backdrop blur. Internal grouping uses tonal shifts, spacing, and dividers.
 
+The default dock material is the native Direct2D translation of the supplied glass recipe:
+
+- radius `15 DIP`;
+- ordered neutral fills `#4D4D4D4D`, `#1A1A1A1A`, and `#FFFFFF14`;
+- `0.5 DIP` outer outline using `#00000040`;
+- paired inset edge shadows `0 ±2.5px 1.5px -2.5px #808080`;
+- paired inset depth shadows `0 ±16px 16px -16px #161616`.
+
+The neutral blend stack is composited in the same back-to-front order as the reference. A premultiplied 2D signed-distance mask consumes every shadow's offset, blur, spread, and color before Direct2D composites it over the rounded body. The mask is cached per dock surface so corners and lateral falloff remain deterministic without adding work to hover redraws on Windows 10, WARP, remote sessions, or reduced-effects fallbacks.
+
 ### Elevation
 
 | Token | Windows/CSS-equivalent intent | Use |
@@ -374,7 +391,7 @@ Step-down must be observable in diagnostics but silent in ordinary use. Never lo
 
 - Product icons: use one thin-to-regular Windows-compatible family, preferably Microsoft Fluent UI System Icons under its applicable open-source license. Pin the package/version and retain required notices.
 - Platform glyphs: `Segoe Fluent Icons` may be used only through Windows font availability and documented glyph semantics; provide a licensed fallback and accessible label.
-- Runtime app icons: extract through supported Windows shell APIs from installed apps. Cache by application identity and DPI; do not redistribute them in the installer.
+- Runtime app icons: extract through supported Windows shell APIs from installed apps and running executables. Cache device bitmaps by application identity/source and recreate them after device loss; do not redistribute them in the installer. A future user-selected icon override may replace the resolved source without changing the app identity; absence of an override always returns to the Windows-provided icon.
 - Media artwork and thumbnails: display only data returned by Windows APIs for the active session/window, honor protected content, cache ephemerally, and provide privacy-safe placeholders.
 - Weather artwork: use licensed original or approved icon-family glyphs with attribution/notice as required.
 - No emojis as product icons. No ad hoc traced SVGs, CSS-drawn copies, scraped tray icons, Apple glyphs/logos, SF Symbols, SF Pro, MyDockFinder imagery, screenshot crops, or copied third-party chrome.
@@ -390,7 +407,7 @@ These are contract-level unknowns, not permission to ship inaccessible behavior.
 | DD-02 | Final runtime icon fallback coverage for packaged, unpackaged, and legacy Win32 apps. | Minor; users of apps with missing/corrupt icons. | Windows identity/API investigation belongs to implementation. A labeled placeholder is already required. | Shell integration owner; close with fixture matrix and licensed placeholder. |
 | DD-03 | Weather provider attribution placement and exact consent copy. | Minor; weather users and privacy-sensitive users. | No provider is selected. Weather stays unconfigured/off until selection and disclosure. | Product/privacy owner; close before enabling weather network calls. |
 | DD-04 | Tray/integration scope beyond app-owned integrations. | Note; users expecting full notification-area parity. | Arbitrary tray mirroring is deliberately excluded from V1 due to API, trust, and accessibility risk. | Product owner; revisit only with documented Windows API feasibility and a new design review. |
-| DD-05 | Primitive showcase and rendered state validation. | Minor pre-implementation debt; all personas. | No UI implementation exists in Task 1. The contract defines the required harness and states. | UI owner; must close before composing product screens. |
+| DD-05 | Primitive showcase and rendered state validation. | Closed in the responsive shell milestone. | Dock and topbar primitives now have native rest, focus, running, attention, overflow, auto-hide, solid-fallback, and multi-monitor evidence. | Closed; reopen only when a new reusable shell primitive is introduced. |
 
 ### Design-system change rule
 

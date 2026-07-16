@@ -1,9 +1,9 @@
-use shell_core::{AppId, DockItem, DockItemId, RunningState, ShellState, WindowId};
-use shell_platform_windows::{
+use crate::{
     ContextMenuCommand, DockController, DockPointerPhase, DockPointerSample, DockRuntimeConfig,
     ObservedWindow, PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
     QueuedDockAction,
 };
+use shell_core::{AppId, DockItem, DockItemId, RunningState, ShellState, WindowId};
 use shell_renderer::{DipPoint, DipRect, WindowPreviewVisual};
 
 fn app(value: &str) -> Result<AppId, Box<dyn std::error::Error>> {
@@ -34,7 +34,7 @@ fn hover_exposes_window_preview_without_changing_running_state()
     // When: the pointer hovers the running item.
     controller.handle_pointer(DockPointerSample::new(
         DockPointerPhase::Moved,
-        DipPoint::new(130.0, 48.0),
+        DipPoint::new(130.0, 26.0),
     ))?;
 
     // Then: the scene exposes one preview and keeps the dock item focused.
@@ -75,7 +75,7 @@ fn preview_degrades_explicitly_when_capture_is_restricted() -> Result<(), Box<dy
     // When: the pointer hovers the running item.
     controller.handle_pointer(DockPointerSample::new(
         DockPointerPhase::Moved,
-        DipPoint::new(130.0, 48.0),
+        DipPoint::new(130.0, 26.0),
     ))?;
 
     // Then: the scene carries the explicit restriction instead of an invented bitmap.
@@ -140,14 +140,14 @@ fn preview_context_commands_route_to_hovered_window_actions()
     .with_preview(PreviewCapture::dwm_thumbnail())])?;
     controller.handle_pointer(DockPointerSample::new(
         DockPointerPhase::Moved,
-        DipPoint::new(130.0, 48.0),
+        DipPoint::new(130.0, 26.0),
     ))?;
 
     // When: native menu command IDs select preview focus and close.
     let focus = controller
-        .handle_context_menu(DipPoint::new(130.0, 48.0), ContextMenuCommand::PreviewFocus)?;
+        .handle_context_menu(DipPoint::new(130.0, 26.0), ContextMenuCommand::PreviewFocus)?;
     let close = controller
-        .handle_context_menu(DipPoint::new(130.0, 48.0), ContextMenuCommand::PreviewClose)?;
+        .handle_context_menu(DipPoint::new(130.0, 26.0), ContextMenuCommand::PreviewClose)?;
 
     // Then: the same safe preview platform actions are emitted through input routing.
     assert_eq!(

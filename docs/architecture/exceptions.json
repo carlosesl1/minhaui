@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "id": "ARCH-EX-001",
+      "file": "crates/shell-renderer/src/native_showcase_dock_states.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "draw_dock_states",
+      "owner": "renderer",
+      "reason": "The showcase renderer currently receives drawing resources individually.",
+      "risk": "The shallow signature makes resource ownership harder to evolve.",
+      "compensation": "The function is isolated to the showcase renderer and strict Clippy remains enabled elsewhere.",
+      "expires": "2026-07-29",
+      "removal_plan": "Group role-specific drawing resources into an owned render context after the baseline is green."
+    },
+    {
+      "id": "ARCH-EX-002",
+      "file": "crates/shell-platform-windows/src/win32_owner.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "handle_event",
+      "owner": "platform-runtime",
+      "reason": "RuntimeSurfaces currently coordinates five native windows during event dispatch.",
+      "risk": "Runtime ownership and mutation remain concentrated in one shallow call.",
+      "compensation": "The allow is function-scoped and runtime behavior remains covered by the deterministic platform suite.",
+      "expires": "2026-07-29",
+      "removal_plan": "Introduce one runtime-session window context with explicit ownership after baseline stabilization."
+    },
+    {
+      "id": "ARCH-EX-003",
+      "file": "crates/shell-platform-windows/src/win32_owner.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "apply_preview_effects",
+      "owner": "platform-runtime",
+      "reason": "Preview effects currently coordinate all native shell surfaces.",
+      "risk": "Preview changes can couple unrelated surface ownership.",
+      "compensation": "The allow is function-scoped and preview transitions retain focused tests.",
+      "expires": "2026-07-29",
+      "removal_plan": "Move preview effect application behind a preview runtime Module with a narrow surface context."
+    },
+    {
+      "id": "ARCH-EX-004",
+      "file": "crates/shell-platform-windows/src/win32_popover_render.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "apply_topbar_actions",
+      "owner": "platform-overlays",
+      "reason": "Topbar actions currently dismiss or reposition multiple native overlays.",
+      "risk": "Overlay lifecycle knowledge is repeated across action handlers.",
+      "compensation": "The allow is function-scoped and existing topbar/controller tests remain required.",
+      "expires": "2026-07-29",
+      "removal_plan": "Create one overlay surface context shared by topbar, popover and settings action application."
+    },
+    {
+      "id": "ARCH-EX-005",
+      "file": "crates/shell-platform-windows/src/win32_popover_render.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "open_dock_context_menu",
+      "owner": "platform-overlays",
+      "reason": "Opening the context menu currently coordinates every transient shell window.",
+      "risk": "Context-menu changes can affect unrelated surfaces through positional arguments.",
+      "compensation": "The allow is function-scoped and context-menu interaction tests remain required.",
+      "expires": "2026-07-29",
+      "removal_plan": "Use the shared overlay surface context and keep context-menu state in its owning Module."
+    },
+    {
+      "id": "ARCH-EX-006",
+      "file": "crates/shell-platform-windows/src/win32_popover_render.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "apply_context_menu_actions",
+      "owner": "platform-overlays",
+      "reason": "Context-menu effects currently receive all native surfaces individually.",
+      "risk": "The signature exposes orchestration details to an action-specific method.",
+      "compensation": "The allow is function-scoped and deterministic context-menu tests remain required.",
+      "expires": "2026-07-29",
+      "removal_plan": "Apply typed overlay effects through the shared overlay surface context."
+    },
+    {
+      "id": "ARCH-EX-007",
+      "file": "crates/shell-platform-windows/src/win32_popover_render.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "apply_popover_actions",
+      "owner": "platform-overlays",
+      "reason": "Popover effects currently receive all native surfaces individually.",
+      "risk": "The signature duplicates overlay lifecycle knowledge and broadens change impact.",
+      "compensation": "The allow is function-scoped and popover controller tests remain required.",
+      "expires": "2026-07-29",
+      "removal_plan": "Apply typed popover effects through the shared overlay surface context."
+    }
+  ]
+}

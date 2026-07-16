@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
-use shell_renderer::DipPoint;
 use windows::Win32::Foundation::HWND;
 
 use crate::{NativeEventTarget, NativeWindowId, PlatformEvent};
@@ -39,7 +38,6 @@ impl RoutedPlatformEvent {
 }
 
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<RoutedPlatformEvent>>> = OnceLock::new();
-static LAST_CONTEXT_POINT: OnceLock<Mutex<Option<DipPoint>>> = OnceLock::new();
 static DRAGGING_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 
 pub(super) fn queue_event(event: RoutedPlatformEvent) {
@@ -53,19 +51,6 @@ pub(super) fn next_event() -> Option<RoutedPlatformEvent> {
     EVENT_QUEUE
         .get()
         .and_then(|queue| queue.lock().ok()?.pop_front())
-}
-
-pub(super) fn set_last_context_point(point: DipPoint) {
-    let state = LAST_CONTEXT_POINT.get_or_init(|| Mutex::new(None));
-    if let Ok(mut value) = state.lock() {
-        *value = Some(point);
-    }
-}
-
-pub(super) fn last_context_point() -> Option<DipPoint> {
-    LAST_CONTEXT_POINT
-        .get()
-        .and_then(|state| state.lock().ok().and_then(|value| *value))
 }
 
 pub(super) fn set_dragging(hwnd: HWND, dragging: bool) {

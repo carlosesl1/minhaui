@@ -28,6 +28,10 @@ macro_rules! numeric_id {
 
 numeric_id!(MonitorId, "A stable identifier for one display monitor.");
 numeric_id!(DockItemId, "A stable identifier for one dock entry.");
+numeric_id!(
+    DockSeparatorId,
+    "A stable identifier for one user-created dock separator."
+);
 numeric_id!(WindowId, "A stable identifier for a platform window.");
 
 /// A validated application identity used for launch intents.
@@ -41,7 +45,7 @@ impl AppId {
         let valid_length = !value.is_empty() && value.len() <= 128;
         let valid_characters = value
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'!'));
         if valid_length && valid_characters {
             Ok(Self(value.to_owned()))
         } else {
@@ -76,6 +80,23 @@ impl fmt::Display for AppId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum AppIdError {
     /// The identifier was empty, too long, or contained unsupported characters.
-    #[error("application identifier must be 1..=128 ASCII letters, digits, '.', '-' or '_'")]
+    #[error("application identifier must be 1..=128 ASCII letters, digits, '.', '-', '_' or '!'")]
     Invalid,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppId;
+
+    #[test]
+    fn packaged_windows_aumid_is_a_valid_application_identity() {
+        let aumid = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
+
+        let parsed = AppId::parse(aumid);
+
+        assert!(
+            parsed.is_ok(),
+            "official Windows AUMID was rejected: {aumid}"
+        );
+    }
 }

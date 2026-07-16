@@ -1,24 +1,26 @@
+use shell_core::{AppId, Effect, ShellState, WindowId};
 use std::ffi::c_void;
-use std::path::Path;
-
-use shell_core::{AppId, Effect, WindowId};
-use windows::Win32::Foundation::{CloseHandle, HWND};
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowThreadProcessId, PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL,
-    SetForegroundWindow, ShowWindow, WM_CLOSE,
+    PostMessageW, SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WM_CLOSE,
 };
-use windows::core::{PCWSTR, PWSTR, Result, w};
+use windows::core::{PCWSTR, Result, w};
 
 use crate::{PreviewQueuedAction, QueuedDockAction};
 
-pub(super) fn apply_dock_actions(actions: &[QueuedDockAction]) -> Result<bool> {
+pub(super) fn apply_dock_actions(actions: &[QueuedDockAction], state: &ShellState) -> Result<bool> {
+    if actions.iter().any(|action| {
+        matches!(
+            action,
+            QueuedDockAction::Effect(Effect::PersistConfiguration)
+        )
+    }) {
+        crate::win32_config::persist_dock_state(state)?;
+    }
     for action in actions {
         match action {
-            QueuedDockAction::Launch(target) => launch(target)?,
+            QueuedDockAction::Launch(target) => launch_or_log(target),
             QueuedDockAction::Effect(effect) => apply_effect(effect)?,
             QueuedDockAction::Preview(action) => apply_preview_action(action.clone())?,
             QueuedDockAction::Quit => return Ok(false),
@@ -41,7 +43,10 @@ fn apply_preview_action(action: PreviewQueuedAction) -> Result<()> {
 
 fn apply_effect(effect: &Effect) -> Result<()> {
     match effect {
-        Effect::Launch(app) => launch(app.as_str()),
+        Effect::Launch(app) => {
+            launch_or_log(app.as_str());
+            Ok(())
+        }
         Effect::FocusWindow(window) => {
             focus(*window);
             Ok(())
@@ -57,7 +62,9 @@ fn apply_effect(effect: &Effect) -> Result<()> {
 }
 
 fn launch(target: &str) -> Result<()> {
-    let target = shell_target(target);
+    let target = crate::win32_app_identity::resolve_launch_target(target).ok_or_else(|| {
+        windows::core::Error::new(invalid_arg(), "launch target is not trusted or registered")
+    })?;
     let wide = target.encode_utf16().chain([0]).collect::<Vec<_>>();
     // SAFETY: Category 8 (FFI boundary). Verb and show command are documented,
     // and the target buffer is null-terminated and live for the synchronous call.
@@ -78,6 +85,39 @@ fn launch(target: &str) -> Result<()> {
         ))
     } else {
         Ok(())
+    }
+}
+
+fn launch_or_log(target: &str) {
+    let diagnostic_target = diagnostic_launch_target(target);
+    match launch(target) {
+        Ok(()) => crate::diagnostics::record(
+            crate::diagnostics::DiagnosticModule::DockLaunch,
+            crate::diagnostics::LogLevel::Info,
+            "dock.launch.succeeded",
+            &[("target", diagnostic_target)],
+        ),
+        Err(error) => {
+            let message = error.to_string();
+            crate::diagnostics::record(
+                crate::diagnostics::DiagnosticModule::DockLaunch,
+                crate::diagnostics::LogLevel::Error,
+                "dock.launch.failed",
+                &[("target", diagnostic_target), ("error", &message)],
+            );
+        }
+    }
+}
+
+fn diagnostic_launch_target(target: &str) -> &'static str {
+    if target.eq_ignore_ascii_case("taskmgr.exe") {
+        "task-manager"
+    } else if matches!(target, "app.calculator" | "calculator" | "calc.exe") {
+        "calculator"
+    } else if matches!(target, "app.notepad" | "notepad" | "notepad.exe") {
+        "notepad"
+    } else {
+        "custom"
     }
 }
 
@@ -110,51 +150,13 @@ fn close_if_current(window: WindowId, app: &AppId) -> Result<()> {
 
 fn window_matches_app(window: WindowId, app: &AppId) -> bool {
     let hwnd = hwnd_from_id(window);
-    window_app(hwnd).as_ref() == Some(app)
+    window_app(hwnd)
+        .as_ref()
+        .is_some_and(|window_app| crate::dock_window_sync::app_ids_match(window_app, app))
 }
 
 fn window_app(hwnd: HWND) -> Option<AppId> {
-    let mut process = 0;
-    // SAFETY: Category 8 (FFI boundary). The process-id out pointer is valid for
-    // the duration of the call; invalid or recycled HWNDs yield no trusted app.
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process)) };
-    process_app(process)
-}
-
-fn process_app(process: u32) -> Option<AppId> {
-    if process == 0 {
-        return None;
-    }
-    // SAFETY: Category 8 (FFI boundary). PROCESS_QUERY_LIMITED_INFORMATION is a
-    // documented read-only access right for process image-name queries.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process) }.ok()?;
-    let mut buffer = vec![0_u16; 32_768];
-    let mut length = buffer.len() as u32;
-    // SAFETY: Category 8 (FFI boundary). The buffer is writable and `length`
-    // points to its capacity on input and receives the UTF-16 length on output.
-    let result = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut length,
-        )
-    };
-    // SAFETY: Category 8 (FFI boundary). The handle was returned by OpenProcess
-    // in this function and is closed exactly once.
-    let _ = unsafe { CloseHandle(handle) };
-    result.ok()?;
-    let path = String::from_utf16_lossy(&buffer[..length as usize]);
-    let file = Path::new(&path).file_name()?.to_str()?.to_ascii_lowercase();
-    AppId::parse(&file).ok()
-}
-
-fn shell_target(target: &str) -> String {
-    match target {
-        "app.calculator" | "calculator" => "calc.exe".to_owned(),
-        "app.notepad" | "notepad" => "notepad.exe".to_owned(),
-        value => value.to_owned(),
-    }
+    crate::win32_app_identity::app_for_window(hwnd).map(|identity| identity.app().clone())
 }
 
 fn hwnd_from_id(window: WindowId) -> HWND {
@@ -167,9 +169,7 @@ const fn invalid_arg() -> windows::core::HRESULT {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use shell_core::{AppId, WindowId};
+    use shell_core::{AppId, ShellState, WindowId};
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -179,11 +179,36 @@ mod tests {
     };
     use windows::core::{PCWSTR, Result, w};
 
-    use crate::PreviewQueuedAction;
+    use crate::{PreviewQueuedAction, QueuedDockAction};
 
-    use super::{apply_preview_action, window_matches_app};
+    use super::{
+        apply_dock_actions, apply_preview_action, diagnostic_launch_target, window_matches_app,
+    };
 
     const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.ActionTestWindow.v1");
+
+    #[test]
+    fn failed_application_launch_keeps_the_dock_running() {
+        // Given: an application target that the trusted resolver rejects.
+        let actions = [QueuedDockAction::Launch(
+            "missing-relative-app.exe".to_owned(),
+        )];
+
+        // When: the native action boundary attempts the launch.
+        let outcome = apply_dock_actions(&actions, &ShellState::default());
+
+        // Then: the failure is handled without terminating the shell loop.
+        assert!(outcome.is_ok_and(|keep_running| keep_running));
+    }
+
+    #[test]
+    fn launch_diagnostics_never_persist_custom_paths() {
+        assert_eq!(diagnostic_launch_target("taskmgr.exe"), "task-manager");
+        assert_eq!(
+            diagnostic_launch_target(r"C:\Users\Carlos\Private\secret.exe"),
+            "custom"
+        );
+    }
 
     #[test]
     fn preview_focus_and_close_actions_use_native_window_input_path() -> Result<()> {
@@ -265,7 +290,7 @@ mod tests {
     fn current_test_app() -> Result<AppId> {
         let exe = std::env::current_exe()
             .map_err(|error| windows::core::Error::new(super::invalid_arg(), error.to_string()))?;
-        let file = Path::new(&exe)
+        let file = exe
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or_else(|| windows::core::Error::new(super::invalid_arg(), "missing test exe"))?

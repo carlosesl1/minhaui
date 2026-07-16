@@ -15,11 +15,10 @@ pub(super) fn sample_dock_controller() -> Result<DockController> {
         DockItem::pinned(DockItemId::new(2), parse_app("calc.exe")?),
         DockItem::pinned(DockItemId::new(3), parse_app("explorer.exe")?),
     ];
-    let mut controller = DockController::new(
-        ShellState::default().with_dock_items(items),
-        DockRuntimeConfig::default().with_autohide(true),
-    )
-    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+    let state = crate::win32_config::load_dock_state(ShellState::default().with_dock_items(items));
+    let mut controller =
+        DockController::new(state, DockRuntimeConfig::default().with_autohide(true))
+            .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
     if std::env::var_os("MINHA_UI_QA_RESTRICTED_PREVIEW").is_some() {
         controller
             .sync_running_windows_with_previews(&[ObservedWindow::new(

@@ -88,19 +88,49 @@ pub struct ShellMetrics {
 impl Default for ShellMetrics {
     fn default() -> Self {
         Self {
-            topbar_margin_x_dip: 9.6,
-            topbar_margin_top_dip: 8.0,
+            topbar_margin_x_dip: 0.0,
+            topbar_margin_top_dip: 0.0,
             topbar_height_dip: 32.0,
-            dock_width_dip: 1040.0,
-            dock_height_dip: 180.0,
-            dock_margin_bottom_dip: 12.0,
+            dock_width_dip: 760.0,
+            dock_height_dip: 55.0,
+            dock_margin_bottom_dip: 4.0,
         }
     }
+}
+
+impl ShellMetrics {
+    #[must_use]
+    pub const fn with_topbar_height(mut self, height_dip: f32) -> Self {
+        self.topbar_height_dip = height_dip;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_dock_width(mut self, width_dip: f32) -> Self {
+        self.dock_width_dip = width_dip;
+        self
+    }
+
+    #[must_use]
+    pub const fn dock_height_dip(self) -> f32 {
+        self.dock_height_dip
+    }
+}
+
+#[must_use]
+pub fn topbar_height_for_text_scale(text_scale: f32) -> f32 {
+    24.0 * text_scale.clamp(1.0, 2.5) + 8.0
 }
 
 #[must_use]
 pub fn physical_from_dip(dip: f32, dpi: Dpi) -> i32 {
     (dip * dpi.scale()).round() as i32
+}
+
+#[must_use]
+pub fn logical_surface_rect(width: u32, height: u32, dpi: Dpi) -> DipRect {
+    let scale = dpi.scale();
+    DipRect::new(0.0, 0.0, width as f32 / scale, height as f32 / scale)
 }
 
 #[must_use]
@@ -122,7 +152,7 @@ pub fn dock_showcase_rect(
     dpi: Dpi,
     metrics: ShellMetrics,
 ) -> PhysicalRect {
-    let width = physical_from_dip(metrics.dock_width_dip, dpi);
+    let width = physical_from_dip(metrics.dock_width_dip, dpi).clamp(1, work_area.width.max(1));
     let height = physical_from_dip(metrics.dock_height_dip, dpi);
     let bottom = physical_from_dip(metrics.dock_margin_bottom_dip, dpi);
     PhysicalRect::new(
@@ -134,6 +164,7 @@ pub fn dock_showcase_rect(
 }
 
 #[must_use]
+#[cfg(test)]
 pub const fn apply_dpi_suggested_rect(
     _current: PhysicalRect,
     suggested: PhysicalRect,

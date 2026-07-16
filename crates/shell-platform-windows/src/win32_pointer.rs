@@ -1,9 +1,40 @@
-use shell_renderer::{DipPoint, Dpi};
+use shell_renderer::{DipPoint, Dpi, PhysicalRect};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DockCursorLocation {
+    PhysicalBottom,
+    Dock,
+    ApproachCorridor,
+    Away,
+}
+
+pub(super) fn dock_cursor_location(
+    hwnd: HWND,
+    dock_rect: PhysicalRect,
+) -> Option<DockCursorLocation> {
+    let mut cursor = POINT::default();
+    // SAFETY: Category 8 (FFI boundary). `cursor` is writable storage for the
+    // synchronous global cursor-position query.
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return None;
+    }
+    let monitor = crate::win32_work_area::window_monitor_bounds(hwnd).ok()?;
+    if crate::dock_edge_detection::cursor_hits_physical_bottom(monitor, cursor.x, cursor.y) {
+        Some(DockCursorLocation::PhysicalBottom)
+    } else if crate::dock_edge_detection::cursor_inside_rect(dock_rect, cursor.x, cursor.y) {
+        Some(DockCursorLocation::Dock)
+    } else if crate::dock_edge_detection::cursor_inside_approach_corridor(
+        monitor, dock_rect, cursor.x, cursor.y,
+    ) {
+        Some(DockCursorLocation::ApproachCorridor)
+    } else {
+        Some(DockCursorLocation::Away)
+    }
+}
 
 pub(super) fn track_mouse_leave(hwnd: HWND) {
     let mut event = TRACKMOUSEEVENT {
@@ -30,25 +61,4 @@ pub(super) fn client_physical_point(lparam: LPARAM) -> POINT {
         x: (lparam.0 as u16) as i16 as i32,
         y: ((lparam.0 >> 16) as u16) as i16 as i32,
     }
-}
-
-pub(super) fn cursor_client_point(hwnd: HWND) -> Option<DipPoint> {
-    let mut point = POINT::default();
-    // SAFETY: Category 8 (FFI boundary). The pointer to POINT is valid for the
-    // synchronous cursor-position query.
-    if unsafe { GetCursorPos(&mut point) }.is_err() {
-        return None;
-    }
-    // SAFETY: Category 8 (FFI boundary). The HWND is live during dispatch and
-    // `point` is valid mutable storage for the screen-to-client conversion.
-    if !unsafe { ScreenToClient(hwnd, &mut point) }.as_bool() {
-        return None;
-    }
-    // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
-    let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
-    let scale = dpi.scale();
-    Some(DipPoint::new(
-        point.x as f32 / scale,
-        point.y as f32 / scale,
-    ))
 }

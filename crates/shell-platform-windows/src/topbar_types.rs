@@ -109,6 +109,10 @@ impl TopbarSnapshot {
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained as a privacy-safe snapshot accessor for diagnostics"
+    )]
     pub fn clock(&self) -> &str {
         &self.clock
     }
@@ -165,10 +169,7 @@ pub struct ThroughputLabel {
 impl ThroughputLabel {
     #[must_use]
     pub fn text(self) -> String {
-        format!(
-            "{} KiB/s down {} KiB/s up",
-            self.received_kib_s, self.sent_kib_s
-        )
+        format!("↓ {}K  ↑ {}K", self.received_kib_s, self.sent_kib_s)
     }
 }
 

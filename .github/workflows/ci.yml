@@ -3,6 +3,13 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_native_validation:
+        description: Run tests that require the controlled Windows desktop image
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,12 +30,14 @@ jobs:
           components: clippy,rustfmt
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
+      - name: Check architecture policy
+        run: powershell -NoProfile -File scripts/Check-Architecture.ps1
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace
       - name: Build release binaries
         run: cargo build --workspace --release
       - name: Install supply-chain tools
@@ -39,3 +48,21 @@ jobs:
         run: cargo audit
       - name: Check dependencies and licenses
         run: cargo deny check advisories bans licenses sources
+
+  native-windows-validation:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_native_validation }}
+    runs-on: [self-hosted, windows, x64, obsidian-native-validation]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: clippy,rustfmt
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate installed package and shell integration
+        run: cargo test -p shell-platform-windows --features native-validation --lib
+      - name: Validate native AppBar startup
+        run: cargo test -p shell-app --features native-validation --test showcase_startup

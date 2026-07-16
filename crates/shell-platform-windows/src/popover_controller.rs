@@ -4,7 +4,9 @@ use std::error::Error;
 use std::fmt;
 
 use shell_core::Popover;
-use shell_renderer::{PopoverContentState, PopoverRow, PopoverScene};
+use shell_renderer::{
+    DipPoint, DipRect, PopoverContentState, PopoverRow, PopoverScene, layout_popover_scene,
+};
 
 use crate::{
     PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
@@ -35,6 +37,14 @@ impl PopoverController {
         }
     }
 
+    pub fn dismiss(&mut self) -> Vec<QueuedPopoverAction> {
+        if self.active.take().is_some() {
+            vec![QueuedPopoverAction::Dismiss]
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn open<P: PopoverDataProvider>(
         &mut self,
         kind: Popover,
@@ -56,11 +66,27 @@ impl PopoverController {
             PopoverKey::Next => active.focus_delta(1),
             PopoverKey::Previous => active.focus_delta(-1),
             PopoverKey::Activate => active.activate(),
-            PopoverKey::Escape => {
-                self.active = None;
-                vec![QueuedPopoverAction::Dismiss]
-            }
+            PopoverKey::Escape => self.dismiss(),
         }
+    }
+
+    pub fn handle_pointer(
+        &mut self,
+        point: DipPoint,
+        surface: DipRect,
+    ) -> Vec<QueuedPopoverAction> {
+        let Some(active) = &mut self.active else {
+            return Vec::new();
+        };
+        let scene = active.scene();
+        let Some(index) = layout_popover_scene(&scene, surface).hit_test(point) else {
+            return Vec::new();
+        };
+        if !active.items[index].enabled() {
+            return Vec::new();
+        }
+        active.focused = Some(index);
+        active.activate()
     }
 
     #[must_use]
@@ -183,6 +209,10 @@ impl IntoPayload for PopoverLoadState {
 
 #[derive(Debug)]
 pub enum PopoverControllerError {
+    #[expect(
+        dead_code,
+        reason = "reserved for typed popover adapter failures at the controller boundary"
+    )]
     Data(PopoverDataError),
 }
 

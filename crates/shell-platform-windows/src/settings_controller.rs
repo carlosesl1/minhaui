@@ -9,6 +9,13 @@ use shell_config::{
 use shell_renderer::{SettingsRow, SettingsScene};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "settings editing is not yet wired to the native form"
+    )
+)]
 pub enum SettingsEdit {
     DockItemSize(u16),
     DockSpacing(u16),
@@ -57,6 +64,10 @@ pub struct SettingsController {
     focus: usize,
 }
 
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "settings editing is an internal incremental seam")
+)]
 impl SettingsController {
     #[must_use]
     pub fn new(config: ShellConfigV1) -> Self {
@@ -161,6 +172,13 @@ impl SettingsController {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "settings editing is not yet wired to the native form"
+    )
+)]
 fn apply_edit(config: &ShellConfigV1, edit: SettingsEdit) -> ShellConfigV1 {
     match edit {
         SettingsEdit::DockItemSize(value) => {

@@ -10,8 +10,9 @@ pub(super) fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
         return LRESULT(HTTRANSPARENT as isize);
     }
-    let screen_x = (lparam.0 as u16) as i16 as i32;
-    let screen_y = ((lparam.0 >> 16) as u16) as i16 as i32;
+    let coordinates = lparam.0.to_ne_bytes();
+    let screen_x = i32::from(i16::from_ne_bytes([coordinates[0], coordinates[1]]));
+    let screen_y = i32::from(i16::from_ne_bytes([coordinates[2], coordinates[3]]));
     // SAFETY: Category 8 (FFI boundary). The window remains live during its callback,
     // so querying its effective DPI is valid.
     let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
@@ -34,6 +35,20 @@ fn radius(height: i32, dpi: Dpi) -> f32 {
     if height <= physical_from_dip(40.0, dpi) {
         12.0
     } else {
-        22.0
+        15.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::radius;
+    use shell_renderer::Dpi;
+
+    #[test]
+    fn dock_hit_test_uses_the_rendered_corner_radius_at_each_dpi() {
+        for dpi in [Dpi::from_raw(96), Dpi::from_raw(144), Dpi::from_raw(192)] {
+            let height = shell_renderer::physical_from_dip(55.0, dpi);
+            assert_eq!(radius(height, dpi), 15.0);
+        }
     }
 }

@@ -2,7 +2,12 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use windows::core::Result;
 
-use crate::win32::{SYNC_TIMER_ID, TIMER_ID};
+use crate::win32::{
+    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, PREVIEW_TIMER_ID, SYNC_TIMER_ID, TIMER_ID,
+};
+
+const DOCK_ANIMATION_INTERVAL_MS: u32 = 16;
+const DOCK_EDGE_PROBE_INTERVAL_MS: u32 = 25;
 
 pub(super) struct TimerGuard {
     hwnd: HWND,
@@ -11,18 +16,29 @@ pub(super) struct TimerGuard {
 
 impl TimerGuard {
     pub(super) fn start(hwnd: HWND, milliseconds: u32) -> Result<Self> {
-        Self::start_id(hwnd, TIMER_ID, milliseconds)
+        Self::start_id(hwnd, TIMER_ID, milliseconds.clamp(100, 60_000))
     }
 
     pub(super) fn start_sync(hwnd: HWND) -> Result<Self> {
         Self::start_id(hwnd, SYNC_TIMER_ID, 1_000)
     }
 
+    pub(super) fn start_dock_animation(hwnd: HWND) -> Result<Self> {
+        Self::start_id(hwnd, DOCK_ANIMATION_TIMER_ID, DOCK_ANIMATION_INTERVAL_MS)
+    }
+
+    pub(super) fn start_dock_edge_probe(hwnd: HWND) -> Result<Self> {
+        Self::start_id(hwnd, DOCK_EDGE_PROBE_TIMER_ID, DOCK_EDGE_PROBE_INTERVAL_MS)
+    }
+
+    pub(super) fn start_preview(hwnd: HWND) -> Result<Self> {
+        Self::start_id(hwnd, PREVIEW_TIMER_ID, 16)
+    }
+
     fn start_id(hwnd: HWND, id: usize, milliseconds: u32) -> Result<Self> {
-        let bounded = milliseconds.clamp(100, 60_000);
         // SAFETY: Category 8 (FFI boundary). The live HWND owns the numeric timer;
         // messages are delivered to its window procedure without a callback pointer.
-        let timer = unsafe { SetTimer(Some(hwnd), id, bounded, None) };
+        let timer = unsafe { SetTimer(Some(hwnd), id, milliseconds, None) };
         if timer == 0 {
             return Err(windows::core::Error::from_thread());
         }
@@ -35,5 +51,15 @@ impl Drop for TimerGuard {
         // SAFETY: Category 8 (FFI boundary). This guard uniquely owns its timer id and
         // cancellation occurs before its HWND owner is dropped.
         let _ = unsafe { KillTimer(Some(self.hwnd), self.id) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DOCK_ANIMATION_INTERVAL_MS;
+
+    #[test]
+    fn dock_animation_timer_matches_the_frame_budget() {
+        assert_eq!(DOCK_ANIMATION_INTERVAL_MS, 16);
     }
 }

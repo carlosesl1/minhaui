@@ -71,6 +71,7 @@ pub struct TopbarScene {
     density: TopbarDensity,
     modules: Vec<TopbarModuleVisual>,
     focused_module: Option<TopbarModuleKind>,
+    text_scale: f32,
 }
 
 impl TopbarScene {
@@ -80,6 +81,7 @@ impl TopbarScene {
             density,
             modules,
             focused_module: None,
+            text_scale: 1.0,
         }
     }
 
@@ -99,8 +101,19 @@ impl TopbarScene {
     }
 
     #[must_use]
+    pub const fn text_scale(&self) -> f32 {
+        self.text_scale
+    }
+
+    #[must_use]
     pub const fn with_focused_module(mut self, focused_module: Option<TopbarModuleKind>) -> Self {
         self.focused_module = focused_module;
+        self
+    }
+
+    #[must_use]
+    pub fn with_text_scale(mut self, text_scale: f32) -> Self {
+        self.text_scale = text_scale.clamp(1.0, 2.5);
         self
     }
 }

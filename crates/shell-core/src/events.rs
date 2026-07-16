@@ -1,6 +1,6 @@
 use crate::{
-    AppId, DockItem, DockItemId, Monitor, MonitorId, PerformancePreset, Popover, ShellState,
-    StateError, TaskbarPolicy, TopbarModuleKind, WindowId,
+    AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, Monitor, MonitorId,
+    PerformancePreset, Popover, ShellState, StateError, TaskbarPolicy, TopbarModuleKind, WindowId,
 };
 use thiserror::Error;
 
@@ -48,6 +48,15 @@ pub enum ShellEvent {
     ReorderDockItem {
         item: DockItemId,
         before: Option<DockItemId>,
+    },
+    AddDockSeparator {
+        separator: DockSeparatorId,
+        before: Option<DockLayoutEntry>,
+    },
+    RemoveDockSeparator(DockSeparatorId),
+    ReorderDockEntry {
+        entry: DockLayoutEntry,
+        before: Option<DockLayoutEntry>,
     },
     /// Opens the exclusive popover slot.
     OpenPopover(Popover),
@@ -129,6 +138,10 @@ pub enum TransitionError {
     /// A new dock entry reused an existing identity.
     #[error("duplicate dock item {0:?}")]
     DuplicateDockItem(DockItemId),
+    #[error("unknown dock layout entry {0:?}")]
+    UnknownDockLayoutEntry(DockLayoutEntry),
+    #[error("duplicate dock separator {0:?}")]
+    DuplicateDockSeparator(DockSeparatorId),
     /// A top-bar module was not configured.
     #[error("unknown topbar module {0:?}")]
     UnknownTopbarModule(TopbarModuleKind),

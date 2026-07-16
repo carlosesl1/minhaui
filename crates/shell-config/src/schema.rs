@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use shell_core::{
-    Accessibility, DockItem, PerformancePreset, TaskbarPolicy, TopbarModule, TopbarModuleKind,
+    Accessibility, DockItem, DockLayoutEntry, PerformancePreset, PinState, TaskbarPolicy,
+    TopbarModule, TopbarModuleKind,
 };
 use thiserror::Error;
 
@@ -24,6 +25,8 @@ pub struct ShellConfigV1 {
     accessibility: Accessibility,
     performance: PerformancePreset,
     dock_items: Vec<DockItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dock_layout: Vec<DockLayoutEntry>,
     topbar_modules: Vec<TopbarModule>,
     #[serde(default)]
     dock: DockSettings,
@@ -46,6 +49,7 @@ impl Default for ShellConfigV1 {
             accessibility: Accessibility::new(false, false, true),
             performance: PerformancePreset::Balanced,
             dock_items: Vec::new(),
+            dock_layout: Vec::new(),
             topbar_modules: default_topbar(),
             dock: DockSettings::default(),
             topbar: TopbarSettings::default(),
@@ -67,6 +71,42 @@ impl ShellConfigV1 {
         }
         if !all_unique(self.dock_items.iter().map(DockItem::id)) {
             return Err(ConfigError::DuplicateDockItem);
+        }
+        if !all_unique(self.dock_layout.iter().copied()) {
+            return Err(ConfigError::DuplicateDockLayoutEntry);
+        }
+        if !all_unique(
+            self.dock_layout
+                .iter()
+                .copied()
+                .map(DockLayoutEntry::visual_id),
+        ) {
+            return Err(ConfigError::AmbiguousDockVisualIdentity);
+        }
+        if self.dock_layout.iter().any(|entry| {
+            matches!(entry, DockLayoutEntry::Separator(separator) if self.dock_items.iter().any(|item| item.id().value() == separator.value()))
+        }) {
+            return Err(ConfigError::AmbiguousDockVisualIdentity);
+        }
+        if !self.dock_layout.is_empty() {
+            let layout_apps = self
+                .dock_layout
+                .iter()
+                .filter_map(|entry| match entry {
+                    DockLayoutEntry::App(id) => Some(*id),
+                    DockLayoutEntry::Separator(_) => None,
+                })
+                .collect::<HashSet<_>>();
+            if self.dock_layout.iter().any(|entry| {
+                matches!(entry, DockLayoutEntry::App(id) if !self.dock_items.iter().any(|item| item.id() == *id && item.pin() == PinState::Pinned))
+            }) || self
+                .dock_items
+                .iter()
+                .filter(|item| item.pin() == PinState::Pinned)
+                .any(|item| !layout_apps.contains(&item.id()))
+            {
+                return Err(ConfigError::InvalidDockLayout);
+            }
         }
         if !all_unique(self.topbar_modules.iter().map(|module| module.kind())) {
             return Err(ConfigError::DuplicateTopbarModule);
@@ -123,6 +163,20 @@ impl ShellConfigV1 {
     #[must_use]
     pub fn dock_items(&self) -> &[DockItem] {
         &self.dock_items
+    }
+    #[must_use]
+    pub fn with_dock_items(mut self, dock_items: Vec<DockItem>) -> Self {
+        self.dock_items = dock_items;
+        self
+    }
+    #[must_use]
+    pub fn dock_layout(&self) -> &[DockLayoutEntry] {
+        &self.dock_layout
+    }
+    #[must_use]
+    pub fn with_dock_layout(mut self, dock_layout: Vec<DockLayoutEntry>) -> Self {
+        self.dock_layout = dock_layout;
+        self
     }
     /// Borrows persisted top-bar modules in order.
     #[must_use]
@@ -289,6 +343,7 @@ impl ConfigV0 {
             accessibility: Accessibility::new(self.reduced_motion, false, true),
             performance: self.performance,
             dock_items: Vec::new(),
+            dock_layout: Vec::new(),
             topbar_modules: default_topbar(),
             dock: DockSettings::default(),
             topbar: TopbarSettings::default(),
@@ -302,11 +357,11 @@ impl ConfigV0 {
 fn default_topbar() -> Vec<TopbarModule> {
     [
         TopbarModuleKind::SystemMenu,
-        TopbarModuleKind::Clock,
         TopbarModuleKind::Network,
         TopbarModuleKind::Volume,
         TopbarModuleKind::Power,
         TopbarModuleKind::Notifications,
+        TopbarModuleKind::Clock,
     ]
     .into_iter()
     .map(|kind| TopbarModule::new(kind, true))
@@ -333,6 +388,12 @@ pub enum ConfigError {
     /// Dock entry identities were not unique.
     #[error("dock item identities must be unique")]
     DuplicateDockItem,
+    #[error("dock layout entries must be unique")]
+    DuplicateDockLayoutEntry,
+    #[error("dock apps and separators must not share a visual identity")]
+    AmbiguousDockVisualIdentity,
+    #[error("dock layout must reference every pinned app exactly once")]
+    InvalidDockLayout,
     /// Top-bar module kinds were not unique.
     #[error("topbar module kinds must be unique")]
     DuplicateTopbarModule,

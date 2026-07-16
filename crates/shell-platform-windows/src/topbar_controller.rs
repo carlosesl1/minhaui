@@ -17,11 +17,13 @@ use crate::{
 pub struct TopbarController {
     state: ShellState,
     density: TopbarDensity,
+    text_scale: f32,
     surface: DipRect,
     snapshot: TopbarSnapshot,
     pressed_intent: Option<Popover>,
     focused_module: Option<TopbarModuleKind>,
     visual_generation: u64,
+    #[cfg(test)]
     resource_generation: u64,
 }
 
@@ -31,31 +33,40 @@ impl TopbarController {
         Ok(Self {
             state,
             density,
+            text_scale: 1.0,
             surface: DipRect::new(0.0, 0.0, 1.0, 1.0),
             snapshot: TopbarSnapshot::default(),
             pressed_intent: None,
             focused_module: None,
             visual_generation: 0,
+            #[cfg(test)]
             resource_generation: 0,
         })
     }
 
     #[must_use]
+    #[expect(dead_code, reason = "retained for focused controller diagnostics")]
     pub const fn state(&self) -> &ShellState {
         &self.state
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn snapshot(&self) -> &TopbarSnapshot {
         &self.snapshot
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained for parity with dock render generation diagnostics"
+    )]
     pub const fn visual_generation(&self) -> u64 {
         self.visual_generation
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn resource_generation(&self) -> u64 {
         self.resource_generation
     }
@@ -66,6 +77,10 @@ impl TopbarController {
 
     pub const fn update_density(&mut self, density: TopbarDensity) {
         self.density = density;
+    }
+
+    pub fn update_text_scale(&mut self, text_scale: f32) {
+        self.text_scale = text_scale.clamp(1.0, 2.5);
     }
 
     pub fn update_snapshot(&mut self, snapshot: TopbarSnapshot) {
@@ -79,6 +94,7 @@ impl TopbarController {
     pub fn scene(&self) -> TopbarScene {
         TopbarScene::new(self.density, self.visible_modules())
             .with_focused_module(self.focused_module)
+            .with_text_scale(self.text_scale)
     }
 
     pub fn handle_pointer(
@@ -204,42 +220,42 @@ impl TopbarController {
         match kind {
             TopbarModuleKind::SystemMenu => visual(
                 kind,
-                "Menu",
+                "\u{E700}",
                 "Minha UI",
                 TopbarModuleStatus::Neutral,
                 Popover::SystemMenu,
             ),
             TopbarModuleKind::Clock => visual(
                 kind,
-                "Time",
+                "\u{E823}",
                 &self.snapshot.clock,
                 TopbarModuleStatus::Neutral,
                 Popover::Calendar,
             ),
             TopbarModuleKind::Network => visual(
                 kind,
-                "Net",
+                "\u{E701}",
                 &network_text(&self.snapshot.network),
                 network_status(&self.snapshot.network),
                 Popover::Network,
             ),
             TopbarModuleKind::Volume => visual(
                 kind,
-                "Vol",
+                "\u{E767}",
                 &format!("{}%", self.snapshot.volume_percent),
                 TopbarModuleStatus::Neutral,
                 Popover::Volume,
             ),
             TopbarModuleKind::Power => visual(
                 kind,
-                "Pwr",
+                "\u{E83F}",
                 &self.snapshot.battery.label(),
                 power_status(self.snapshot.battery),
                 Popover::Power,
             ),
             TopbarModuleKind::Notifications => visual(
                 kind,
-                "Bell",
+                "\u{E7F4}",
                 notification_text(self.snapshot.notifications),
                 TopbarModuleStatus::Neutral,
                 Popover::Notifications,

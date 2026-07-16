@@ -13,6 +13,24 @@ pub struct DockPhysicalPlacement {
     hidden_strip: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DockEdgeGeometry {
+    normal: PhysicalRect,
+    monitor: PhysicalRect,
+    scale: f32,
+}
+
+impl DockEdgeGeometry {
+    #[must_use]
+    pub const fn new(normal: PhysicalRect, monitor: PhysicalRect, scale: f32) -> Self {
+        Self {
+            normal,
+            monitor,
+            scale,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskbarEdge {
     None,
@@ -57,11 +75,19 @@ impl MonitorPlacementInput {
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained as a complete value-object accessor for monitor adapters"
+    )]
     pub const fn work_area(self) -> PhysicalRect {
         self.work_area
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained as a complete value-object accessor for monitor adapters"
+    )]
     pub const fn dpi(self) -> Dpi {
         self.dpi
     }
@@ -85,6 +111,10 @@ impl FullscreenObservation {
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "retained for diagnostics of fullscreen observations"
+    )]
     pub const fn window(self) -> WindowId {
         self.window
     }
@@ -238,6 +268,17 @@ impl DockPhysicalPlacement {
         hidden: bool,
         scale: f32,
     ) -> Self {
+        Self::from_visibility_at_edge(normal, config, hidden, scale, normal.y + normal.height)
+    }
+
+    #[must_use]
+    pub fn from_visibility_at_edge(
+        normal: PhysicalRect,
+        config: DockRuntimeConfig,
+        hidden: bool,
+        scale: f32,
+        edge_y: i32,
+    ) -> Self {
         if !hidden || !config.autohide() {
             return Self {
                 rect: normal,
@@ -245,13 +286,38 @@ impl DockPhysicalPlacement {
             };
         }
         let reveal_height = (config.reveal_zone_height() * scale).ceil() as i32;
-        let height = reveal_height.clamp(1, normal.height.max(1));
+        let reveal_height = reveal_height.clamp(1, normal.height.max(1));
         Self {
             rect: PhysicalRect::new(
                 normal.x,
-                normal.y + normal.height - height,
+                edge_y - reveal_height,
                 normal.width,
-                height,
+                normal.height,
+            ),
+            hidden_strip: true,
+        }
+    }
+
+    #[must_use]
+    pub fn from_visibility_at_monitor_edge(
+        geometry: DockEdgeGeometry,
+        config: DockRuntimeConfig,
+        hidden: bool,
+    ) -> Self {
+        if !hidden || !config.autohide() {
+            return Self {
+                rect: geometry.normal,
+                hidden_strip: false,
+            };
+        }
+        let reveal_height = (config.reveal_zone_height() * geometry.scale).ceil() as i32;
+        let reveal_height = reveal_height.clamp(1, geometry.normal.height.max(1));
+        Self {
+            rect: PhysicalRect::new(
+                geometry.monitor.x,
+                geometry.monitor.y + geometry.monitor.height - reveal_height,
+                geometry.monitor.width,
+                geometry.normal.height,
             ),
             hidden_strip: true,
         }
@@ -263,7 +329,22 @@ impl DockPhysicalPlacement {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn is_hidden_strip(self) -> bool {
         self.hidden_strip
     }
+}
+
+#[must_use]
+pub const fn resolve_dock_visibility(
+    config: DockRuntimeConfig,
+    revealed: bool,
+    fullscreen_suppressed: bool,
+) -> (DockRuntimeConfig, bool) {
+    let effective_config = if fullscreen_suppressed {
+        config.with_autohide(true)
+    } else {
+        config
+    };
+    (effective_config, !revealed)
 }

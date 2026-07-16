@@ -1,0 +1,22 @@
+{
+  "packages": [
+    {
+      "name": "shell-core",
+      "id": "shell-core 0.1.0",
+      "dependencies": [
+        { "name": "shell-platform-windows", "path": "../shell-platform-windows" }
+      ]
+    },
+    {
+      "name": "shell-platform-windows",
+      "id": "shell-platform-windows 0.1.0",
+      "dependencies": [
+        { "name": "shell-core", "path": "../shell-core" }
+      ]
+    }
+  ],
+  "workspace_members": [
+    "shell-core 0.1.0",
+    "shell-platform-windows 0.1.0"
+  ]
+}

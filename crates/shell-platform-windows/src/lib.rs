@@ -1,5 +1,7 @@
 #![deny(unsafe_code)]
 
+mod diagnostics;
+
 #[cfg(windows)]
 #[allow(
     unsafe_code,
@@ -14,14 +16,49 @@ mod win32;
 )]
 mod win32_windowing;
 
+mod dock_edge_detection;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 action dispatch is isolated here")]
 mod win32_actions;
+mod win32_config;
 
 #[cfg(windows)]
-#[allow(unsafe_code, reason = "Win32 popup menu dispatch is isolated here")]
-mod win32_context_menu;
+#[allow(unsafe_code, reason = "Win32 AppBar registration is isolated here")]
+mod win32_appbar;
 
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "Win32 AppBar FFI calls are isolated here")]
+mod win32_appbar_ffi;
+
+#[cfg(all(windows, test))]
+mod win32_appbar_tests;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 executable identity lookup is isolated here"
+)]
+mod win32_app_identity;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Documented DWM backdrop calls are isolated here"
+)]
+mod win32_backdrop;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows package identity and installed-path queries are isolated here"
+)]
+mod win32_package_icon;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Hosted Win32 window identity lookup is isolated here"
+)]
+mod win32_window_identity;
+
+#[cfg(windows)]
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 window discovery is isolated here")]
 mod win32_discovery;
@@ -33,6 +70,9 @@ mod win32_owner;
 mod win32_slots;
 
 #[cfg(windows)]
+mod win32_slot_lifecycle;
+
+#[cfg(windows)]
 #[allow(
     unsafe_code,
     reason = "Win32 pointer coordinate helpers are isolated here"
@@ -41,6 +81,11 @@ mod win32_pointer;
 
 #[cfg(windows)]
 mod win32_dock_render;
+mod win32_dock_visibility;
+#[cfg(windows)]
+mod win32_surface_runtime;
+#[cfg(windows)]
+mod win32_topbar_render;
 
 #[cfg(windows)]
 mod win32_event_queue;
@@ -55,6 +100,7 @@ mod win32_drop;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 non-client hit testing is isolated here")]
 mod win32_hit_test;
+mod win32_installed_package_icons;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 QA timer ownership is isolated here")]
@@ -75,9 +121,17 @@ mod win32_work_area;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "DWM thumbnail probing is isolated here")]
 mod win32_preview;
-
+#[cfg(windows)]
+mod win32_preview_geometry;
+#[cfg(windows)]
+mod win32_preview_interaction;
 #[cfg(windows)]
 mod win32_preview_qa;
+#[cfg(windows)]
+mod win32_preview_render;
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "DWM source sizing is isolated here")]
+mod win32_preview_source;
 
 #[cfg(windows)]
 mod win32_sample_state;
@@ -85,87 +139,125 @@ mod win32_sample_state;
 #[cfg(windows)]
 mod win32_popover_render;
 
+mod dock_context_menu;
 mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
+mod dock_controller_visibility;
 mod dock_launch;
 mod dock_placement;
 mod dock_types;
+mod dock_visibility_motion;
 mod dock_visuals;
 mod dock_window_sync;
 mod native_event_route;
 mod popover_adapters;
 mod popover_controller;
 mod popover_types;
+mod preview_controller;
+mod preview_motion;
 mod runtime;
 mod settings_controller;
 mod topbar_controller;
 mod topbar_types;
 mod window_preview;
 
-pub use dock_controller::DockController;
-pub use dock_placement::{
-    DockPhysicalPlacement, FullscreenObservation, FullscreenPolicy, MonitorPlacementInput,
-    MonitorShellPlacement, SlotReconcileAction, TaskbarEdge, plan_monitor_placements,
-    reconcile_monitor_slots, taskbar_edge,
+#[cfg(test)]
+mod integration_tests;
+
+pub(crate) use dock_context_menu::{
+    DockContextMenuController, DockContextMenuItem, QueuedContextMenuAction,
 };
-pub use dock_types::{
+pub(crate) use dock_controller::DockController;
+#[cfg(test)]
+pub(crate) use dock_placement::TaskbarEdge;
+pub(crate) use dock_placement::{
+    DockEdgeGeometry, DockPhysicalPlacement, FullscreenObservation, FullscreenPolicy,
+    MonitorPlacementInput, SlotReconcileAction, plan_monitor_placements, reconcile_monitor_slots,
+    resolve_dock_visibility,
+};
+pub(crate) use dock_types::{
     ContextMenuCommand, DockAnimator, DockControllerError, DockKey, DockPointerPhase,
     DockPointerSample, DockRuntimeConfig, QueuedDockAction,
 };
-pub use dock_window_sync::ObservedWindow;
-pub use native_event_route::{
+pub(crate) use dock_visibility_motion::DockVisibilityMotion;
+pub(crate) use dock_window_sync::ObservedWindow;
+pub(crate) use native_event_route::{
     NativeEventTarget, NativeRouteDecision, NativeWindowId, NativeWindowSlot,
     route_native_event_to_slot,
 };
-pub use popover_adapters::{DefaultPopoverDataProvider, OfflineWeatherProvider};
-pub use popover_controller::{PopoverController, PopoverControllerError};
-pub use popover_types::{
+pub(crate) use popover_adapters::{DefaultPopoverDataProvider, OfflineWeatherProvider};
+pub(crate) use popover_controller::PopoverController;
+pub(crate) use popover_types::{
     PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
     PopoverLoadState, PopoverPayload, QueuedPopoverAction, SessionAction, WeatherAccess,
     WeatherItem, WeatherProvider,
 };
-pub use runtime::{
+#[cfg(test)]
+pub(crate) use preview_controller::{PREVIEW_BRIDGE_MS, PREVIEW_DWELL_MS};
+pub(crate) use preview_controller::{PreviewController, PreviewEffect, PreviewPhase};
+pub(crate) use preview_motion::{PreviewEntranceMotion, PreviewMotionSpec};
+pub(crate) use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
 };
-pub use settings_controller::{
-    QueuedSettingsAction, SettingsController, SettingsEdit, SettingsError, SettingsKey,
-    SettingsSection,
-};
-pub use topbar_controller::{TopbarController, TopbarControllerError};
-pub use topbar_types::{
-    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, ThroughputLabel, TopbarKey,
-    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot,
+pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, SettingsKey};
+#[cfg(test)]
+pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
+pub(crate) use topbar_controller::TopbarController;
+pub(crate) use topbar_types::{
+    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarPointerPhase,
+    TopbarPointerSample, TopbarSnapshot,
 };
 #[cfg(windows)]
 pub use win32::{ShowcaseRunConfig, run_showcase};
-pub use window_preview::{
+pub(crate) use window_preview::{
     PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
+    PreviewWindowState,
 };
 
-use shell_renderer::{DipPoint, DipRect, PhysicalRect, rounded_content_hit};
+use shell_renderer::{DipPoint, PhysicalRect};
+#[cfg(test)]
+use shell_renderer::{DipRect, rounded_content_hit};
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum PlatformEvent {
+pub(crate) enum PlatformEvent {
     TaskbarCreated,
+    AppBarPositionChanged,
     DpiChanged(PhysicalRect),
     DisplayChanged,
     PowerResumed,
     DeviceLost,
     DockPointer(DockPointerSample),
+    DockEdgeProbe,
+    DockAnimationFrame,
+    PreviewTimer,
+    PreviewPointerMoved(DipPoint),
+    PreviewPointerPressed(DipPoint),
+    PreviewPointerReleased(DipPoint),
+    PreviewDismissed,
     DockKey(DockKey),
     TopbarPointer(TopbarPointerSample),
     TopbarKey(TopbarKey),
+    #[expect(
+        dead_code,
+        reason = "native menu command dispatch remains an internal compatibility seam"
+    )]
     DockContextMenu {
         point: DipPoint,
         command: ContextMenuCommand,
+    },
+    DockContextMenuRequested {
+        point: DipPoint,
     },
     DockDrop {
         point: DipPoint,
         path: String,
     },
     PopoverKey(PopoverKey),
+    PopoverPointer(DipPoint),
+    PopoverPointerMoved(DipPoint),
+    DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SyncWindows,
     QaExitRequested,
@@ -173,8 +265,18 @@ pub enum PlatformEvent {
     Destroyed,
 }
 
+#[must_use]
+pub(crate) const fn popover_activation_event(active: bool) -> Option<PlatformEvent> {
+    if active {
+        None
+    } else {
+        Some(PlatformEvent::DismissTransientOverlays)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LifecycleMessage {
+#[cfg(test)]
+pub(crate) enum LifecycleMessage {
     TaskbarCreated(u32),
     DpiChanged(PhysicalRect),
     DisplayChanged,
@@ -185,7 +287,8 @@ pub enum LifecycleMessage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HitRegion {
+#[cfg(test)]
+pub(crate) enum HitRegion {
     Interactive,
     Transparent,
 }
@@ -196,7 +299,8 @@ pub const fn crate_identity() -> &'static str {
 }
 
 #[must_use]
-pub const fn translate_lifecycle_message(
+#[cfg(test)]
+pub(crate) const fn translate_lifecycle_message(
     message_id: u32,
     lifecycle_message: LifecycleMessage,
 ) -> Option<PlatformEvent> {
@@ -215,7 +319,8 @@ pub const fn translate_lifecycle_message(
 }
 
 #[must_use]
-pub fn classify_hit_test(bounds: DipRect, radius: f32, point: DipPoint) -> HitRegion {
+#[cfg(test)]
+pub(crate) fn classify_hit_test(bounds: DipRect, radius: f32, point: DipPoint) -> HitRegion {
     if rounded_content_hit(bounds, radius, point) {
         HitRegion::Interactive
     } else {

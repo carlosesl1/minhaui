@@ -16,6 +16,7 @@ impl Rgba8 {
 }
 
 #[must_use]
+#[cfg(test)]
 pub const fn premultiply_srgb(color: Rgba8) -> Rgba8 {
     Rgba8::new(
         premultiply_channel(color.r, color.a),
@@ -25,6 +26,7 @@ pub const fn premultiply_srgb(color: Rgba8) -> Rgba8 {
     )
 }
 
+#[cfg(test)]
 const fn premultiply_channel(channel: u8, alpha: u8) -> u8 {
     ((channel as u16 * alpha as u16 + 127) / 255) as u8
 }

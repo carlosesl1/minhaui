@@ -1,10 +1,11 @@
-use shell_core::Popover;
-use shell_platform_windows::{
+use crate::{
     DefaultPopoverDataProvider, PopoverAction, PopoverController, PopoverDataError,
     PopoverDataProvider, PopoverKey, PopoverPayload, QueuedPopoverAction, SessionAction,
 };
+use shell_core::Popover;
 use shell_renderer::{
-    DipRect, Dpi, PhysicalRect, PopoverContentState, layout_popover_scene, popover_anchor_rect,
+    DipPoint, DipRect, Dpi, PhysicalRect, PopoverContentState, layout_popover_scene,
+    popover_anchor_rect, popover_anchor_rect_with_height, popover_height_for_rows,
 };
 
 #[test]
@@ -33,7 +34,7 @@ fn popover_keyboard_navigation_and_confirmation_are_shared_across_modules()
     assert_eq!(
         second,
         vec![QueuedPopoverAction::TypedIntent(
-            shell_platform_windows::PopoverAction::ConfirmSession(SessionAction::SignOut)
+            crate::PopoverAction::ConfirmSession(SessionAction::SignOut)
         )]
     );
     Ok(())
@@ -61,6 +62,24 @@ fn system_menu_settings_activation_emits_open_settings_intent()
 }
 
 #[test]
+fn system_menu_rows_activate_from_pointer_input() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = DefaultPopoverDataProvider::offline();
+    let mut controller = PopoverController::new();
+    controller.open(Popover::SystemMenu, &provider)?;
+    let actions = controller.handle_pointer(
+        DipPoint::new(24.0, 17.0),
+        DipRect::new(0.0, 0.0, 244.0, 82.0),
+    );
+    assert_eq!(
+        actions,
+        vec![QueuedPopoverAction::TypedIntent(
+            PopoverAction::OpenSettings
+        )]
+    );
+    Ok(())
+}
+
+#[test]
 fn popover_layout_anchors_inside_monitor_work_area_at_current_dpi()
 -> Result<(), Box<dyn std::error::Error>> {
     // Given: a right-edge topbar anchor on a scaled secondary monitor.
@@ -73,8 +92,60 @@ fn popover_layout_anchors_inside_monitor_work_area_at_current_dpi()
     // Then: it stays inside that monitor and uses the token-driven popover size.
     assert!(rect.x >= work.x);
     assert!(rect.x + rect.width <= work.x + work.width);
-    assert_eq!(rect.width, 540);
+    assert_eq!(rect.width, 366);
     assert_eq!(rect.height, 630);
+    Ok(())
+}
+
+#[test]
+fn compact_popover_height_tracks_content_rows() {
+    assert_eq!(popover_height_for_rows(3), 82.0);
+    let work = PhysicalRect::new(0, 0, 1920, 1080);
+    let anchor = PhysicalRect::new(1600, 0, 120, 32);
+    let rect = popover_anchor_rect_with_height(
+        anchor,
+        work,
+        Dpi::from_raw(96),
+        popover_height_for_rows(3),
+    );
+    assert_eq!(rect.height, 82);
+}
+
+#[test]
+fn menu_rows_match_the_compact_figma_rhythm() -> Result<(), Box<dyn std::error::Error>> {
+    // Given: three topbar menu choices in the compact native menu surface.
+    let mut controller = PopoverController::new();
+    controller.open(Popover::SystemMenu, &DefaultPopoverDataProvider::offline())?;
+    let scene = controller.scene().ok_or("missing system menu")?;
+
+    // When: the menu rows are laid out at the Figma node's intrinsic width.
+    let layout = layout_popover_scene(&scene, DipRect::new(0.0, 0.0, 244.0, 82.0));
+
+    // Then: 12-DIP side insets and 24-DIP rows replace the former card layout.
+    assert_eq!(layout.rows().len(), 3);
+    assert_eq!(
+        layout.rows()[0].bounds(),
+        DipRect::new(12.0, 5.0, 220.0, 24.0)
+    );
+    assert_eq!(
+        layout.rows()[1].bounds(),
+        DipRect::new(12.0, 29.0, 220.0, 24.0)
+    );
+    assert_eq!(
+        layout.rows()[2].bounds(),
+        DipRect::new(12.0, 53.0, 220.0, 24.0)
+    );
+    Ok(())
+}
+
+#[test]
+fn dismiss_clears_active_popover_and_is_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = PopoverController::new();
+    controller.open(Popover::Calendar, &DefaultPopoverDataProvider::offline())?;
+    assert_eq!(controller.active_kind(), Some(Popover::Calendar));
+    assert_eq!(controller.dismiss(), vec![QueuedPopoverAction::Dismiss]);
+    assert_eq!(controller.active_kind(), None);
+    assert!(controller.dismiss().is_empty());
     Ok(())
 }
 

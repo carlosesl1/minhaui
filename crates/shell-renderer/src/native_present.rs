@@ -1,7 +1,8 @@
 use windows::Win32::Foundation::D2DERR_RECREATE_TARGET;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_PRESENT, IDXGISwapChain1,
+    DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_ERROR_WAS_STILL_DRAWING, DXGI_PRESENT,
+    DXGI_PRESENT_DO_NOT_WAIT, IDXGISwapChain1,
 };
 use windows::core::{HRESULT, Result};
 
@@ -15,6 +16,7 @@ pub enum DeviceLossKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresentOutcome {
     Presented,
+    FrameSkipped,
     DeviceLost(DeviceLossKind),
     Failed(HRESULT),
 }
@@ -23,6 +25,8 @@ pub enum PresentOutcome {
 pub const fn classify_present_hresult(code: HRESULT) -> PresentOutcome {
     if code.0 >= 0 {
         PresentOutcome::Presented
+    } else if code.0 == DXGI_ERROR_WAS_STILL_DRAWING.0 {
+        PresentOutcome::FrameSkipped
     } else if code.0 == DXGI_ERROR_DEVICE_REMOVED.0 {
         PresentOutcome::DeviceLost(DeviceLossKind::Removed)
     } else if code.0 == DXGI_ERROR_DEVICE_RESET.0 {
@@ -54,9 +58,25 @@ pub(crate) fn present_swap_chain(
     swap_chain: &IDXGISwapChain1,
     device: &ID3D11Device,
 ) -> Result<PresentOutcome> {
+    present_swap_chain_with(swap_chain, device, 0, DXGI_PRESENT_DO_NOT_WAIT)
+}
+
+pub(crate) fn present_swap_chain_blocking(
+    swap_chain: &IDXGISwapChain1,
+    device: &ID3D11Device,
+) -> Result<PresentOutcome> {
+    present_swap_chain_with(swap_chain, device, 1, DXGI_PRESENT(0))
+}
+
+fn present_swap_chain_with(
+    swap_chain: &IDXGISwapChain1,
+    device: &ID3D11Device,
+    sync_interval: u32,
+    flags: DXGI_PRESENT,
+) -> Result<PresentOutcome> {
     // SAFETY: Category 8 (FFI boundary). The owned swap chain is live and default
     // presentation flags do not carry additional pointers.
-    let code = unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) };
+    let code = unsafe { swap_chain.Present(sync_interval, flags) };
     let outcome = classify_present_hresult(code);
     if let PresentOutcome::DeviceLost(kind) = outcome {
         // SAFETY: Category 8 (FFI boundary). The D3D11 device is retained by the
