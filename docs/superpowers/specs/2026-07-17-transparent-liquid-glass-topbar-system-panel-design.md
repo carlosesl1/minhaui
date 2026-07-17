@@ -37,6 +37,14 @@ A controlled translucent mineral base, fine bright rim, soft static refraction, 
 
 Stronger violet cast, bloom, and refraction. It is visually distinctive but creates unnecessary contrast risk over bright or saturated wallpapers.
 
+### Technical backdrop alternatives
+
+The Windows DWM transient system backdrop was prototyped and rejected. Desktop Acrylic is applied to the rectangular bounds of the top-level window, so the system-painted layer remains visible behind the custom rounded panel even when the application content and Win32 window region are clipped.
+
+The selected implementation uses a Windows UI Composition visual tree. A blurred-wallpaper backdrop brush is confined to a rounded `SpriteVisual`, while the existing premultiplied-alpha swap-chain content is hosted above it as a composition surface. This keeps the pixels outside the panel contour transparent without capturing desktop icons or application windows.
+
+Undocumented accent-policy Acrylic and manual desktop capture were rejected. The former is version-sensitive and can reproduce the same rectangular artifact; the latter adds privacy, synchronization, multi-monitor, and performance complexity that is unnecessary for this surface.
+
 ## 4. Visual Thesis
 
 **The bar disappears into the desktop; glass appears only where interaction exists.**
@@ -67,8 +75,14 @@ The design avoids neon glow, milky blur, nested glass cards, and decorative grad
 ### 5.3 System panel
 
 - Use the selected balanced liquid-glass profile: mineral translucent base, fine outer rim, restrained inner highlight, soft static refraction, and deep neutral shadow.
+- Calibrate the stacked panel layers to an effective smoked-glass opacity of approximately `72%` in the central reading area, leaving about `28%` wallpaper transmission. This target applies to the final composite, not to each individual brush alpha.
+- Keep desktop details perceptible only as subdued shapes; icons and wallpaper text must not compete with menu labels or shortcuts.
+- Keep the DWM system backdrop disabled for the popover HWND. The renderer must not rely on the top-level window backdrop for panel blur.
+- For a `SystemPanel`, host the existing DXGI swap chain in a Windows UI Composition desktop target and place a blurred-wallpaper `SpriteVisual` behind it.
+- Size and round the backdrop visual to the panel body only. The window area outside that visual, including the transparent area around the anchor notch and rounded corners, must retain zero alpha.
+- Compact popovers and dock context menus continue to use their existing composition path without the blurred-wallpaper visual.
 - Keep refraction static. The panel does not track the pointer with a moving specular highlight.
-- Preserve a solid Obsidian Glass fallback when transparency is disabled, forced colors are active, the renderer uses WARP, or material creation fails.
+- Preserve the existing `72%` smoked-glass rendering when the blurred-wallpaper brush is unavailable or rejected. Preserve a solid Obsidian Glass fallback when transparency is disabled, forced colors are active, or material creation fails. Neither fallback may enable a rectangular DWM backdrop.
 - Use one continuous panel surface. Rows are not individual cards.
 
 ### 5.4 Shared renderer resource
@@ -150,6 +164,7 @@ Only the `Minha UI` scene adopts the new grouping in the first delivery. Other p
 - Unit tests for grouped row layout, section spacing, scrolling, hit testing, and keyboard order.
 - Scene tests proving that existing `Minha UI` labels and actions are preserved.
 - Renderer tests proving the top bar does not receive a full-surface fill in transparent mode.
+- Renderer tests proving that only `SystemPanel` requests the blurred-wallpaper composition layer and that all fallbacks leave the DWM backdrop disabled.
 - Material-mode tests for dynamic, static, disabled, WARP, reduced-motion, and solid fallback behavior.
 - Geometry tests proving active-module material remains within module bounds and panel placement remains clamped to the work area.
 - Regression tests for DPI changes and device-loss resource recreation.
@@ -161,6 +176,7 @@ Only the `Minha UI` scene adopts the new grouping in the first delivery. Other p
 - Verify pointer, keyboard, `Escape`, outside-click dismissal, and focus restoration.
 - Verify transparency-disabled, reduced-motion, and high-contrast modes.
 - Compare the panel and dock together to confirm they share material character without using identical motion behavior.
+- Confirm that the panel corners and the area beside the anchor notch show the untouched desktop, with no rectangular gray backdrop.
 - Confirm there is no new background timer, desktop capture path, or continuous redraw when the UI is idle.
 
 ## 11. Delivery Boundary
