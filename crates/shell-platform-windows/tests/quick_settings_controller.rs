@@ -42,6 +42,57 @@ fn unsupported_controls_are_removed_and_off_hardware_remains() {
 }
 
 #[test]
+fn empty_media_player_keeps_its_two_slot_anchor() {
+    let controller = QuickSettingsController::new(
+        QuickSettingsSettings::default(),
+        QuickSettingsCapabilities::new(vec![capability(
+            QuickControlKind::Focus,
+            QuickControlAvailability::Available { active: false },
+        )]),
+    );
+
+    let scene = controller.scene();
+    let player = scene.media().expect("persistent media player");
+    assert_eq!(player.title(), "Nothing playing");
+    assert_eq!(player.artist(), "Start audio in any app");
+    assert!(!player.can_previous());
+    assert!(!player.can_toggle());
+    assert!(!player.can_next());
+}
+
+#[test]
+fn focus_and_night_light_use_distinct_system_glyphs() {
+    let controller = QuickSettingsController::new(
+        QuickSettingsSettings::default(),
+        QuickSettingsCapabilities::new(vec![
+            capability(
+                QuickControlKind::Focus,
+                QuickControlAvailability::Available { active: false },
+            ),
+            capability(
+                QuickControlKind::NightLight,
+                QuickControlAvailability::Available { active: false },
+            ),
+        ]),
+    );
+    let scene = controller.scene();
+    let focus = scene
+        .tiles()
+        .iter()
+        .find(|tile| tile.kind() == QuickControlKind::Focus)
+        .expect("focus tile");
+    let night_light = scene
+        .display()
+        .expect("display section")
+        .actions()
+        .iter()
+        .find(|tile| tile.kind() == QuickControlKind::NightLight)
+        .expect("night light tile");
+
+    assert_ne!(focus.glyph(), night_light.glyph());
+}
+
+#[test]
 fn hidden_absent_hardware_keeps_its_saved_preference() {
     let preferences =
         QuickSettingsSettings::default().with_visibility(QuickControlKind::Bluetooth, false);

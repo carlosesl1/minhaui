@@ -313,20 +313,37 @@ impl QuickSettingsController {
     }
 
     fn media_player(&self) -> Option<QuickSettingsMediaPlayer> {
-        let entry = self.media.selected_entry()?;
-        Some(QuickSettingsMediaPlayer::new(
-            QuickSettingsMediaSessionId::new(entry.id.value()),
-            &entry.source,
-            &entry.title,
-            &entry.artist,
-            entry.artwork.as_ref().map(|artwork| {
-                QuickSettingsMediaArtwork::new(artwork.generation, artwork.encoded.clone())
-            }),
-            renderer_playback(entry.playback),
-            entry.commands.previous,
-            entry.commands.toggle,
-            entry.commands.next,
-            self.media.pending_action().map(renderer_action),
+        Some(self.media.selected_entry().map_or_else(
+            || {
+                QuickSettingsMediaPlayer::new(
+                    QuickSettingsMediaSessionId::new(0),
+                    "Media",
+                    "Nothing playing",
+                    "Start audio in any app",
+                    None,
+                    QuickSettingsPlaybackState::Stopped,
+                    false,
+                    false,
+                    false,
+                    None,
+                )
+            },
+            |entry| {
+                QuickSettingsMediaPlayer::new(
+                    QuickSettingsMediaSessionId::new(entry.id.value()),
+                    &entry.source,
+                    &entry.title,
+                    &entry.artist,
+                    entry.artwork.as_ref().map(|artwork| {
+                        QuickSettingsMediaArtwork::new(artwork.generation, artwork.encoded.clone())
+                    }),
+                    renderer_playback(entry.playback),
+                    entry.commands.previous,
+                    entry.commands.toggle,
+                    entry.commands.next,
+                    self.media.pending_action().map(renderer_action),
+                )
+            },
         ))
     }
 
@@ -743,7 +760,7 @@ fn glyph_for(kind: QuickControlKind) -> &'static str {
         QuickControlKind::Wifi => "\u{E701}",
         QuickControlKind::Bluetooth => "\u{E702}",
         QuickControlKind::NearbySharing => "\u{E8C8}",
-        QuickControlKind::Focus => "\u{E708}",
+        QuickControlKind::Focus => "\u{E916}",
         QuickControlKind::Multitasking => "\u{E8A7}",
         QuickControlKind::Projection => "\u{E7F4}",
         QuickControlKind::Brightness => "\u{E706}",

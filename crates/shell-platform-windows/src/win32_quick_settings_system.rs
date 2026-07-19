@@ -24,7 +24,11 @@ use crate::night_light_coordinator::{NightLightApplyError, NightLightApplyResult
 
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 const NEARBY_SHARING_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\CDP";
-const NOTIFICATIONS_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings";
+const QUIET_HOURS_CACHE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount\$$windows.data.notifications.quiethourssettings\Current";
+const QUIET_HOURS_PROFILE_PREFIX: &str = "Microsoft.QuietHoursProfile.";
+const QUIET_HOURS_UNRESTRICTED: &str = "Microsoft.QuietHoursProfile.Unrestricted";
+const QUIET_HOURS_PRIORITY_ONLY: &str = "Microsoft.QuietHoursProfile.PriorityOnly";
+const QUIET_HOURS_SUFFIX: [u8; 4] = [0xCA, 0x28, 0x00, 0x00];
 const CLOUDSTORE_CURRENT_KEY: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current";
 const PER_DEVICE_STATE_MARKER: &str =
@@ -42,11 +46,7 @@ pub(super) fn read_active(kind: QuickControlKind) -> Result<bool> {
             "NearShareChannelUserAuthzPolicy",
         )?
         .is_some_and(|value| value != 0)),
-        QuickControlKind::Focus => Ok(read_dword(
-            NOTIFICATIONS_KEY,
-            "NOC_GLOBAL_SETTING_TOASTS_ENABLED",
-        )?
-        .is_some_and(|value| value == 0)),
+        QuickControlKind::Focus => quiet_hours_active(&read_quiet_hours_blob()?),
         QuickControlKind::Multitasking => multitasking_active(),
         QuickControlKind::DarkMode => {
             Ok(read_dword(PERSONALIZE_KEY, "AppsUseLightTheme")?.is_some_and(|value| value == 0))
@@ -69,15 +69,7 @@ pub(super) fn set_active(kind: QuickControlKind, active: bool) -> Result<()> {
             notify_settings(NEARBY_SHARING_KEY);
             Ok(())
         }
-        QuickControlKind::Focus => {
-            write_dword(
-                NOTIFICATIONS_KEY,
-                "NOC_GLOBAL_SETTING_TOASTS_ENABLED",
-                u32::from(!active),
-            )?;
-            notify_settings(NOTIFICATIONS_KEY);
-            Ok(())
-        }
+        QuickControlKind::Focus => set_quiet_hours_active(active),
         QuickControlKind::Multitasking => set_multitasking(active),
         QuickControlKind::DarkMode => {
             let light = u32::from(!active);
@@ -159,6 +151,117 @@ fn set_multitasking(active: bool) -> Result<()> {
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
         )
     }
+}
+
+fn set_quiet_hours_active(active: bool) -> Result<()> {
+    let original = read_quiet_hours_blob()?;
+    let observed = original
+        .get(4..12)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map_or(0, u64::from_le_bytes);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(observed, |duration| {
+            const WINDOWS_TO_UNIX_SECONDS: u64 = 11_644_473_600;
+            duration
+                .as_secs()
+                .saturating_add(WINDOWS_TO_UNIX_SECONDS)
+                .saturating_mul(10_000_000)
+                .saturating_add(u64::from(duration.subsec_nanos()) / 100)
+        });
+    let timestamp = now.max(observed.saturating_add(1));
+    let changed = rewrite_quiet_hours(&original, active, timestamp)?;
+    write_quiet_hours_blob(&changed)?;
+    notify_settings("Notifications");
+
+    if quiet_hours_active(&read_quiet_hours_blob()?) == Ok(active) {
+        Ok(())
+    } else {
+        Err(Error::new(
+            failure(),
+            "Windows did not confirm the requested Focus state",
+        ))
+    }
+}
+
+fn read_quiet_hours_blob() -> Result<Vec<u8>> {
+    let key = CURRENT_USER
+        .options()
+        .read()
+        .open(QUIET_HOURS_CACHE_KEY)
+        .map_err(quiet_hours_registry_error)?;
+    key.get_value("Data")
+        .map(|value| value.to_vec())
+        .map_err(quiet_hours_registry_error)
+}
+
+fn write_quiet_hours_blob(data: &[u8]) -> Result<()> {
+    let key = CURRENT_USER
+        .options()
+        .write()
+        .open(QUIET_HOURS_CACHE_KEY)
+        .map_err(quiet_hours_registry_error)?;
+    key.set_value("Data", &Value::from(data))
+        .map_err(quiet_hours_registry_error)
+}
+
+fn quiet_hours_active(data: &[u8]) -> Result<bool> {
+    Ok(quiet_hours_profile(data)? != QUIET_HOURS_UNRESTRICTED)
+}
+
+fn quiet_hours_profile(data: &[u8]) -> Result<String> {
+    let (start, end) = quiet_hours_profile_range(data)?;
+    let units = data[start..end]
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).map_err(|_| invalid_quiet_hours_blob("invalid profile name"))
+}
+
+fn rewrite_quiet_hours(data: &[u8], active: bool, timestamp: u64) -> Result<Vec<u8>> {
+    if data.len() < 12 {
+        return Err(invalid_quiet_hours_blob("missing CloudStore timestamp"));
+    }
+    let (start, end) = quiet_hours_profile_range(data)?;
+    let profile = if active {
+        QUIET_HOURS_PRIORITY_ONLY
+    } else {
+        QUIET_HOURS_UNRESTRICTED
+    };
+    let mut changed = Vec::with_capacity(data.len() + profile.len().saturating_mul(2));
+    changed.extend_from_slice(&data[..start]);
+    for unit in profile.encode_utf16() {
+        changed.extend_from_slice(&unit.to_le_bytes());
+    }
+    changed.extend_from_slice(&data[end..]);
+    changed[4..12].copy_from_slice(&timestamp.to_le_bytes());
+    Ok(changed)
+}
+
+fn quiet_hours_profile_range(data: &[u8]) -> Result<(usize, usize)> {
+    let prefix = QUIET_HOURS_PROFILE_PREFIX
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    let start = data
+        .windows(prefix.len())
+        .position(|window| window == prefix)
+        .ok_or_else(|| invalid_quiet_hours_blob("missing profile name"))?;
+    let end = data[start..]
+        .windows(QUIET_HOURS_SUFFIX.len())
+        .position(|window| window == QUIET_HOURS_SUFFIX)
+        .map(|offset| start + offset)
+        .filter(|end| (end - start) % 2 == 0)
+        .ok_or_else(|| invalid_quiet_hours_blob("missing profile terminator"))?;
+    Ok((start, end))
+}
+
+fn invalid_quiet_hours_blob(message: &str) -> Error {
+    Error::new(failure(), message)
+}
+
+fn quiet_hours_registry_error(error: RegistryError) -> Error {
+    Error::new(failure(), error.to_string())
 }
 
 fn night_light_active() -> Result<bool> {
@@ -505,6 +608,39 @@ const fn failure() -> HRESULT {
 mod tests {
     use super::*;
     use win_nightlight_lib::nightlight_state::NightlightState;
+
+    fn quiet_hours_blob(profile: &str, timestamp: u64) -> Vec<u8> {
+        let mut blob = vec![
+            0x02, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x43, 0x42,
+            0x01, 0x00, 0xC2, 0x0A, 0x01, 0xD2, 0x14,
+        ];
+        blob[4..12].copy_from_slice(&timestamp.to_le_bytes());
+        for unit in profile.encode_utf16() {
+            blob.extend_from_slice(&unit.to_le_bytes());
+        }
+        blob.extend_from_slice(&[0xCA, 0x28, 0x00, 0x00]);
+        blob
+    }
+
+    #[test]
+    fn quiet_hours_profile_reads_the_cloud_store_state() {
+        let off = quiet_hours_blob("Microsoft.QuietHoursProfile.Unrestricted", 42);
+        let on = quiet_hours_blob("Microsoft.QuietHoursProfile.PriorityOnly", 43);
+
+        assert!(!quiet_hours_active(&off).unwrap());
+        assert!(quiet_hours_active(&on).unwrap());
+    }
+
+    #[test]
+    fn quiet_hours_profile_rewrite_advances_timestamp_and_preserves_framing() {
+        let original = quiet_hours_blob("Microsoft.QuietHoursProfile.Unrestricted", 42);
+        let changed = rewrite_quiet_hours(&original, true, 99).unwrap();
+
+        assert!(quiet_hours_active(&changed).unwrap());
+        assert_eq!(u64::from_le_bytes(changed[4..12].try_into().unwrap()), 99);
+        assert!(changed.starts_with(&[0x02, 0x00, 0x00, 0x00]));
+        assert!(changed.ends_with(&[0xCA, 0x28, 0x00, 0x00]));
+    }
 
     #[test]
     fn per_device_night_light_blob_keeps_the_state_and_derived_schema() {
