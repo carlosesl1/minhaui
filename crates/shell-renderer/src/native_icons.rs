@@ -15,8 +15,8 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, SHCreateItemFromParsingName, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
-    SHGetFileInfoW, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_SCALEUP,
+    IShellItemImageFactory, SHCreateItemFromParsingName, SHCreateMemStream, SHFILEINFOW,
+    SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
 use windows::core::{Interface, PCWSTR, Result};
@@ -25,6 +25,7 @@ pub(crate) struct NativeIconCache {
     context: ID2D1DeviceContext,
     wic: IWICImagingFactory,
     bitmaps: HashMap<String, CachedIcon>,
+    encoded_bitmaps: HashMap<u64, ID2D1Bitmap1>,
 }
 
 enum CachedIcon {
@@ -44,6 +45,7 @@ impl NativeIconCache {
             context: context.clone(),
             wic,
             bitmaps: HashMap::new(),
+            encoded_bitmaps: HashMap::new(),
         })
     }
 
@@ -80,6 +82,40 @@ impl NativeIconCache {
     pub(crate) fn retain(&mut self, active_sources: &[&str]) {
         self.bitmaps
             .retain(|source, _| active_sources.contains(&source.as_str()));
+    }
+
+    pub(crate) fn draw_encoded(
+        &mut self,
+        generation: u64,
+        encoded: &[u8],
+        destination: D2D_RECT_F,
+    ) -> bool {
+        if !self.encoded_bitmaps.contains_key(&generation) {
+            let Ok(bitmap) = self.load_encoded(encoded) else {
+                return false;
+            };
+            self.encoded_bitmaps.insert(generation, bitmap);
+        }
+        let Some(bitmap) = self.encoded_bitmaps.get(&generation) else {
+            return false;
+        };
+        // SAFETY: the bitmap belongs to this device context and the destination is finite.
+        unsafe {
+            self.context.DrawBitmap(
+                bitmap,
+                Some(&destination),
+                1.0,
+                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+                None,
+                None,
+            )
+        };
+        true
+    }
+
+    pub(crate) fn retain_encoded(&mut self, active_generations: &[u64]) {
+        self.encoded_bitmaps
+            .retain(|generation, _| active_generations.contains(generation));
     }
 
     fn load(&self, source: &str) -> Result<ID2D1Bitmap1> {
@@ -120,13 +156,34 @@ impl NativeIconCache {
             let bitmap = unsafe { self.wic.CreateBitmapFromHICON(icon.0) }?;
             bitmap.cast()?
         };
+        self.convert_wic_bitmap(&bitmap)
+    }
+
+    fn load_encoded(&self, encoded: &[u8]) -> Result<ID2D1Bitmap1> {
+        // SAFETY: the buffer remains live through the synchronous WIC decode.
+        let stream = unsafe { SHCreateMemStream(Some(encoded)) }
+            .ok_or_else(windows::core::Error::from_thread)?;
+        // SAFETY: the COM stream is valid and WIC returns an owned decoder.
+        let decoder = unsafe {
+            self.wic.CreateDecoderFromStream(
+                &stream,
+                core::ptr::null(),
+                WICDecodeMetadataCacheOnDemand,
+            )
+        }?;
+        // SAFETY: media artwork is decoded from its first frame while the decoder is live.
+        let frame: IWICBitmapSource = unsafe { decoder.GetFrame(0) }?.cast()?;
+        self.convert_wic_bitmap(&frame)
+    }
+
+    fn convert_wic_bitmap(&self, bitmap: &IWICBitmapSource) -> Result<ID2D1Bitmap1> {
         // SAFETY: Category 8 (FFI boundary). The factory returns an owned converter.
         let converter = unsafe { self.wic.CreateFormatConverter() }?;
         // SAFETY: Category 8 (FFI boundary). Source and converter remain live;
         // the fixed PBGRA format matches the composition swap chain alpha mode.
         unsafe {
             converter.Initialize(
-                &bitmap,
+                bitmap,
                 &GUID_WICPixelFormat32bppPBGRA,
                 WICBitmapDitherTypeNone,
                 None,

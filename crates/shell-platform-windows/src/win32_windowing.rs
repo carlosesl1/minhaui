@@ -4,18 +4,21 @@ use shell_renderer::{DipPoint, PhysicalRect};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_SPACE, VK_TAB,
-    VK_UP,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
+    VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PostQuitMessage,
     SWP_NOACTIVATE, SWP_NOZORDER, SetTimer, SetWindowPos, TranslateMessage, WA_INACTIVE,
-    WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER,
+    WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DEVICECHANGE,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::Result;
 
+use crate::background_apps_worker::BACKGROUND_APPS_WAKE_MESSAGE;
+use crate::media_session_worker::MEDIA_SESSION_WAKE_MESSAGE;
 use crate::win32::{
     DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID, LIVE_WINDOWS,
     PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
@@ -84,6 +87,9 @@ pub(super) unsafe extern "system" fn window_proc(
         ));
         return LRESULT(0);
     }
+    if message == BACKGROUND_APPS_WAKE_MESSAGE || message == MEDIA_SESSION_WAKE_MESSAGE {
+        return LRESULT(0);
+    }
     if is_position_notification(message, wparam.0) {
         queue_event(RoutedPlatformEvent::window(
             hwnd,
@@ -92,6 +98,14 @@ pub(super) unsafe extern "system" fn window_proc(
         return LRESULT(0);
     }
     match message {
+        WM_MOUSEWHEEL if is_popover_window(hwnd) => {
+            let delta = ((wparam.0 >> 16) as u16) as i16;
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::PopoverScroll(-isize::from(delta.signum())),
+            ));
+            LRESULT(0)
+        }
         WM_MOUSEMOVE if is_dock_window(hwnd) => {
             track_mouse_leave(hwnd);
             if is_dragging(hwnd) && escape_pressed() {
@@ -202,7 +216,20 @@ pub(super) unsafe extern "system" fn window_proc(
             );
             LRESULT(0)
         }
+        WM_LBUTTONDOWN if is_popover_window(hwnd) => {
+            // SAFETY: Category 8 (FFI boundary). Capture stays with the live popover
+            // only for the matching slider/button release, so drags keep reporting.
+            unsafe { SetCapture(hwnd) };
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::PopoverPointerPressed(client_point(hwnd, lparam)),
+            ));
+            LRESULT(0)
+        }
         WM_LBUTTONUP if is_popover_window(hwnd) => {
+            // SAFETY: Category 8 (FFI boundary). This releases the bounded capture
+            // acquired by the matching popover pointer press above.
+            let _ = unsafe { ReleaseCapture() };
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::PopoverPointer(client_point(hwnd, lparam)),
@@ -261,6 +288,9 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_KILLFOCUS if is_popover_window(hwnd) => {
+            // SAFETY: Category 8 (FFI boundary). Releasing capture is idempotent
+            // and prevents an interrupted slider drag from retaining the pointer.
+            let _ = unsafe { ReleaseCapture() };
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::DismissTransientOverlays,
@@ -406,6 +436,12 @@ pub(super) unsafe extern "system" fn window_proc(
         WM_DISPLAYCHANGE => {
             queue_event(RoutedPlatformEvent::broadcast(
                 PlatformEvent::DisplayChanged,
+            ));
+            LRESULT(0)
+        }
+        WM_DEVICECHANGE => {
+            queue_event(RoutedPlatformEvent::broadcast(
+                PlatformEvent::QuickSettingsRefresh(crate::RefreshScope::Devices),
             ));
             LRESULT(0)
         }
@@ -611,6 +647,10 @@ fn settings_key(wparam: WPARAM) -> Option<SettingsKey> {
         Some(SettingsKey::Activate)
     } else if code == VK_ESCAPE.0 {
         Some(SettingsKey::Escape)
+    } else if code == VK_LEFT.0 {
+        Some(SettingsKey::MoveUp)
+    } else if code == VK_RIGHT.0 {
+        Some(SettingsKey::MoveDown)
     } else {
         None
     }

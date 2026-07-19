@@ -51,7 +51,6 @@ mod win32_backdrop;
     reason = "Windows package identity and installed-path queries are isolated here"
 )]
 mod win32_package_icon;
-#[cfg(windows)]
 #[allow(
     unsafe_code,
     reason = "Hosted Win32 window identity lookup is isolated here"
@@ -71,6 +70,9 @@ mod win32_slots;
 
 #[cfg(windows)]
 mod win32_slot_lifecycle;
+
+#[cfg(windows)]
+mod win32_shell_observation;
 
 #[cfg(windows)]
 #[allow(
@@ -107,8 +109,39 @@ mod win32_installed_package_icons;
 mod win32_timer;
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Core Audio endpoint access is isolated here")]
+mod win32_audio_endpoint;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows system commands and input injection are isolated in this Adapter"
+)]
+mod win32_system_actions;
+#[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 topbar status adapters are isolated here")]
 mod win32_topbar_status;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "documented Windows capability probes are isolated and wired incrementally"
+)]
+mod win32_quick_settings_capabilities;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "documented direct actions are isolated and wired incrementally"
+)]
+mod win32_quick_settings_actions;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "native quick-settings state adapters are isolated here"
+)]
+mod win32_quick_settings_system;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 HWND ownership is isolated here")]
@@ -139,6 +172,12 @@ mod win32_sample_state;
 #[cfg(windows)]
 mod win32_popover_render;
 
+mod background_apps;
+#[allow(
+    unsafe_code,
+    reason = "the one-shot worker only uses PostMessageW to wake the owner window"
+)]
+mod background_apps_worker;
 mod dock_context_menu;
 mod dock_controller;
 mod dock_controller_interaction;
@@ -150,21 +189,53 @@ mod dock_types;
 mod dock_visibility_motion;
 mod dock_visuals;
 mod dock_window_sync;
+#[allow(
+    dead_code,
+    reason = "media controller is wired into the native owner incrementally"
+)]
+mod media_session_controller;
+#[allow(dead_code, reason = "media worker contracts are wired incrementally")]
+mod media_session_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the media worker only posts a wake message to the owner window"
+)]
+mod media_session_worker;
 mod native_event_route;
 mod popover_adapters;
 mod popover_controller;
 mod popover_types;
 mod preview_controller;
 mod preview_motion;
+#[allow(
+    dead_code,
+    reason = "adaptive controller is wired into the native owner incrementally"
+)]
+mod quick_settings_controller;
+#[allow(
+    dead_code,
+    reason = "adaptive control intents are consumed by the native owner incrementally"
+)]
+mod quick_settings_types;
 mod runtime;
 mod settings_controller;
 mod topbar_controller;
 mod topbar_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "read-only notification registration and process capture is isolated here"
+)]
+mod win32_background_apps;
+#[cfg(windows)]
+mod win32_media_sessions;
 mod window_preview;
 
 #[cfg(test)]
 mod integration_tests;
 
+pub(crate) use background_apps::BackgroundAppId;
 pub(crate) use dock_context_menu::{
     DockContextMenuController, DockContextMenuItem, QueuedContextMenuAction,
 };
@@ -190,13 +261,18 @@ pub(crate) use popover_adapters::{DefaultPopoverDataProvider, OfflineWeatherProv
 pub(crate) use popover_controller::PopoverController;
 pub(crate) use popover_types::{
     PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
-    PopoverLoadState, PopoverPayload, QueuedPopoverAction, SessionAction, WeatherAccess,
-    WeatherItem, WeatherProvider,
+    PopoverLoadState, PopoverPayload, ProjectionMode, QueuedPopoverAction, SessionAction,
+    SystemRoute, WeatherAccess, WeatherItem, WeatherProvider,
 };
 #[cfg(test)]
 pub(crate) use preview_controller::{PREVIEW_BRIDGE_MS, PREVIEW_DWELL_MS};
 pub(crate) use preview_controller::{PreviewController, PreviewEffect, PreviewPhase};
 pub(crate) use preview_motion::{PreviewEntranceMotion, PreviewMotionSpec};
+pub(crate) use quick_settings_controller::QuickSettingsController;
+pub(crate) use quick_settings_types::{
+    QueuedQuickSettingsAction, QuickControlAvailability, QuickControlCapability,
+    QuickSettingsCapabilities, QuickSettingsIntent, QuickSettingsKey,
+};
 pub(crate) use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
@@ -206,8 +282,8 @@ pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, S
 pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
 pub(crate) use topbar_controller::TopbarController;
 pub(crate) use topbar_types::{
-    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarPointerPhase,
-    TopbarPointerSample, TopbarSnapshot,
+    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor,
+    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot, foreground_app_label,
 };
 #[cfg(windows)]
 pub use win32::{ShowcaseRunConfig, run_showcase};
@@ -227,6 +303,11 @@ pub(crate) enum PlatformEvent {
     DpiChanged(PhysicalRect),
     DisplayChanged,
     PowerResumed,
+    QuickSettingsRefresh(RefreshScope),
+    MediaSessionsChanged(
+        Result<media_session_types::MediaSessionSnapshot, media_session_types::MediaSessionError>,
+    ),
+    MediaTransportCompleted(media_session_types::MediaTransportResult),
     DeviceLost,
     DockPointer(DockPointerSample),
     DockEdgeProbe,
@@ -255,14 +336,22 @@ pub(crate) enum PlatformEvent {
         path: String,
     },
     PopoverKey(PopoverKey),
+    PopoverPointerPressed(DipPoint),
     PopoverPointer(DipPoint),
     PopoverPointerMoved(DipPoint),
+    PopoverScroll(isize),
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SyncWindows,
+    BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),
     QaExitRequested,
     CloseRequested,
     Destroyed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefreshScope {
+    Devices,
 }
 
 #[must_use]
