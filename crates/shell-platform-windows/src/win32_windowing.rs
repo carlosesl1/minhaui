@@ -19,6 +19,7 @@ use windows::core::Result;
 
 use crate::background_apps_worker::BACKGROUND_APPS_WAKE_MESSAGE;
 use crate::media_session_worker::MEDIA_SESSION_WAKE_MESSAGE;
+use crate::night_light_worker::NIGHT_LIGHT_WAKE_MESSAGE;
 use crate::win32::{
     DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID, LIVE_WINDOWS,
     PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
@@ -87,7 +88,10 @@ pub(super) unsafe extern "system" fn window_proc(
         ));
         return LRESULT(0);
     }
-    if message == BACKGROUND_APPS_WAKE_MESSAGE || message == MEDIA_SESSION_WAKE_MESSAGE {
+    if message == BACKGROUND_APPS_WAKE_MESSAGE
+        || message == MEDIA_SESSION_WAKE_MESSAGE
+        || message == NIGHT_LIGHT_WAKE_MESSAGE
+    {
         return LRESULT(0);
     }
     if is_position_notification(message, wparam.0) {

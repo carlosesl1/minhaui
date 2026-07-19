@@ -229,6 +229,17 @@ impl RuntimeSurfaces {
                 }
                 return Ok(true);
             }
+            PlatformEvent::NightLightCompleted(result) => {
+                let actions = self
+                    .quick_settings_controller
+                    .complete_night_light(result.request, result.result);
+                if self.quick_settings_controller.is_open() {
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                }
+                return Ok(true);
+            }
             event => event,
         };
         match &event {
@@ -751,6 +762,7 @@ impl RuntimeSurfaces {
             PlatformEvent::MediaSessionsChanged(_) | PlatformEvent::MediaTransportCompleted(_) => {
                 unreachable!("handled before routing")
             }
+            PlatformEvent::NightLightCompleted(_) => unreachable!("handled before routing"),
             PlatformEvent::TaskbarCreated
             | PlatformEvent::AppBarPositionChanged
             | PlatformEvent::DpiChanged(_)

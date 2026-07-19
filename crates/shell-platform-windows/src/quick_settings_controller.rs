@@ -14,6 +14,9 @@ use crate::media_session_types::{
     MediaPlaybackState, MediaSessionId, MediaSessionSnapshot, MediaTransportAction,
     MediaTransportResult,
 };
+use crate::night_light_coordinator::{
+    NightLightApplyError, NightLightApplyResult, NightLightCommandCoordinator,
+};
 use crate::{
     QueuedQuickSettingsAction, QuickControlAvailability, QuickControlCapability,
     QuickSettingsCapabilities, QuickSettingsIntent, QuickSettingsKey,
@@ -39,6 +42,7 @@ pub struct QuickSettingsController {
     scroll_offset: f32,
     last_error: String,
     media: MediaSessionController,
+    night_light: NightLightCommandCoordinator,
 }
 
 impl QuickSettingsController {
@@ -59,11 +63,13 @@ impl QuickSettingsController {
             scroll_offset: 0.0,
             last_error: String::new(),
             media: MediaSessionController::default(),
+            night_light: NightLightCommandCoordinator::new(false, 0),
         }
     }
 
     pub fn open(&mut self, capabilities: QuickSettingsCapabilities) {
         self.capabilities = capabilities;
+        self.sync_night_light_confirmed();
         self.open = true;
         self.focused = self.focus_order().first().copied();
         self.hovered = None;
@@ -91,6 +97,7 @@ impl QuickSettingsController {
     }
     pub fn replace_capabilities(&mut self, value: QuickSettingsCapabilities) {
         self.capabilities = value;
+        self.sync_night_light_confirmed();
         if !matches!(self.pressed, Some(QuickSettingsHit::Slider { .. })) {
             self.live_slider = None;
         }
@@ -99,6 +106,9 @@ impl QuickSettingsController {
     pub fn apply_capability_update(&mut self, value: QuickControlCapability) {
         let kind = value.kind();
         self.capabilities.replace(value);
+        if kind == QuickControlKind::NightLight {
+            self.sync_night_light_confirmed();
+        }
         if !matches!(self.pressed, Some(QuickSettingsHit::Slider { kind: pressed, .. }) if pressed == kind)
         {
             self.live_slider = None;
@@ -118,6 +128,33 @@ impl QuickSettingsController {
 
     pub(crate) fn complete_media_transport(&mut self, value: MediaTransportResult) -> bool {
         self.media.complete_transport(value)
+    }
+
+    pub(crate) fn complete_night_light(
+        &mut self,
+        request: u64,
+        result: Result<NightLightApplyResult, NightLightApplyError>,
+    ) -> Vec<QueuedQuickSettingsAction> {
+        let applied = result.as_ref().ok().copied();
+        let follow_up = self.night_light.complete(request, result);
+        if let Some(applied) = applied {
+            if let Some(previous) = self.capabilities.get(QuickControlKind::NightLight).cloned() {
+                self.capabilities.replace(QuickControlCapability::new(
+                    QuickControlKind::NightLight,
+                    QuickControlAvailability::Available {
+                        active: applied.active,
+                    },
+                    previous.label(),
+                    self.night_light.detail(),
+                    previous.value(),
+                ));
+            }
+        }
+        let mut actions = vec![QueuedQuickSettingsAction::Redraw];
+        if let Some(request) = follow_up {
+            actions.push(QueuedQuickSettingsAction::NightLight(request));
+        }
+        actions
     }
 
     #[must_use]
@@ -146,7 +183,13 @@ impl QuickSettingsController {
                     QuickControlKind::DarkMode | QuickControlKind::NightLight
                 )
             })
-            .map(|capability| tile_for(capability))
+            .map(|capability| {
+                if capability.kind() == QuickControlKind::NightLight {
+                    self.night_light_tile(capability)
+                } else {
+                    tile_for(capability)
+                }
+            })
             .collect::<Vec<_>>();
         let display = (brightness.is_some() || !display_actions.is_empty())
             .then(|| QuickSettingsDisplay::new(brightness, display_actions));
@@ -295,11 +338,32 @@ impl QuickSettingsController {
         }
     }
 
+    fn night_light_tile(&self, capability: &QuickControlCapability) -> QuickSettingsTile {
+        QuickSettingsTile::new(
+            QuickControlKind::NightLight,
+            capability.label(),
+            self.night_light.detail(),
+            glyph_for(QuickControlKind::NightLight),
+            self.night_light.confirmed(),
+            capability_enabled(capability),
+        )
+    }
+
+    fn sync_night_light_confirmed(&mut self) {
+        if let Some(capability) = self.capabilities.get(QuickControlKind::NightLight) {
+            self.night_light
+                .sync_confirmed(capability_active(capability));
+        }
+    }
+
     pub fn handle_key(&mut self, key: QuickSettingsKey) -> Vec<QueuedQuickSettingsAction> {
         match key {
             QuickSettingsKey::Next => self.move_focus(1),
             QuickSettingsKey::Previous => self.move_focus(-1),
             QuickSettingsKey::Activate => match self.focused {
+                Some(QuickSettingsFocus::Control(QuickControlKind::NightLight)) => {
+                    self.activate_night_light()
+                }
                 Some(QuickSettingsFocus::Control(QuickControlKind::Projection)) => {
                     self.open_projection_page()
                 }
@@ -419,6 +483,9 @@ impl QuickSettingsController {
             if let Some(hit) = released {
                 if hit == QuickSettingsHit::Tile(QuickControlKind::Projection) {
                     return self.open_projection_page();
+                }
+                if hit == QuickSettingsHit::Tile(QuickControlKind::NightLight) {
+                    return self.activate_night_light();
                 }
                 if hit == QuickSettingsHit::Back {
                     return self.close_page();
@@ -577,6 +644,14 @@ impl QuickSettingsController {
         self.hovered = None;
         self.pressed = None;
         vec![QueuedQuickSettingsAction::Reflow]
+    }
+
+    fn activate_night_light(&mut self) -> Vec<QueuedQuickSettingsAction> {
+        let mut actions = vec![QueuedQuickSettingsAction::Redraw];
+        if let Some(request) = self.night_light.request_toggle() {
+            actions.push(QueuedQuickSettingsAction::NightLight(request));
+        }
+        actions
     }
 }
 

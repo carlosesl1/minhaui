@@ -21,6 +21,9 @@ pub(super) fn apply_quick_settings_intent(
         } => set_volume(capability, value),
         QuickSettingsIntent::SetValue { kind, .. } => Err(no_direct_action(kind)),
         QuickSettingsIntent::Activate(QuickControlKind::Volume) => toggle_mute(capability),
+        QuickSettingsIntent::Activate(QuickControlKind::NightLight) => {
+            return QuickSettingsActionResult::NoChange;
+        }
         QuickSettingsIntent::SetProjectionMode(mode) => set_projection_mode(capability, mode),
         QuickSettingsIntent::OpenMediaSessions
         | QuickSettingsIntent::MediaAction(_)

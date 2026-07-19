@@ -203,6 +203,13 @@ mod media_session_types;
 )]
 mod media_session_worker;
 mod native_event_route;
+mod night_light_coordinator;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the night light worker only posts a wake message"
+)]
+mod night_light_worker;
 mod popover_adapters;
 mod popover_controller;
 mod popover_types;
@@ -308,6 +315,7 @@ pub(crate) enum PlatformEvent {
         Result<media_session_types::MediaSessionSnapshot, media_session_types::MediaSessionError>,
     ),
     MediaTransportCompleted(media_session_types::MediaTransportResult),
+    NightLightCompleted(night_light_worker::NightLightWorkerResult),
     DeviceLost,
     DockPointer(DockPointerSample),
     DockEdgeProbe,

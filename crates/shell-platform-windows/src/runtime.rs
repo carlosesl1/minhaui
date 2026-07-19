@@ -75,7 +75,8 @@ impl RuntimeOrchestrator {
             PlatformEvent::AppBarPositionChanged => RuntimeAction::None,
             PlatformEvent::QuickSettingsRefresh(_)
             | PlatformEvent::MediaSessionsChanged(_)
-            | PlatformEvent::MediaTransportCompleted(_) => RuntimeAction::None,
+            | PlatformEvent::MediaTransportCompleted(_)
+            | PlatformEvent::NightLightCompleted(_) => RuntimeAction::None,
             PlatformEvent::DpiChanged(rect) => RuntimeAction::ResizeAndRebuild(rect),
             PlatformEvent::DockPointer(_)
             | PlatformEvent::DockEdgeProbe

@@ -3,6 +3,7 @@ use shell_renderer::{QuickSettingsMediaAction, QuickSettingsMediaSessionId};
 
 use crate::ProjectionMode;
 use crate::media_session_types::MediaWorkerCommand;
+use crate::night_light_coordinator::NightLightRequest;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuickControlAvailability {
@@ -126,5 +127,6 @@ pub enum QueuedQuickSettingsAction {
     Redraw,
     Reflow,
     Media(MediaWorkerCommand),
+    NightLight(NightLightRequest),
     Intent(QuickSettingsIntent),
 }

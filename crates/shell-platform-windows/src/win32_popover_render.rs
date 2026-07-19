@@ -497,6 +497,12 @@ impl RuntimeSurfaces {
                         worker.send(*command);
                     }
                 }
+                QueuedQuickSettingsAction::NightLight(request) => {
+                    crate::night_light_worker::request_night_light(
+                        *request,
+                        crate::win32_event_queue::native_window_id(topbar.hwnd),
+                    );
+                }
                 QueuedQuickSettingsAction::Intent(QuickSettingsIntent::Dismiss) => {
                     self.quick_settings_controller.dismiss();
                     redraw_topbar |= self.clear_active_topbar_module();
