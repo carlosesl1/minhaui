@@ -16,6 +16,8 @@ mod geometry;
 mod lifecycle;
 mod popover_layout;
 mod popover_scene;
+mod quick_settings_layout;
+mod quick_settings_scene;
 mod settings_scene;
 mod showcase_model;
 mod topbar_layout;
@@ -61,6 +63,13 @@ mod native_present;
 mod native_device;
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "bounded Win32 desktop capture and Direct2D blur are isolated here"
+)]
+mod native_desktop_capture;
+
+#[cfg(windows)]
 mod native_showcase_dock;
 
 #[cfg(windows)]
@@ -75,6 +84,13 @@ mod native_showcase_material;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
+    reason = "Direct2D Liquid Glass bitmap creation and drawing are isolated here"
+)]
+mod native_liquid_glass;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
     reason = "Windows Shell and WIC icon conversion is isolated here"
 )]
 mod native_icons;
@@ -84,6 +100,9 @@ mod native_showcase_topbar;
 
 #[cfg(windows)]
 mod native_showcase_popover;
+
+#[cfg(windows)]
+mod native_showcase_quick_settings;
 
 #[cfg(windows)]
 mod native_showcase_preview;
@@ -117,11 +136,25 @@ pub use geometry::{
     rounded_content_hit, topbar_height_for_text_scale, topbar_rect,
 };
 pub use popover_layout::{
-    PopoverLaidOutRow, PopoverLayout, layout_popover_scene, popover_anchor_rect,
-    popover_anchor_rect_with_height, popover_height_for_rows,
+    PopoverLaidOutRow, PopoverLayout, PopoverNotch, PopoverPlacement, PopoverSeparator,
+    PopoverSurfaceSize, layout_popover_scene, popover_anchor_rect, popover_anchor_rect_with_height,
+    popover_height_for_rows, popover_placement, popover_surface_size,
 };
-pub use popover_scene::{PopoverContentState, PopoverRow, PopoverScene};
-pub use settings_scene::{SettingsRow, SettingsScene};
+pub use popover_scene::{PopoverContentState, PopoverLayoutStyle, PopoverRow, PopoverScene};
+pub use quick_settings_layout::{
+    QUICK_SETTINGS_BODY_TOP, QUICK_SETTINGS_WIDTH, QuickSettingsLaidOutChoice,
+    QuickSettingsLaidOutMedia, QuickSettingsLaidOutMediaChoice, QuickSettingsLaidOutSlider,
+    QuickSettingsLaidOutTile, QuickSettingsLayout, layout_quick_settings,
+    quick_settings_surface_size,
+};
+pub use quick_settings_scene::{
+    QuickSettingsChoice, QuickSettingsChoiceId, QuickSettingsDisplay, QuickSettingsEnergy,
+    QuickSettingsFocus, QuickSettingsHit, QuickSettingsMediaAction, QuickSettingsMediaArtwork,
+    QuickSettingsMediaChoice, QuickSettingsMediaPlayer, QuickSettingsMediaSessionId,
+    QuickSettingsPlaybackState, QuickSettingsScene, QuickSettingsSlider, QuickSettingsSound,
+    QuickSettingsSubmenu, QuickSettingsTile,
+};
+pub use settings_scene::{QuickControlSettingsRow, SettingsRow, SettingsScene};
 pub(crate) use showcase_model::{DockInsetShadow, ShowcaseTokens, dock_inset_shadows};
 #[cfg(test)]
 pub(crate) use showcase_model::{ShowcasePrimitive, ShowcaseState, showcase_primitives};
