@@ -1,6 +1,6 @@
 # Background Apps Topbar Dropdown Design
 
-- Status: Approved in conversation; written review pending
+- Status: Approved
 - Date: 2026-07-16
 - Classification: M — new runtime-only topbar module and read-only Windows Adapter
 

@@ -107,9 +107,29 @@ cargo run --release --bin shell-app
 cargo run --release --bin shell-watchdog
 ```
 
-The normal app launch opens the interactive shell. `--safe-mode`,
-`--high-contrast`, and `--reduced-motion` are available as recovery and
-accessibility switches.
+The normal app launch opens the interactive shell. `--safe-mode` disables
+expensive visual effects and enables reduced motion while keeping the normal
+hardware-first renderer with automatic WARP fallback. Use `--force-warp` only
+to explicitly require software rendering. `--high-contrast` and
+`--reduced-motion` remain available as accessibility switches.
+
+The lightweight Liquid Glass dock prototype is disabled by default. Enable it
+for comparison with:
+
+```powershell
+cargo run --release --bin shell-app -- --liquid-glass
+```
+
+It affects only the dock material and is suppressed by safe mode and high
+contrast. WARP and reduced-motion launches use its static fallback.
+
+The **Apps** module in the top bar lists active applications registered in the
+Windows notification area. It refreshes only when opened, reads Explorer's
+per-user registration data without changing it, and uses no background polling.
+Selecting a row focuses an existing eligible window or opens the already-running
+application; it does not reproduce private tray-icon callbacks. If a future
+Windows version removes the Explorer registry contract, the popover reports
+that background apps are unavailable and the rest of the shell keeps running.
 
 ## Build distributable layouts
 

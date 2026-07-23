@@ -66,3 +66,38 @@ DWM ou GPU reais.
 Module puro compartilhado que define redação, limites de campos e retenção dos
 diagnósticos. Não conhece formato de arquivo, thread, fila ou filesystem. O app e
 o watchdog mantêm writers próprios como Adapters dessa política.
+
+## System Action Adapter
+
+Adapter interno da plataforma Windows que traduz intents tipados de topbar e
+popover para pesquisa, rotas de Settings, volume, mídia e ações de sessão. Não
+possui estado de produto, não apresenta cenas e não executa espera, descoberta
+de pacotes ou I/O em disco na thread da UI.
+
+## Shell Observation
+
+Snapshot imutável e process-wide das janelas observadas e do status da topbar.
+Todos os Shell Slots recebem a mesma observação para um ciclo de sincronização,
+evitando descoberta e leitura de status duplicadas por monitor.
+
+## Shell Observation Runtime
+
+Module interno que possui os Adapters de descoberta de janelas, identidade e
+status da topbar. Aplica um único Poll Budget por processo e distribui a Shell
+Observation atual aos Shell Slots. Não possui controllers, janelas nativas ou
+estado visual.
+
+## Dock Edge Probe
+
+Timer adaptativo do Dock Runtime usado para revelar ou ocultar a dock. Sua
+cadência depende do estado: desligado quando desnecessário, lento quando o
+cursor está distante, rápido perto da borda física e alinhado ao frame durante
+animação.
+
+## Lightweight Liquid Glass
+
+Material experimental e opt-in da dock que adiciona profundidade óptica por
+bitmaps Direct2D cacheados. Reutiliza a posição e a força do hover existentes,
+sem captura do desktop, novo timer, blur adicional ou alteração de geometria.
+O renderer possui os recursos e seleciona os modos Dynamic, Static ou Disabled
+conforme hardware, movimento reduzido e fallback sólido.
