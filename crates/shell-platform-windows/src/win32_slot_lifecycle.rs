@@ -4,9 +4,9 @@ use shell_core::MonitorId;
 use windows::core::Result;
 
 use crate::win32_appbar::{TopbarCreateOptions, TopbarWindow};
-use crate::win32_discovery::{WindowIdentityCache, discover_running_windows};
 use crate::win32_owner::{RuntimeOptions, RuntimeSurfaces, SurfaceWindows};
 use crate::win32_sample_state::{sample_dock_controller, sample_topbar_controller};
+use crate::win32_shell_observation::ShellObservation;
 use crate::win32_slots::{ShellSlot, SlotFeatures, print_monitor_placements};
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{OwnedWindow, WindowClass};
@@ -17,6 +17,8 @@ pub(super) fn create_slot(
     class: &WindowClass,
     monitor: MonitorPlacementInput,
     features: SlotFeatures,
+    config: &shell_config::ShellConfigV1,
+    observation: &ShellObservation,
 ) -> Result<ShellSlot> {
     let text_scale = configured_text_scale();
     let topbar = TopbarWindow::create(
@@ -49,21 +51,9 @@ pub(super) fn create_slot(
         work_area,
         features.backdrop_enabled,
     )?;
-    let mut dock_controller = sample_dock_controller()?;
-    let mut window_identity_cache = WindowIdentityCache::default();
-    let observed = discover_running_windows(
-        &[
-            topbar.hwnd,
-            dock.hwnd,
-            popover.hwnd,
-            preview.hwnd,
-            settings.hwnd,
-        ],
-        true,
-        &mut window_identity_cache,
-    )?;
+    let mut dock_controller = sample_dock_controller(config)?;
     let actions = dock_controller
-        .sync_running_windows_with_previews(&observed)
+        .sync_running_windows_with_previews(observation.windows())
         .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
     crate::win32_actions::apply_dock_actions(&actions, dock_controller.state())?;
     dock.set_dock_width(
@@ -72,13 +62,15 @@ pub(super) fn create_slot(
         dock_controller.config(),
         false,
     )?;
-    let mut topbar_controller = sample_topbar_controller(topbar.rect.width)?;
+    let mut topbar_controller = sample_topbar_controller(topbar.rect.width, config)?;
+    topbar_controller.update_snapshot(observation.topbar().clone());
     topbar_controller.update_text_scale(text_scale);
     let runtime = RuntimeSurfaces::new(
         RuntimeOptions {
             force_warp: features.force_warp,
             solid_material: features.safe_mode || !topbar.backdrop_active(),
             reduced_motion: features.reduced_motion,
+            liquid_glass: features.liquid_glass,
         },
         SurfaceWindows {
             topbar: &topbar,
@@ -89,7 +81,7 @@ pub(super) fn create_slot(
         },
         dock_controller,
         topbar_controller,
-        window_identity_cache,
+        config.clone(),
     )?;
     let sync_timer = TimerGuard::start_sync(dock.hwnd)?;
     Ok(ShellSlot {
@@ -108,6 +100,8 @@ pub(super) fn reconcile_slots(
     class: &WindowClass,
     slots: &mut Vec<ShellSlot>,
     features: SlotFeatures,
+    config: &shell_config::ShellConfigV1,
+    observation: &ShellObservation,
 ) -> Result<()> {
     let monitors = monitor_placement_inputs()?;
     if monitors.is_empty() {
@@ -128,6 +122,8 @@ pub(super) fn reconcile_slots(
                 class,
                 monitor_input(&monitors, monitor)?,
                 features,
+                config,
+                observation,
             )?),
             SlotReconcileAction::Reuse(monitor) => {
                 if let Some(mut slot) = take_slot(&mut old, monitor) {

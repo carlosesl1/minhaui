@@ -111,6 +111,25 @@ impl ShellConfigV1 {
         if !all_unique(self.topbar_modules.iter().map(|module| module.kind())) {
             return Err(ConfigError::DuplicateTopbarModule);
         }
+        if self
+            .topbar_modules
+            .iter()
+            .any(|module| !module.kind().is_v1_persisted())
+        {
+            return Err(ConfigError::UnsupportedTopbarModule);
+        }
+        let expected = default_topbar()
+            .into_iter()
+            .map(|module| module.kind())
+            .collect::<HashSet<_>>();
+        let actual = self
+            .topbar_modules
+            .iter()
+            .map(|module| module.kind())
+            .collect::<HashSet<_>>();
+        if actual != expected {
+            return Err(ConfigError::IncompleteTopbarModules);
+        }
         if !self.dock.validate() || !self.appearance.validate() {
             return Err(ConfigError::InvalidSettings);
         }
@@ -182,6 +201,14 @@ impl ShellConfigV1 {
     #[must_use]
     pub fn topbar_modules(&self) -> &[TopbarModule] {
         &self.topbar_modules
+    }
+    #[must_use]
+    pub fn with_topbar_modules(mut self, topbar_modules: Vec<TopbarModule>) -> Self {
+        self.topbar_modules = topbar_modules
+            .into_iter()
+            .filter(|module| module.kind().is_v1_persisted())
+            .collect();
+        self
     }
     #[must_use]
     pub const fn dock(&self) -> &DockSettings {
@@ -299,7 +326,8 @@ pub fn decode_config(bytes: &[u8]) -> ConfigLoad {
         if version == SCHEMA_VERSION {
             return match serde_json::from_value::<ShellConfigV1>(value) {
                 Ok(config) if config.validate().is_ok() => ConfigLoad::Current(config),
-                Ok(_) | Err(_) => recovered(RecoveryKind::Malformed, Some(version)),
+                Ok(_) => recovered(RecoveryKind::Malformed, Some(version)),
+                Err(_) => recovered(RecoveryKind::Malformed, Some(version)),
             };
         }
         return recovered(RecoveryKind::Malformed, Some(version));
@@ -397,6 +425,10 @@ pub enum ConfigError {
     /// Top-bar module kinds were not unique.
     #[error("topbar module kinds must be unique")]
     DuplicateTopbarModule,
+    #[error("topbar module is not supported by configuration schema V1")]
+    UnsupportedTopbarModule,
+    #[error("configuration must contain every schema V1 topbar module exactly once")]
+    IncompleteTopbarModules,
     #[error("settings value is outside supported bounds")]
     InvalidSettings,
     /// JSON encoding failed.

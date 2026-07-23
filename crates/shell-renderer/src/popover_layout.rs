@@ -55,7 +55,7 @@ fn contains(bounds: DipRect, point: DipPoint) -> bool {
 pub fn layout_popover_scene(scene: &PopoverScene, surface: DipRect) -> PopoverLayout {
     let mut rows = Vec::new();
     let mut y = surface.y + 5.0;
-    for (index, row) in scene.rows().iter().enumerate() {
+    for (index, row) in scene.rows().iter().enumerate().skip(scene.scroll_offset()) {
         if y + 24.0 > surface.y + surface.height - 5.0 {
             break;
         }

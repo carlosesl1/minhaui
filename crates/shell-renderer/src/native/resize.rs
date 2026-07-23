@@ -7,6 +7,7 @@ use super::{
 };
 use crate::ShowcaseTokens;
 use crate::logical_surface_rect;
+use crate::native_liquid_glass::DockLiquidGlassResources;
 use crate::native_showcase_resources::create_dock_inset_bitmap;
 
 impl CompositionRenderer {
@@ -44,6 +45,17 @@ impl CompositionRenderer {
                 logical_surface.height,
                 ShowcaseTokens::obsidian_glass().dock_radius,
             )?)
+        } else {
+            None
+        };
+        surface.dock_liquid_glass = if role == ShowcaseRole::Dock {
+            DockLiquidGlassResources::create(
+                &self.d2d_context,
+                logical_surface.width,
+                (logical_surface.height - 2.0).max(1.0),
+                ShowcaseTokens::obsidian_glass().dock_radius,
+                self.liquid_glass_mode,
+            )?
         } else {
             None
         };

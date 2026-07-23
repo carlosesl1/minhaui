@@ -73,6 +73,9 @@ mod win32_slots;
 mod win32_slot_lifecycle;
 
 #[cfg(windows)]
+mod win32_shell_observation;
+
+#[cfg(windows)]
 #[allow(
     unsafe_code,
     reason = "Win32 pointer coordinate helpers are isolated here"
@@ -107,6 +110,12 @@ mod win32_installed_package_icons;
 mod win32_timer;
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows system commands and input injection are isolated in this Adapter"
+)]
+mod win32_system_actions;
+#[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 topbar status adapters are isolated here")]
 mod win32_topbar_status;
 
@@ -139,6 +148,12 @@ mod win32_sample_state;
 #[cfg(windows)]
 mod win32_popover_render;
 
+mod background_apps;
+#[allow(
+    unsafe_code,
+    reason = "the one-shot worker only uses PostMessageW to wake the owner window"
+)]
+mod background_apps_worker;
 mod dock_context_menu;
 mod dock_controller;
 mod dock_controller_interaction;
@@ -160,11 +175,18 @@ mod runtime;
 mod settings_controller;
 mod topbar_controller;
 mod topbar_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "read-only notification registration and process capture is isolated here"
+)]
+mod win32_background_apps;
 mod window_preview;
 
 #[cfg(test)]
 mod integration_tests;
 
+pub(crate) use background_apps::BackgroundAppId;
 pub(crate) use dock_context_menu::{
     DockContextMenuController, DockContextMenuItem, QueuedContextMenuAction,
 };
@@ -182,16 +204,15 @@ pub(crate) use dock_types::{
 };
 pub(crate) use dock_visibility_motion::DockVisibilityMotion;
 pub(crate) use dock_window_sync::ObservedWindow;
-pub(crate) use native_event_route::{
-    NativeEventTarget, NativeRouteDecision, NativeWindowId, NativeWindowSlot,
-    route_native_event_to_slot,
-};
+pub(crate) use native_event_route::{NativeEventTarget, NativeWindowId, NativeWindowSlot};
+#[cfg(test)]
+pub(crate) use native_event_route::{NativeRouteDecision, route_native_event_to_slot};
 pub(crate) use popover_adapters::{DefaultPopoverDataProvider, OfflineWeatherProvider};
 pub(crate) use popover_controller::PopoverController;
 pub(crate) use popover_types::{
     PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
-    PopoverLoadState, PopoverPayload, QueuedPopoverAction, SessionAction, WeatherAccess,
-    WeatherItem, WeatherProvider,
+    PopoverLoadState, PopoverPayload, ProjectionMode, QueuedPopoverAction, SessionAction,
+    SystemRoute, WeatherAccess, WeatherItem, WeatherProvider,
 };
 #[cfg(test)]
 pub(crate) use preview_controller::{PREVIEW_BRIDGE_MS, PREVIEW_DWELL_MS};
@@ -206,8 +227,8 @@ pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, S
 pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
 pub(crate) use topbar_controller::TopbarController;
 pub(crate) use topbar_types::{
-    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarPointerPhase,
-    TopbarPointerSample, TopbarSnapshot,
+    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor,
+    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot, foreground_app_label,
 };
 #[cfg(windows)]
 pub use win32::{ShowcaseRunConfig, run_showcase};
@@ -257,9 +278,11 @@ pub(crate) enum PlatformEvent {
     PopoverKey(PopoverKey),
     PopoverPointer(DipPoint),
     PopoverPointerMoved(DipPoint),
+    PopoverScroll(isize),
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SyncWindows,
+    BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),
     QaExitRequested,
     CloseRequested,
     Destroyed,

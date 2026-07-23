@@ -5,6 +5,7 @@ use windows::core::Result;
 
 use crate::native::{ShellScenes, ShowcaseRole};
 use crate::native_icons::NativeIconCache;
+use crate::native_liquid_glass::DockLiquidGlassResources;
 use crate::native_showcase_context_menu::{
     ContextMenuBrushes, INSET_ALPHA_PROFILE, MENU_BODY_ALPHA, SHADOW_ALPHA_PROFILE,
     draw_context_menu,
@@ -31,6 +32,7 @@ pub(crate) struct ShowcaseStyle<'a> {
     role: ShowcaseRole,
     solid_material: bool,
     dock_inset: Option<&'a DockInsetBitmap>,
+    dock_liquid_glass: Option<&'a DockLiquidGlassResources>,
 }
 
 impl<'a> ShowcaseStyle<'a> {
@@ -38,11 +40,13 @@ impl<'a> ShowcaseStyle<'a> {
         role: ShowcaseRole,
         solid_material: bool,
         dock_inset: Option<&'a DockInsetBitmap>,
+        dock_liquid_glass: Option<&'a DockLiquidGlassResources>,
     ) -> Self {
         Self {
             role,
             solid_material,
             dock_inset,
+            dock_liquid_glass,
         }
     }
 }
@@ -58,6 +62,7 @@ pub(crate) fn draw_showcase(
     let role = style.role;
     let solid_material = style.solid_material;
     let dock_inset = style.dock_inset;
+    let dock_liquid_glass = style.dock_liquid_glass;
     let width = surface.width;
     let height = surface.height;
     let tokens = if solid_material {
@@ -116,6 +121,7 @@ pub(crate) fn draw_showcase(
         let motion_strength = scenes
             .dock
             .map_or(0.0, crate::DockScene::material_motion_strength);
+        let hover_position_x = scenes.dock.and_then(crate::DockScene::hover_position_x);
         let content_bounds = scenes
             .dock
             .map(|scene| crate::dock_material_bounds(scene, DipRect::new(0.0, 0.0, width, height)));
@@ -128,6 +134,7 @@ pub(crate) fn draw_showcase(
                 radius,
                 solid: solid_material,
                 motion_strength,
+                hover_position_x,
                 content_bounds,
             },
             MaterialBrushes {
@@ -137,6 +144,7 @@ pub(crate) fn draw_showcase(
                 topbar_tint: &topbar_tint,
                 rim_outer: &rim_outer,
                 dock_inset,
+                liquid_glass: dock_liquid_glass,
             },
         );
     } else if role != ShowcaseRole::Popover || scenes.context_menu.is_none() {
@@ -219,12 +227,13 @@ pub(crate) fn draw_showcase(
         } else if let Some(scene) = scenes.popover {
             draw_functional_popover(
                 context,
+                icons,
                 PopoverFormats {
                     label: &text_format,
                     detail: &detail_format,
+                    icon: &icon_format,
                 },
-                width,
-                height,
+                DipRect::new(0.0, 0.0, width, height),
                 scene,
                 PopoverBrushes {
                     hover: &hover,

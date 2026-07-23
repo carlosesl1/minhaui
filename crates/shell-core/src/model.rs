@@ -226,6 +226,10 @@ impl Monitor {
 pub enum TopbarModuleKind {
     /// App and system menu entry point.
     SystemMenu,
+    /// Identity of the current foreground application.
+    AppIdentity,
+    /// Windows Search entry point.
+    Search,
     /// Clock and calendar entry point.
     Clock,
     /// Network status.
@@ -236,6 +240,34 @@ pub enum TopbarModuleKind {
     Power,
     /// Notification center entry point.
     Notifications,
+    /// Applications currently represented in the Windows notification area.
+    BackgroundApps,
+}
+
+impl TopbarModuleKind {
+    /// Returns whether the module belongs to the fixed leading cluster.
+    #[must_use]
+    pub const fn is_fixed_leading(self) -> bool {
+        matches!(self, Self::SystemMenu | Self::AppIdentity | Self::Search)
+    }
+
+    /// Returns whether Settings may change this module's visibility or order.
+    #[must_use]
+    pub const fn is_customizable(self) -> bool {
+        !matches!(
+            self,
+            Self::SystemMenu | Self::AppIdentity | Self::Search | Self::BackgroundApps
+        )
+    }
+
+    /// Returns whether this module is compatible with the V1 persisted list.
+    #[must_use]
+    pub const fn is_v1_persisted(self) -> bool {
+        !matches!(
+            self,
+            Self::AppIdentity | Self::Search | Self::BackgroundApps
+        )
+    }
 }
 
 /// Stores one module's order and visibility.
@@ -281,6 +313,17 @@ pub enum Popover {
     Power,
     /// Notification center popover.
     Notifications,
+    /// Running applications registered in the Windows notification area.
+    BackgroundApps,
+}
+
+/// Describes the behavior attached to an interactive top-bar module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopbarIntent {
+    /// Opens one of the exclusive shell popovers.
+    Popover(Popover),
+    /// Opens the native Windows Search experience.
+    OpenSearch,
 }
 
 /// Describes current dock visibility.

@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+use shell_core::Popover;
 use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
 use shell_renderer::{
     PhysicalRect, context_menu_height_for_entries, physical_from_dip, popover_height_for_rows,
@@ -11,7 +12,10 @@ use crate::win32_dock_render::{DockRenderBaseline, DockRenderWindows};
 use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows};
 use crate::win32_surface_runtime::{SurfaceFrame, SurfaceSizeChange, SurfaceTarget, present_frame};
 use crate::win32_window::OwnedWindow;
-use crate::{PopoverAction, QueuedContextMenuAction, QueuedPopoverAction, QueuedTopbarAction};
+use crate::{
+    PopoverAction, QueuedContextMenuAction, QueuedPopoverAction, QueuedTopbarAction,
+    TopbarOverlayAnchor,
+};
 
 const POPOVER_SURFACE_ROLE: ShowcaseRole = ShowcaseRole::Popover;
 
@@ -28,7 +32,10 @@ impl RuntimeSurfaces {
     ) -> Result<()> {
         for action in actions {
             match action {
-                QueuedTopbarAction::OpenPopover(kind) => {
+                QueuedTopbarAction::OpenPopover {
+                    popover: kind,
+                    anchor,
+                } => {
                     self.dismiss_context_menu(topbar, dock, popover, preview, settings)?;
                     popover.hide();
                     popover.set_backdrop_enabled(true);
@@ -38,17 +45,31 @@ impl RuntimeSurfaces {
                         continue;
                     }
                     settings.hide();
-                    self.popover_controller
-                        .open(*kind, &self.popover_provider)
-                        .map_err(|error| {
-                            windows::core::Error::new(invalid_arg(), error.to_string())
-                        })?;
+                    self.active_topbar_anchor = Some(*anchor);
+                    let background_generation = if *kind == Popover::BackgroundApps {
+                        Some(self.popover_controller.begin_loading(*kind))
+                    } else {
+                        self.popover_controller
+                            .open_with_snapshot(
+                                *kind,
+                                &self.popover_provider,
+                                self.topbar_controller.snapshot(),
+                            )
+                            .map_err(|error| {
+                                windows::core::Error::new(invalid_arg(), error.to_string())
+                            })?;
+                        None
+                    };
                     let work = crate::win32_windowing::window_work_area(topbar.hwnd)?;
                     let row_count = self
                         .popover_controller
                         .scene()
                         .map_or(0, |scene| scene.rows().len());
-                    popover.place_popover(work, topbar.rect, popover_height_for_rows(row_count))?;
+                    popover.place_popover(
+                        work,
+                        self.topbar_anchor_rect(topbar, *anchor),
+                        popover_height_for_rows(row_count),
+                    )?;
                     self.redraw_popover(topbar, dock, popover, preview, settings)?;
                     self.animate_surface_entrance(
                         POPOVER_SURFACE_ROLE,
@@ -61,8 +82,23 @@ impl RuntimeSurfaces {
                         },
                     )?;
                     popover.show_activating();
+                    if let Some(generation) = background_generation {
+                        crate::background_apps_worker::request_background_apps(
+                            generation,
+                            crate::win32_event_queue::native_window_id(topbar.hwnd),
+                        );
+                    }
                 }
-                QueuedTopbarAction::PollDeferred | QueuedTopbarAction::RedrawTopbar => {}
+                QueuedTopbarAction::OpenSearch => {
+                    self.popover_controller.dismiss();
+                    popover.hide();
+                    settings.hide();
+                    record_system_action(
+                        "topbar.search",
+                        crate::win32_system_actions::open_search(),
+                    );
+                }
+                QueuedTopbarAction::RedrawTopbar => {}
             }
         }
         Ok(())
@@ -190,11 +226,10 @@ impl RuntimeSurfaces {
             return Ok(true);
         }
         if let Some(scene) = self.popover_controller.scene() {
-            popover.place_popover(
-                work,
-                topbar.rect,
-                popover_height_for_rows(scene.rows().len()),
-            )?;
+            let anchor = self.active_topbar_anchor.map_or(topbar.rect, |anchor| {
+                self.topbar_anchor_rect(topbar, anchor)
+            });
+            popover.place_popover(work, anchor, popover_height_for_rows(scene.rows().len()))?;
             return Ok(true);
         }
         Ok(false)
@@ -289,7 +324,40 @@ impl RuntimeSurfaces {
                     )?;
                     settings.show_activating();
                 }
-                QueuedPopoverAction::TypedIntent(_) => {
+                QueuedPopoverAction::TypedIntent(PopoverAction::OpenBackgroundApp(id)) => {
+                    let Some(entry) = self.background_apps.iter().find(|entry| entry.id() == *id)
+                    else {
+                        continue;
+                    };
+                    match crate::win32_background_apps::activate_background_app(
+                        entry,
+                        &self.latest_observed_windows,
+                    ) {
+                        Ok(()) => {
+                            self.popover_controller.dismiss();
+                            popover.hide();
+                        }
+                        Err(error) => crate::diagnostics::record(
+                            crate::diagnostics::DiagnosticModule::AppLifecycle,
+                            crate::diagnostics::LogLevel::Error,
+                            "background_app_open_failed",
+                            &[("code", error.code())],
+                        ),
+                    }
+                }
+                QueuedPopoverAction::TypedIntent(action) => {
+                    record_system_action(
+                        "popover.system_action",
+                        crate::win32_system_actions::apply(action),
+                    );
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                QueuedPopoverAction::Reload => {
+                    self.popover_controller
+                        .reload(&self.popover_provider, self.topbar_controller.snapshot())
+                        .map_err(|error| {
+                            windows::core::Error::new(invalid_arg(), error.to_string())
+                        })?;
                     self.redraw_popover(topbar, dock, popover, preview, settings)?;
                 }
                 QueuedPopoverAction::Dismiss => popover.hide(),
@@ -338,7 +406,7 @@ impl RuntimeSurfaces {
         self.complete_surface_update(update, windows)
     }
 
-    fn redraw_popover(
+    pub(super) fn redraw_popover(
         &mut self,
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
@@ -387,6 +455,37 @@ impl RuntimeSurfaces {
             .surface_runtime
             .animate_entrance(role, self.reduced_motion);
         self.complete_surface_update(update, windows)
+    }
+
+    pub(super) fn topbar_anchor_rect(
+        &self,
+        topbar: &OwnedWindow,
+        anchor: TopbarOverlayAnchor,
+    ) -> PhysicalRect {
+        let TopbarOverlayAnchor::Module(kind) = anchor else {
+            return topbar.rect;
+        };
+        let Some(bounds) = self.topbar_controller.module_bounds(kind) else {
+            return topbar.rect;
+        };
+        PhysicalRect::new(
+            topbar.rect.x + physical_from_dip(bounds.x, topbar.dpi()),
+            topbar.rect.y + physical_from_dip(bounds.y, topbar.dpi()),
+            physical_from_dip(bounds.width, topbar.dpi()),
+            physical_from_dip(bounds.height, topbar.dpi()),
+        )
+    }
+}
+
+fn record_system_action(event: &'static str, result: Result<()>) {
+    if let Err(error) = result {
+        let message = error.to_string();
+        crate::diagnostics::record(
+            crate::diagnostics::DiagnosticModule::AppLifecycle,
+            crate::diagnostics::LogLevel::Error,
+            event,
+            &[("error", &message)],
+        );
     }
 }
 

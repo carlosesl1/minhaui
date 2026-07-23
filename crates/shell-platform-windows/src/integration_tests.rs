@@ -26,6 +26,8 @@ mod preview_controller;
 mod preview_entrance_motion;
 #[path = "../tests/settings_controller.rs"]
 mod settings_controller;
+#[path = "../tests/shell_observation_runtime.rs"]
+mod shell_observation_runtime;
 #[path = "../tests/topbar_controller.rs"]
 mod topbar_controller;
 #[path = "../tests/window_preview_groups.rs"]

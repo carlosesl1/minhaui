@@ -77,6 +77,11 @@ pub enum ShellEvent {
         module: TopbarModuleKind,
         visible: bool,
     },
+    /// Moves a top-bar module before another module or to the end.
+    ReorderTopbarModule {
+        module: TopbarModuleKind,
+        before: Option<TopbarModuleKind>,
+    },
     /// Selects a performance budget.
     SetPerformance(PerformancePreset),
     /// Enters conservative recovery presentation.
@@ -145,6 +150,9 @@ pub enum TransitionError {
     /// A top-bar module was not configured.
     #[error("unknown topbar module {0:?}")]
     UnknownTopbarModule(TopbarModuleKind),
+    /// A fixed leading module cannot be hidden or reordered.
+    #[error("fixed topbar module cannot be customized: {0:?}")]
+    FixedTopbarModule(TopbarModuleKind),
     /// Display topology was empty.
     #[error("display topology must contain a monitor")]
     NoMonitors,

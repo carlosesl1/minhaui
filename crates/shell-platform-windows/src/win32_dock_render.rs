@@ -1,8 +1,8 @@
 #![deny(unsafe_code)]
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use shell_core::{Effect, ShellState};
+use shell_core::{AutohideState, Effect, ShellState};
 use shell_renderer::DipRect;
 use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
 use windows::core::Result;
@@ -15,15 +15,42 @@ use crate::win32_window::OwnedWindow;
 use crate::{DockRenderAction, DockRenderChange, QueuedDockAction, classify_dock_render_action};
 
 pub(super) struct DockRenderBaseline<'a> {
-    state: &'a ShellState,
+    state: Option<&'a ShellState>,
+    dock_visibility: AutohideState,
     visual_generation: u64,
 }
 
 impl<'a> DockRenderBaseline<'a> {
     pub(super) const fn new(state: &'a ShellState, visual_generation: u64) -> Self {
         Self {
-            state,
+            state: Some(state),
+            dock_visibility: state.dock(),
             visual_generation,
+        }
+    }
+
+    pub(super) const fn visual_only(
+        dock_visibility: AutohideState,
+        visual_generation: u64,
+    ) -> Self {
+        Self {
+            state: None,
+            dock_visibility,
+            visual_generation,
+        }
+    }
+
+    fn change(
+        &self,
+        current: &ShellState,
+        current_visual_generation: u64,
+        rebuild_requested: bool,
+    ) -> DockRenderChange {
+        DockRenderChange {
+            state_changed: self.state.is_some_and(|state| state != current),
+            visual_changed: self.visual_generation != current_visual_generation,
+            dock_visibility_changed: self.dock_visibility != current.dock(),
+            rebuild_requested,
         }
     }
 }
@@ -60,39 +87,41 @@ impl RuntimeSurfaces {
                 .then(Instant::now);
         let mut diagnostic_action = "classify";
         let result = (|| {
-            let desired_width = self.dock_controller.preferred_width_dip();
-            let state_changed = baseline.state != self.dock_controller.state();
-            let visibility_changed = baseline.state.dock() != self.dock_controller.state().dock();
-            if visibility_changed {
+            let change = baseline.change(
+                self.dock_controller.state(),
+                self.dock_controller.visual_generation(),
+                actions_require_rebuild(actions),
+            );
+            if change.dock_visibility_changed {
                 diagnostic_action = "visibility";
                 let update = self.begin_dock_visibility(windows.dock);
                 self.complete_surface_update(update, windows.surfaces())?;
                 return self.sync_dock_animation(windows.dock);
             }
-            if (windows.dock.dock_width_dip() - desired_width).abs() > 0.25 {
-                diagnostic_action = "resize-rebuild";
-                if self.dock_visibility_motion.is_some() {
-                    return Ok(());
-                }
-                let work = crate::win32_windowing::window_work_area(windows.dock.hwnd)?;
-                windows
-                    .dock
-                    .set_dock_width_preserving_y(work, desired_width)?;
-                return self.rebuild_dock_surface(windows.surfaces());
-            }
-            let render_action = classify_dock_render_action(DockRenderChange {
-                state_changed,
-                visual_changed: baseline.visual_generation
-                    != self.dock_controller.visual_generation(),
-                dock_visibility_changed: visibility_changed,
-                rebuild_requested: actions_require_rebuild(actions),
-            });
+            let render_action = classify_dock_render_action(change);
             diagnostic_action = match render_action {
                 DockRenderAction::None => "none",
                 DockRenderAction::RedrawDock => "redraw",
                 DockRenderAction::RebuildDockSurface => "rebuild-dock",
                 DockRenderAction::RebuildAllSurfaces => "rebuild-all",
             };
+            if matches!(render_action, DockRenderAction::None) {
+                return Ok(());
+            }
+            if dock_width_measurement_required(change) {
+                let desired_width = self.dock_controller.preferred_width_dip();
+                if (windows.dock.dock_width_dip() - desired_width).abs() > 0.25 {
+                    diagnostic_action = "resize-rebuild";
+                    if self.dock_visibility_motion.is_some() {
+                        return Ok(());
+                    }
+                    let work = crate::win32_windowing::window_work_area(windows.dock.hwnd)?;
+                    windows
+                        .dock
+                        .set_dock_width_preserving_y(work, desired_width)?;
+                    return self.rebuild_dock_surface(windows.surfaces());
+                }
+            }
             match render_action {
                 DockRenderAction::None => Ok(()),
                 DockRenderAction::RedrawDock => self.redraw_dock(windows.surfaces()),
@@ -109,10 +138,16 @@ impl RuntimeSurfaces {
     }
 
     fn redraw_dock(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
+        let diagnostic_started =
+            crate::diagnostics::enabled(crate::diagnostics::DiagnosticModule::DockPerformance)
+                .then(Instant::now);
         let window_size = windows.dock.surface_physical_size();
+        let scene_started = diagnostic_started.map(|_| Instant::now());
         self.dock_controller
             .update_surface(dip_surface(windows.dock));
         let dock_scene = self.dock_controller.scene();
+        let scene_duration = scene_started.map_or(Duration::ZERO, |started| started.elapsed());
+        let present_started = diagnostic_started.map(|_| Instant::now());
         let update = present_frame(
             &mut self.surface_runtime,
             SurfaceFrame {
@@ -132,7 +167,15 @@ impl RuntimeSurfaces {
             },
             SurfaceSizeChange::Resize,
         );
-        self.finish_dock_update(update, windows)
+        let present_duration = present_started.map_or(Duration::ZERO, |started| started.elapsed());
+        let result = self.finish_dock_update(update, windows);
+        record_slow_dock_redraw(
+            diagnostic_started,
+            scene_duration,
+            present_duration,
+            &result,
+        );
+        result
     }
 
     fn rebuild_dock_surface(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
@@ -184,6 +227,10 @@ impl RuntimeSurfaces {
     }
 }
 
+const fn dock_width_measurement_required(change: DockRenderChange) -> bool {
+    change.state_changed || change.rebuild_requested
+}
+
 const fn dock_qa_trace_required(update: Option<SurfaceUpdate>) -> bool {
     matches!(update, Some(SurfaceUpdate::Presented))
 }
@@ -228,6 +275,40 @@ fn record_slow_dock_render(started: Option<Instant>, action: &str, result: &Resu
     );
 }
 
+fn record_slow_dock_redraw(
+    started: Option<Instant>,
+    scene_duration: Duration,
+    present_duration: Duration,
+    result: &Result<()>,
+) {
+    let Some(started) = started else {
+        return;
+    };
+    let duration = started.elapsed();
+    if !crate::diagnostics::is_slow_dock_operation(duration) {
+        return;
+    }
+    let duration_us = duration.as_micros().to_string();
+    let scene_us = scene_duration.as_micros().to_string();
+    let present_us = present_duration.as_micros().to_string();
+    let outcome = if result.is_ok() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    crate::diagnostics::record(
+        crate::diagnostics::DiagnosticModule::DockPerformance,
+        crate::diagnostics::LogLevel::Info,
+        "dock.redraw.slow",
+        &[
+            ("duration_us", &duration_us),
+            ("scene_us", &scene_us),
+            ("present_us", &present_us),
+            ("outcome", outcome),
+        ],
+    );
+}
+
 pub(super) fn dip_surface(window: &OwnedWindow) -> DipRect {
     let scale = window.dpi().scale();
     let (width, height) = window.surface_physical_size();
@@ -245,10 +326,12 @@ mod tests {
     use crate::win32_surface_runtime::{
         SurfaceRenderDecision, SurfaceUpdate, surface_render_decision,
     };
+    use crate::{DockRenderAction, DockRenderChange};
+    use shell_core::ShellState;
     use shell_renderer::Dpi;
     use shell_renderer::native::SurfaceMetrics;
 
-    use super::{dock_qa_trace_required, finish_dock_update_with};
+    use super::{dock_qa_trace_required, dock_width_measurement_required, finish_dock_update_with};
 
     #[test]
     fn dock_surface_policy_covers_missing_redraw_resize_and_recovery() {
@@ -317,5 +400,41 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, "fatal");
         assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn visual_only_frames_skip_the_expensive_dock_width_measurement() {
+        let visual_only = DockRenderChange {
+            state_changed: false,
+            visual_changed: true,
+            dock_visibility_changed: false,
+            rebuild_requested: false,
+        };
+        assert_eq!(
+            crate::classify_dock_render_action(visual_only),
+            DockRenderAction::RedrawDock
+        );
+        assert!(!dock_width_measurement_required(visual_only));
+
+        assert!(dock_width_measurement_required(DockRenderChange {
+            state_changed: true,
+            ..visual_only
+        }));
+    }
+
+    #[test]
+    fn visual_only_baseline_avoids_cloning_the_shell_state() {
+        let state = ShellState::default();
+        let baseline = super::DockRenderBaseline::visual_only(state.dock(), 7);
+
+        assert_eq!(
+            baseline.change(&state, 8, false),
+            DockRenderChange {
+                state_changed: false,
+                visual_changed: true,
+                dock_visibility_changed: false,
+                rebuild_requested: false,
+            }
+        );
     }
 }

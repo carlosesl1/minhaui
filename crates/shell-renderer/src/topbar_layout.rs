@@ -1,4 +1,4 @@
-use shell_core::{Popover, TopbarModuleKind};
+use shell_core::{Popover, TopbarIntent, TopbarModuleKind};
 
 use crate::{DipPoint, DipRect, TopbarDensity, TopbarModuleVisual, TopbarScene};
 
@@ -41,7 +41,7 @@ impl TopbarLaidOutItem {
     }
 
     #[must_use]
-    pub const fn intent(&self) -> Option<Popover> {
+    pub const fn intent(&self) -> Option<TopbarIntent> {
         self.visual.intent()
     }
 
@@ -57,7 +57,7 @@ pub enum TopbarOverflow {
     Collapsed {
         hidden_count: usize,
         bounds: DipRect,
-        intent: Popover,
+        intent: TopbarIntent,
     },
 }
 
@@ -79,10 +79,23 @@ impl TopbarLayout {
     }
 
     #[must_use]
-    pub fn hit_test(&self, point: DipPoint) -> Option<Popover> {
+    pub fn item_at(&self, point: DipPoint) -> Option<&TopbarLaidOutItem> {
         self.items
             .iter()
             .find(|item| contains(item.bounds(), point))
+    }
+
+    #[must_use]
+    pub fn module_bounds(&self, kind: TopbarModuleKind) -> Option<DipRect> {
+        self.items
+            .iter()
+            .find(|item| item.kind() == kind)
+            .map(TopbarLaidOutItem::bounds)
+    }
+
+    #[must_use]
+    pub fn hit_test(&self, point: DipPoint) -> Option<TopbarIntent> {
+        self.item_at(point)
             .and_then(TopbarLaidOutItem::intent)
             .or_else(|| match self.overflow {
                 TopbarOverflow::None => None,
@@ -102,7 +115,7 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
     for visual in scene
         .modules()
         .iter()
-        .filter(|visual| visual.kind() == TopbarModuleKind::SystemMenu)
+        .filter(|visual| is_leading(visual.kind()))
     {
         let width = module_width(visual, scene.density(), scene.text_scale());
         items.push(TopbarLaidOutItem {
@@ -116,7 +129,7 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
     let status = scene
         .modules()
         .iter()
-        .filter(|visual| visual.kind() != TopbarModuleKind::SystemMenu)
+        .filter(|visual| !is_leading(visual.kind()))
         .collect::<Vec<_>>();
     let status_width = status
         .iter()
@@ -125,8 +138,18 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
         + status.len().saturating_sub(1) as f32 * metrics.gap;
     let right_edge = surface.x + surface.width - metrics.trailing_padding;
     let right_start = right_edge - status_width;
-    let min_status_x = left_x + metrics.spacer;
+    let mut min_status_x = left_x + metrics.spacer;
     let mut hidden_count = 0;
+
+    if !status.is_empty() && right_start < min_status_x {
+        left_x = shrink_leading_for_overflow(
+            &mut items,
+            scene.density(),
+            metrics,
+            right_edge - metrics.overflow_width - metrics.gap,
+        );
+        min_status_x = left_x + metrics.spacer;
+    }
 
     if right_start >= min_status_x {
         let mut x = right_start;
@@ -160,27 +183,47 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
         items.sort_by_key(|item| module_order(scene, item.kind()));
     }
 
+    let leading_end = items
+        .iter()
+        .filter(|item| is_leading(item.kind()))
+        .map(|item| item.bounds().x + item.bounds().width)
+        .reduce(f32::max)
+        .unwrap_or(surface.x + metrics.leading_padding);
     let overflow = if hidden_count == 0 {
         TopbarOverflow::None
     } else {
         let first_status_x = items
             .iter()
-            .filter(|item| item.kind() != TopbarModuleKind::SystemMenu)
+            .filter(|item| !is_leading(item.kind()))
             .map(|item| item.bounds().x)
             .reduce(f32::min)
             .unwrap_or(right_edge);
+        let overflow_x = first_status_x - metrics.gap - metrics.overflow_width;
+        if overflow_x < leading_end {
+            return TopbarLayout {
+                items,
+                overflow: TopbarOverflow::None,
+            };
+        }
         TopbarOverflow::Collapsed {
             hidden_count,
             bounds: DipRect::new(
-                first_status_x - metrics.gap - metrics.overflow_width,
+                overflow_x,
                 surface.y + metrics.y,
                 metrics.overflow_width,
                 metrics.height,
             ),
-            intent: Popover::SystemMenu,
+            intent: TopbarIntent::Popover(Popover::SystemMenu),
         }
     };
     TopbarLayout { items, overflow }
+}
+
+const fn is_leading(kind: TopbarModuleKind) -> bool {
+    matches!(
+        kind,
+        TopbarModuleKind::SystemMenu | TopbarModuleKind::AppIdentity | TopbarModuleKind::Search
+    )
 }
 
 fn module_order(scene: &TopbarScene, kind: TopbarModuleKind) -> usize {
@@ -192,12 +235,59 @@ fn module_order(scene: &TopbarScene, kind: TopbarModuleKind) -> usize {
 }
 
 fn module_width(visual: &TopbarModuleVisual, density: TopbarDensity, text_scale: f32) -> f32 {
-    let base = match density {
-        TopbarDensity::Compact => 38.0,
-        TopbarDensity::Comfortable => 48.0,
-    };
+    let base = minimum_module_width(density);
     let text_width = visual.text().chars().count() as f32 * 6.0 * text_scale;
     (base + text_width).clamp(base, 120.0 * text_scale)
+}
+
+fn shrink_leading_for_overflow(
+    items: &mut [TopbarLaidOutItem],
+    density: TopbarDensity,
+    metrics: Metrics,
+    target_end: f32,
+) -> f32 {
+    let current_end = items
+        .iter()
+        .filter(|item| is_leading(item.kind()))
+        .map(|item| item.bounds.x + item.bounds.width)
+        .reduce(f32::max)
+        .unwrap_or(target_end);
+    let mut deficit = (current_end - target_end).max(0.0);
+    let minimum = minimum_module_width(density);
+
+    for kind in [
+        TopbarModuleKind::AppIdentity,
+        TopbarModuleKind::Search,
+        TopbarModuleKind::SystemMenu,
+    ] {
+        let Some(item) = items.iter_mut().find(|item| item.kind() == kind) else {
+            continue;
+        };
+        let reduction = deficit.min((item.bounds.width - minimum).max(0.0));
+        item.bounds.width -= reduction;
+        deficit -= reduction;
+        if deficit <= f32::EPSILON {
+            break;
+        }
+    }
+
+    let mut x = items
+        .iter()
+        .find(|item| is_leading(item.kind()))
+        .map(|item| item.bounds.x)
+        .unwrap_or(target_end);
+    for item in items.iter_mut().filter(|item| is_leading(item.kind())) {
+        item.bounds.x = x;
+        x += item.bounds.width + metrics.gap;
+    }
+    x
+}
+
+const fn minimum_module_width(density: TopbarDensity) -> f32 {
+    match density {
+        TopbarDensity::Compact => 38.0,
+        TopbarDensity::Comfortable => 48.0,
+    }
 }
 
 fn metrics(density: TopbarDensity, text_scale: f32) -> Metrics {

@@ -2,6 +2,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrush};
 use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 
+use crate::native_icons::NativeIconCache;
 use crate::native_showcase_primitives::{draw_text, fill_round, rect};
 use crate::{DipRect, PopoverContentState, PopoverScene, layout_popover_scene};
 
@@ -16,21 +17,24 @@ pub(crate) struct PopoverBrushes<'a> {
 pub(crate) struct PopoverFormats<'a> {
     pub label: &'a IDWriteTextFormat,
     pub detail: &'a IDWriteTextFormat,
+    pub icon: &'a IDWriteTextFormat,
 }
 
 pub(crate) fn draw_functional_popover(
     context: &ID2D1DeviceContext,
+    icons: &mut NativeIconCache,
     formats: PopoverFormats<'_>,
-    width: f32,
-    height: f32,
+    surface: DipRect,
     scene: &PopoverScene,
     brushes: PopoverBrushes<'_>,
 ) {
+    let width = surface.width;
+    let height = surface.height;
     let layout = layout_popover_scene(scene, DipRect::new(0.0, 0.0, width, height));
     if layout.rows().is_empty() {
         draw_text(
             context,
-            status_text(scene.state()),
+            scene.status_text(),
             formats.label,
             D2D_RECT_F {
                 left: 16.0,
@@ -57,12 +61,32 @@ pub(crate) fn draw_functional_popover(
                 brushes.hover,
             );
         }
+        let label_left = if let Some(source) = row.icon_source() {
+            let icon_bounds = D2D_RECT_F {
+                left: bounds.x,
+                top: bounds.y + 3.0,
+                right: bounds.x + 18.0,
+                bottom: bounds.y + 21.0,
+            };
+            if !icons.draw(source, icon_bounds) {
+                draw_text(
+                    context,
+                    "\u{ECAA}",
+                    formats.icon,
+                    icon_bounds,
+                    brushes.primary,
+                );
+            }
+            bounds.x + 26.0
+        } else {
+            bounds.x
+        };
         draw_text(
             context,
             row.label(),
             formats.label,
             D2D_RECT_F {
-                left: bounds.x,
+                left: label_left,
                 top: bounds.y,
                 right: bounds.x + bounds.width * 0.55,
                 bottom: bounds.y + bounds.height,
@@ -85,16 +109,6 @@ pub(crate) fn draw_functional_popover(
             },
             brushes.secondary,
         );
-    }
-}
-
-const fn status_text(state: PopoverContentState) -> &'static str {
-    match state {
-        PopoverContentState::Loading => "Loading",
-        PopoverContentState::Ready => "Ready",
-        PopoverContentState::Empty => "Empty",
-        PopoverContentState::Error => "Unavailable",
-        PopoverContentState::Offline => "Offline",
     }
 }
 

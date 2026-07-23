@@ -59,6 +59,8 @@ fn normalize_unit_result(
 pub(super) struct NativeSurfaceOptions {
     pub(super) force_warp: bool,
     pub(super) solid_material: bool,
+    pub(super) liquid_glass: bool,
+    pub(super) reduced_motion: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -140,7 +142,12 @@ impl SurfaceAdapter for DirectCompositionAdapter {
     type Surface = WindowSurface;
 
     fn create_renderer(options: NativeSurfaceOptions) -> windows::core::Result<Self::Renderer> {
-        CompositionRenderer::new(options.force_warp, options.solid_material)
+        CompositionRenderer::new(
+            options.force_warp,
+            options.solid_material,
+            options.liquid_glass,
+            options.reduced_motion,
+        )
     }
 
     fn device_kind(renderer: &Self::Renderer) -> DeviceKind {
@@ -668,7 +675,12 @@ mod tests {
         type Surface = RecordingSurface;
 
         fn create_renderer(options: NativeSurfaceOptions) -> windows::core::Result<Self::Renderer> {
-            let _ = (options.force_warp, options.solid_material);
+            let _ = (
+                options.force_warp,
+                options.solid_material,
+                options.liquid_glass,
+                options.reduced_motion,
+            );
             let mut state = recording();
             state.attempts += 1;
             let attempt = state.attempts;
@@ -883,6 +895,8 @@ mod tests {
         NativeSurfaceRuntime::new(NativeSurfaceOptions {
             force_warp: false,
             solid_material: false,
+            liquid_glass: false,
+            reduced_motion: false,
         })
     }
 

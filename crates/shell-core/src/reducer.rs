@@ -54,6 +54,9 @@ pub fn reduce(state: &ShellState, event: ShellEvent) -> Result<Transition, Trans
         ShellEvent::SetTopbarVisibility { module, visible } => {
             set_topbar(&mut next, module, visible)?
         }
+        ShellEvent::ReorderTopbarModule { module, before } => {
+            reorder_topbar(&mut next, module, before)?
+        }
         ShellEvent::SetPerformance(preset) => {
             if next.performance == preset {
                 no_op(NoOpReason::AlreadyConfigured)
@@ -138,6 +141,9 @@ fn set_topbar(
     kind: TopbarModuleKind,
     visible: bool,
 ) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    if !kind.is_customizable() {
+        return Err(TransitionError::FixedTopbarModule(kind));
+    }
     let module = state
         .topbar
         .iter_mut()
@@ -148,6 +154,71 @@ fn set_topbar(
     }
     module.visible = visible;
     Ok(applied(vec![Effect::PersistConfiguration]))
+}
+
+fn reorder_topbar(
+    state: &mut ShellState,
+    kind: TopbarModuleKind,
+    before: Option<TopbarModuleKind>,
+) -> Result<(Vec<Effect>, TransitionOutcome), TransitionError> {
+    if !kind.is_customizable() {
+        return Err(TransitionError::FixedTopbarModule(kind));
+    }
+    if let Some(target) = before
+        && !target.is_customizable()
+    {
+        return Err(TransitionError::FixedTopbarModule(target));
+    }
+    let source = state
+        .topbar
+        .iter()
+        .position(|module| module.kind == kind)
+        .ok_or(TransitionError::UnknownTopbarModule(kind))?;
+    let target = match before {
+        Some(target) if target == kind => return Ok(no_op(NoOpReason::AlreadyConfigured)),
+        Some(target) => Some(
+            state
+                .topbar
+                .iter()
+                .position(|module| module.kind == target)
+                .ok_or(TransitionError::UnknownTopbarModule(target))?,
+        ),
+        None => None,
+    };
+    let module = state.topbar.remove(source);
+    let insertion = match target {
+        Some(target) if source < target => target - 1,
+        Some(target) => target,
+        None => state.topbar.len(),
+    };
+    state.topbar.insert(insertion, module);
+    place_background_apps_before_clock(state);
+    if insertion == source {
+        return Ok(no_op(NoOpReason::AlreadyConfigured));
+    }
+    Ok(applied(vec![Effect::PersistConfiguration]))
+}
+
+fn place_background_apps_before_clock(state: &mut ShellState) {
+    let Some(background) = state
+        .topbar
+        .iter()
+        .position(|module| module.kind == TopbarModuleKind::BackgroundApps)
+    else {
+        return;
+    };
+    let module = state.topbar.remove(background);
+    let Some(clock) = state
+        .topbar
+        .iter()
+        .position(|module| module.kind == TopbarModuleKind::Clock)
+    else {
+        state
+            .topbar
+            .insert(background.min(state.topbar.len()), module);
+        return;
+    };
+    state.topbar.insert(clock, module);
 }
 
 fn safe_mode(state: &mut ShellState) -> (Vec<Effect>, TransitionOutcome) {

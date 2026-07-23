@@ -7,11 +7,10 @@ use crate::win32::{
 };
 
 const DOCK_ANIMATION_INTERVAL_MS: u32 = 16;
-const DOCK_EDGE_PROBE_INTERVAL_MS: u32 = 25;
-
 pub(super) struct TimerGuard {
     hwnd: HWND,
     id: usize,
+    interval_ms: u32,
 }
 
 impl TimerGuard {
@@ -27,8 +26,8 @@ impl TimerGuard {
         Self::start_id(hwnd, DOCK_ANIMATION_TIMER_ID, DOCK_ANIMATION_INTERVAL_MS)
     }
 
-    pub(super) fn start_dock_edge_probe(hwnd: HWND) -> Result<Self> {
-        Self::start_id(hwnd, DOCK_EDGE_PROBE_TIMER_ID, DOCK_EDGE_PROBE_INTERVAL_MS)
+    pub(super) fn start_dock_edge_probe(hwnd: HWND, interval_ms: u32) -> Result<Self> {
+        Self::start_id(hwnd, DOCK_EDGE_PROBE_TIMER_ID, interval_ms)
     }
 
     pub(super) fn start_preview(hwnd: HWND) -> Result<Self> {
@@ -42,7 +41,25 @@ impl TimerGuard {
         if timer == 0 {
             return Err(windows::core::Error::from_thread());
         }
-        Ok(Self { hwnd, id })
+        Ok(Self {
+            hwnd,
+            id,
+            interval_ms: milliseconds,
+        })
+    }
+
+    pub(super) fn rearm(&mut self, milliseconds: u32) -> Result<()> {
+        if self.interval_ms == milliseconds {
+            return Ok(());
+        }
+        // SAFETY: Category 8 (FFI boundary). Reusing the owned HWND/id pair
+        // updates the existing timer cadence without changing its owner.
+        let timer = unsafe { SetTimer(Some(self.hwnd), self.id, milliseconds, None) };
+        if timer == 0 {
+            return Err(windows::core::Error::from_thread());
+        }
+        self.interval_ms = milliseconds;
+        Ok(())
     }
 }
 

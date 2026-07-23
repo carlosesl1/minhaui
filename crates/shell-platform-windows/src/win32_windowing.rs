@@ -12,10 +12,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOZORDER, SetTimer, SetWindowPos, TranslateMessage, WA_INACTIVE,
     WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_TIMER,
 };
 use windows::core::Result;
 
+use crate::background_apps_worker::BACKGROUND_APPS_WAKE_MESSAGE;
 use crate::win32::{
     DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID, LIVE_WINDOWS,
     PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
@@ -84,6 +86,9 @@ pub(super) unsafe extern "system" fn window_proc(
         ));
         return LRESULT(0);
     }
+    if message == BACKGROUND_APPS_WAKE_MESSAGE {
+        return LRESULT(0);
+    }
     if is_position_notification(message, wparam.0) {
         queue_event(RoutedPlatformEvent::window(
             hwnd,
@@ -92,6 +97,14 @@ pub(super) unsafe extern "system" fn window_proc(
         return LRESULT(0);
     }
     match message {
+        WM_MOUSEWHEEL if is_popover_window(hwnd) => {
+            let delta = ((wparam.0 >> 16) as u16) as i16;
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::PopoverScroll(-isize::from(delta.signum())),
+            ));
+            LRESULT(0)
+        }
         WM_MOUSEMOVE if is_dock_window(hwnd) => {
             track_mouse_leave(hwnd);
             if is_dragging(hwnd) && escape_pressed() {

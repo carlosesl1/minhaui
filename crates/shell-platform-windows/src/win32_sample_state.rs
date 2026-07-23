@@ -9,13 +9,18 @@ use crate::{
     TopbarController,
 };
 
-pub(super) fn sample_dock_controller() -> Result<DockController> {
+pub(super) fn sample_dock_controller(
+    config: &shell_config::ShellConfigV1,
+) -> Result<DockController> {
     let items = vec![
         DockItem::pinned(DockItemId::new(1), parse_app("notepad.exe")?),
         DockItem::pinned(DockItemId::new(2), parse_app("calc.exe")?),
         DockItem::pinned(DockItemId::new(3), parse_app("explorer.exe")?),
     ];
-    let state = crate::win32_config::load_dock_state(ShellState::default().with_dock_items(items));
+    let state = crate::win32_config::state_from_config(
+        config,
+        ShellState::default().with_dock_items(items),
+    );
     let mut controller =
         DockController::new(state, DockRuntimeConfig::default().with_autohide(true))
             .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
@@ -36,9 +41,15 @@ pub(super) fn sample_dock_controller() -> Result<DockController> {
     Ok(controller)
 }
 
-pub(super) fn sample_topbar_controller(width: i32) -> Result<TopbarController> {
-    TopbarController::new(ShellState::default(), density_for_width(width))
-        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
+pub(super) fn sample_topbar_controller(
+    width: i32,
+    config: &shell_config::ShellConfigV1,
+) -> Result<TopbarController> {
+    TopbarController::new(
+        crate::win32_config::state_from_config(config, ShellState::default()),
+        density_for_width(width),
+    )
+    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
 }
 
 pub(super) const fn density_for_width(width: i32) -> TopbarDensity {

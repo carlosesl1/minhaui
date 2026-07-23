@@ -335,6 +335,104 @@ fn topbar_system_menu_and_visibility_emit_typed_intents() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn topbar_modules_can_be_reordered_and_moved_to_the_end() -> Result<(), Box<dyn std::error::Error>>
+{
+    let state = ShellState::default();
+
+    let moved_before = reduce(
+        &state,
+        ShellEvent::ReorderTopbarModule {
+            module: TopbarModuleKind::Clock,
+            before: Some(TopbarModuleKind::Network),
+        },
+    )?;
+    assert_eq!(moved_before.effects, vec![Effect::PersistConfiguration]);
+    let order = moved_before
+        .state
+        .topbar_modules()
+        .iter()
+        .map(|module| module.kind())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![
+            TopbarModuleKind::SystemMenu,
+            TopbarModuleKind::AppIdentity,
+            TopbarModuleKind::Search,
+            TopbarModuleKind::BackgroundApps,
+            TopbarModuleKind::Clock,
+            TopbarModuleKind::Network,
+            TopbarModuleKind::Volume,
+            TopbarModuleKind::Power,
+            TopbarModuleKind::Notifications,
+        ]
+    );
+
+    let moved_to_end = reduce(
+        &moved_before.state,
+        ShellEvent::ReorderTopbarModule {
+            module: TopbarModuleKind::Volume,
+            before: None,
+        },
+    )?;
+    assert_eq!(
+        moved_to_end
+            .state
+            .topbar_modules()
+            .last()
+            .map(|module| module.kind()),
+        Some(TopbarModuleKind::Volume)
+    );
+    Ok(())
+}
+
+#[test]
+fn fixed_leading_topbar_modules_reject_customization() {
+    let state = ShellState::default();
+
+    assert!(matches!(
+        reduce(
+            &state,
+            ShellEvent::SetTopbarVisibility {
+                module: TopbarModuleKind::Search,
+                visible: false,
+            }
+        ),
+        Err(TransitionError::FixedTopbarModule(TopbarModuleKind::Search))
+    ));
+    assert!(matches!(
+        reduce(
+            &state,
+            ShellEvent::ReorderTopbarModule {
+                module: TopbarModuleKind::Clock,
+                before: Some(TopbarModuleKind::AppIdentity),
+            }
+        ),
+        Err(TransitionError::FixedTopbarModule(
+            TopbarModuleKind::AppIdentity
+        ))
+    ));
+}
+
+#[test]
+fn background_apps_module_rejects_customization() {
+    let state = ShellState::default();
+
+    assert!(matches!(
+        reduce(
+            &state,
+            ShellEvent::SetTopbarVisibility {
+                module: TopbarModuleKind::BackgroundApps,
+                visible: false,
+            }
+        ),
+        Err(TransitionError::FixedTopbarModule(
+            TopbarModuleKind::BackgroundApps
+        ))
+    ));
+}
+
+#[test]
 fn repeated_hide_is_an_explicit_noop() -> Result<(), Box<dyn std::error::Error>> {
     // Given: autohide is enabled and the dock is already hidden.
     let state = reduce(&ShellState::default(), ShellEvent::EnableAutohide(true))?.state;

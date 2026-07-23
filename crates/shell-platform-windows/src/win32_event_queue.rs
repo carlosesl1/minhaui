@@ -28,8 +28,19 @@ impl RoutedPlatformEvent {
         }
     }
 
+    pub(super) const fn window_id(window: NativeWindowId, event: PlatformEvent) -> Self {
+        Self {
+            target: NativeEventTarget::Window(window),
+            event,
+        }
+    }
+
     pub(super) const fn target(&self) -> NativeEventTarget {
         self.target
+    }
+
+    pub(super) const fn event(&self) -> &PlatformEvent {
+        &self.event
     }
 
     pub(super) fn into_event(self) -> PlatformEvent {

@@ -225,19 +225,23 @@ pub fn reconcile_monitor_slots(
     current: &[MonitorId],
     monitors: &[MonitorPlacementInput],
 ) -> Vec<SlotReconcileAction> {
-    let mut actions = current
+    let mut actions = monitors
         .iter()
-        .copied()
-        .filter(|monitor| !monitors.iter().any(|next| next.monitor == *monitor))
-        .map(SlotReconcileAction::Remove)
+        .map(|monitor| {
+            if current.contains(&monitor.monitor) {
+                SlotReconcileAction::Reuse(monitor.monitor)
+            } else {
+                SlotReconcileAction::Create(monitor.monitor)
+            }
+        })
         .collect::<Vec<_>>();
-    actions.extend(monitors.iter().map(|monitor| {
-        if current.contains(&monitor.monitor) {
-            SlotReconcileAction::Reuse(monitor.monitor)
-        } else {
-            SlotReconcileAction::Create(monitor.monitor)
-        }
-    }));
+    actions.extend(
+        current
+            .iter()
+            .copied()
+            .filter(|monitor| !monitors.iter().any(|next| next.monitor == *monitor))
+            .map(SlotReconcileAction::Remove),
+    );
     actions
 }
 

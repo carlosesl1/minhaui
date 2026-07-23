@@ -9,6 +9,8 @@ use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::{QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState};
 
+use shell_core::CalendarDate;
+
 use crate::{NetworkSnapshot, PowerSnapshot, TopbarSnapshot};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -31,12 +33,21 @@ pub(super) struct TopbarStatusReader {
 
 impl TopbarStatusReader {
     pub(super) fn snapshot(&mut self, now_ms: u64) -> TopbarSnapshot {
+        let local = local_time();
         TopbarSnapshot::new(
             clock_label(),
             self.network_snapshot(now_ms),
             volume_percent(),
             power_snapshot(),
             notification_indicator(),
+        )
+        .with_local_date(
+            CalendarDate::new(
+                i32::from(local.wYear),
+                u8::try_from(local.wMonth).unwrap_or(1),
+                u8::try_from(local.wDay).unwrap_or(1),
+            )
+            .unwrap_or_default(),
         )
     }
 
@@ -68,7 +79,7 @@ impl TopbarStatusReader {
 fn clock_label() -> String {
     // SAFETY: Category 8 (FFI boundary). GetLocalTime writes and returns a value
     // struct with no borrowed pointers.
-    let local = unsafe { GetLocalTime() };
+    let local = local_time();
     format!(
         "{:02}:{:02} {} {:02}",
         local.wHour,
@@ -76,6 +87,12 @@ fn clock_label() -> String {
         weekday(local.wDayOfWeek),
         local.wDay
     )
+}
+
+fn local_time() -> windows::Win32::Foundation::SYSTEMTIME {
+    // SAFETY: Category 8 (FFI boundary). GetLocalTime writes and returns a value
+    // struct with no borrowed pointers.
+    unsafe { GetLocalTime() }
 }
 
 fn network_totals() -> NetworkTotals {

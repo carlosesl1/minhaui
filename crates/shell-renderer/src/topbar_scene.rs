@@ -1,4 +1,4 @@
-use shell_core::{Popover, TopbarModuleKind};
+use shell_core::{TopbarIntent, TopbarModuleKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TopbarDensity {
@@ -19,7 +19,7 @@ pub struct TopbarModuleVisual {
     icon: String,
     text: String,
     status: TopbarModuleStatus,
-    intent: Option<Popover>,
+    intent: Option<TopbarIntent>,
 }
 
 impl TopbarModuleVisual {
@@ -29,7 +29,7 @@ impl TopbarModuleVisual {
         icon: &str,
         text: &str,
         status: TopbarModuleStatus,
-        intent: Option<Popover>,
+        intent: Option<TopbarIntent>,
     ) -> Self {
         Self {
             kind,
@@ -61,7 +61,7 @@ impl TopbarModuleVisual {
     }
 
     #[must_use]
-    pub const fn intent(&self) -> Option<Popover> {
+    pub const fn intent(&self) -> Option<TopbarIntent> {
         self.intent
     }
 }

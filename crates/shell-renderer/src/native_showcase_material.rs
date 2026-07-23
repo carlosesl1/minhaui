@@ -1,5 +1,6 @@
 use crate::DipRect;
 use crate::native::ShowcaseRole;
+use crate::native_liquid_glass::DockLiquidGlassResources;
 use crate::native_showcase_primitives::{fill_round, rect};
 use crate::native_showcase_resources::DockInsetBitmap;
 use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrush};
@@ -12,6 +13,7 @@ pub(crate) struct MaterialSurface {
     pub radius: f32,
     pub solid: bool,
     pub motion_strength: f32,
+    pub hover_position_x: Option<f32>,
     pub content_bounds: Option<DipRect>,
 }
 
@@ -22,6 +24,7 @@ pub(crate) struct MaterialBrushes<'a> {
     pub topbar_tint: &'a ID2D1SolidColorBrush,
     pub rim_outer: &'a ID2D1SolidColorBrush,
     pub dock_inset: Option<&'a DockInsetBitmap>,
+    pub liquid_glass: Option<&'a DockLiquidGlassResources>,
 }
 
 pub(crate) fn draw_shell_material(
@@ -47,6 +50,7 @@ fn draw_dock_material(
         radius,
         solid,
         motion_strength,
+        hover_position_x,
         content_bounds,
         ..
     } = surface;
@@ -83,6 +87,9 @@ fn draw_dock_material(
     fill_round(context, body, brushes.luminance);
     fill_round(context, body, brushes.veil);
     fill_round(context, body, brushes.reflection);
+    if let Some(liquid_glass) = brushes.liquid_glass {
+        liquid_glass.draw(context, bounds, hover_position_x, motion_strength);
+    }
     if let Some(inset) = brushes.dock_inset {
         inset.draw_at(context, bounds);
     }

@@ -35,6 +35,7 @@ use windows::core::{Interface, Result};
 use crate::ShowcaseTokens;
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
+use crate::native_liquid_glass::{DockLiquidGlassResources, LiquidGlassMode, liquid_glass_mode};
 use crate::native_present::{present_swap_chain, present_swap_chain_blocking};
 use crate::native_showcase::{ShowcaseStyle, draw_showcase};
 use crate::native_showcase_resources::{DockInsetBitmap, create_dock_inset_bitmap};
@@ -81,6 +82,7 @@ pub struct CompositionRenderer {
     device_kind: DeviceKind,
     icons: RefCell<NativeIconCache>,
     solid_material: bool,
+    liquid_glass_mode: LiquidGlassMode,
 }
 
 pub struct WindowSurface {
@@ -95,6 +97,7 @@ pub struct WindowSurface {
     pub(super) height: u32,
     pub(super) dpi: Dpi,
     dock_inset: Option<DockInsetBitmap>,
+    dock_liquid_glass: Option<DockLiquidGlassResources>,
 }
 
 pub(super) struct BackBufferCache<T> {
@@ -149,7 +152,12 @@ impl SurfaceMetrics {
 }
 
 impl CompositionRenderer {
-    pub fn new(force_warp: bool, solid_material: bool) -> Result<Self> {
+    pub fn new(
+        force_warp: bool,
+        solid_material: bool,
+        liquid_glass: bool,
+        reduced_motion: bool,
+    ) -> Result<Self> {
         let (d3d, device_kind) = create_d3d_device(force_warp)?;
         let dxgi_device: IDXGIDevice = d3d.cast()?;
 
@@ -180,6 +188,12 @@ impl CompositionRenderer {
             device_kind,
             icons: RefCell::new(icons),
             solid_material,
+            liquid_glass_mode: liquid_glass_mode(
+                liquid_glass,
+                solid_material,
+                device_kind,
+                reduced_motion,
+            ),
         })
     }
 
@@ -249,11 +263,27 @@ impl CompositionRenderer {
         } else {
             None
         };
+        let dock_liquid_glass = if role == ShowcaseRole::Dock {
+            DockLiquidGlassResources::create(
+                &self.d2d_context,
+                logical_surface.width,
+                (logical_surface.height - 2.0).max(1.0),
+                ShowcaseTokens::obsidian_glass().dock_radius,
+                self.liquid_glass_mode,
+            )?
+        } else {
+            None
+        };
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
             &mut icons,
-            ShowcaseStyle::new(role, self.solid_material, dock_inset.as_ref()),
+            ShowcaseStyle::new(
+                role,
+                self.solid_material,
+                dock_inset.as_ref(),
+                dock_liquid_glass.as_ref(),
+            ),
             logical_surface,
             scenes,
         )?;
@@ -292,6 +322,7 @@ impl CompositionRenderer {
             height,
             dpi,
             dock_inset,
+            dock_liquid_glass,
         };
         match surface.present_blocking()? {
             PresentOutcome::Presented | PresentOutcome::FrameSkipped => Ok(surface),
@@ -322,7 +353,12 @@ impl CompositionRenderer {
             &self.d2d_context,
             &self.dwrite,
             &mut icons,
-            ShowcaseStyle::new(role, self.solid_material, surface.dock_inset.as_ref()),
+            ShowcaseStyle::new(
+                role,
+                self.solid_material,
+                surface.dock_inset.as_ref(),
+                surface.dock_liquid_glass.as_ref(),
+            ),
             logical_surface_rect(surface.width, surface.height, surface.dpi),
             scenes,
         )?;

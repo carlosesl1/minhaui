@@ -75,6 +75,13 @@ mod native_showcase_material;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
+    reason = "Direct2D Liquid Glass bitmap creation and drawing are isolated here"
+)]
+mod native_liquid_glass;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
     reason = "Windows Shell and WIC icon conversion is isolated here"
 )]
 mod native_icons;

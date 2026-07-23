@@ -6,6 +6,7 @@ use std::fmt;
 use shell_config::{
     AppearanceSettings, ConfigError, ShellConfigV1, ThemeError, export_theme, import_theme,
 };
+use shell_core::{ShellEvent, ShellState, TopbarModule, TopbarModuleKind, TransitionError, reduce};
 use shell_renderer::{SettingsRow, SettingsScene};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +21,14 @@ pub enum SettingsEdit {
     DockItemSize(u16),
     DockSpacing(u16),
     Appearance(AppearanceSettings),
+    TopbarVisibility {
+        module: TopbarModuleKind,
+        visible: bool,
+    },
+    TopbarReorder {
+        module: TopbarModuleKind,
+        before: Option<TopbarModuleKind>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +64,7 @@ pub enum QueuedSettingsAction {
 pub enum SettingsError {
     Config(ConfigError),
     Theme(ThemeError),
+    Transition(TransitionError),
 }
 
 pub struct SettingsController {
@@ -95,7 +105,7 @@ impl SettingsController {
     }
 
     pub fn edit(&mut self, edit: SettingsEdit) -> Result<(), SettingsError> {
-        self.draft = apply_edit(&self.draft, edit);
+        self.draft = apply_edit(&self.draft, edit)?;
         self.update_preview()
     }
 
@@ -179,8 +189,8 @@ impl SettingsController {
         reason = "settings editing is not yet wired to the native form"
     )
 )]
-fn apply_edit(config: &ShellConfigV1, edit: SettingsEdit) -> ShellConfigV1 {
-    match edit {
+fn apply_edit(config: &ShellConfigV1, edit: SettingsEdit) -> Result<ShellConfigV1, SettingsError> {
+    let edited = match edit {
         SettingsEdit::DockItemSize(value) => {
             config.with_dock(config.dock().clone().with_item_size(value))
         }
@@ -188,7 +198,51 @@ fn apply_edit(config: &ShellConfigV1, edit: SettingsEdit) -> ShellConfigV1 {
             config.with_dock(config.dock().clone().with_spacing(value))
         }
         SettingsEdit::Appearance(appearance) => config.with_appearance(appearance),
+        SettingsEdit::TopbarVisibility { module, visible } => {
+            apply_topbar_event(config, ShellEvent::SetTopbarVisibility { module, visible })?
+        }
+        SettingsEdit::TopbarReorder { module, before } => {
+            apply_topbar_event(config, ShellEvent::ReorderTopbarModule { module, before })?
+        }
+    };
+    Ok(edited)
+}
+
+fn apply_topbar_event(
+    config: &ShellConfigV1,
+    event: ShellEvent,
+) -> Result<ShellConfigV1, SettingsError> {
+    let mut modules = vec![
+        TopbarModule::new(TopbarModuleKind::SystemMenu, true),
+        TopbarModule::new(TopbarModuleKind::AppIdentity, true),
+        TopbarModule::new(TopbarModuleKind::Search, true),
+    ];
+    let mut background_apps_inserted = false;
+    for module in config
+        .topbar_modules()
+        .iter()
+        .copied()
+        .filter(|module| module.kind() != TopbarModuleKind::SystemMenu)
+    {
+        if module.kind() == TopbarModuleKind::Clock && !background_apps_inserted {
+            modules.push(TopbarModule::new(TopbarModuleKind::BackgroundApps, true));
+            background_apps_inserted = true;
+        }
+        modules.push(module);
     }
+    if !background_apps_inserted {
+        modules.push(TopbarModule::new(TopbarModuleKind::BackgroundApps, true));
+    }
+    let state = ShellState::default().with_topbar_modules(modules);
+    let transition = reduce(&state, event)?;
+    let persisted = transition
+        .state
+        .topbar_modules()
+        .iter()
+        .copied()
+        .filter(|module| module.kind().is_v1_persisted())
+        .collect();
+    Ok(config.clone().with_topbar_modules(persisted))
 }
 
 fn settings_rows() -> Vec<SettingsRow> {
@@ -245,11 +299,18 @@ impl From<ThemeError> for SettingsError {
     }
 }
 
+impl From<TransitionError> for SettingsError {
+    fn from(value: TransitionError) -> Self {
+        Self::Transition(value)
+    }
+}
+
 impl fmt::Display for SettingsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(error) => write!(formatter, "{error}"),
             Self::Theme(error) => write!(formatter, "{error}"),
+            Self::Transition(error) => write!(formatter, "{error}"),
         }
     }
 }

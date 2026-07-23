@@ -35,10 +35,13 @@ impl Default for ShellState {
             dock_layout: Vec::new(),
             topbar: vec![
                 TopbarModule::new(TopbarModuleKind::SystemMenu, true),
+                TopbarModule::new(TopbarModuleKind::AppIdentity, true),
+                TopbarModule::new(TopbarModuleKind::Search, true),
                 TopbarModule::new(TopbarModuleKind::Network, true),
                 TopbarModule::new(TopbarModuleKind::Volume, true),
                 TopbarModule::new(TopbarModuleKind::Power, true),
                 TopbarModule::new(TopbarModuleKind::Notifications, true),
+                TopbarModule::new(TopbarModuleKind::BackgroundApps, true),
                 TopbarModule::new(TopbarModuleKind::Clock, true),
             ],
             active_popover: None,
@@ -67,6 +70,12 @@ impl ShellState {
     #[must_use]
     pub fn with_dock_layout(mut self, layout: Vec<DockLayoutEntry>) -> Self {
         self.dock_layout = layout;
+        self
+    }
+
+    #[must_use]
+    pub fn with_topbar_modules(mut self, modules: Vec<TopbarModule>) -> Self {
+        self.topbar = modules;
         self
     }
 

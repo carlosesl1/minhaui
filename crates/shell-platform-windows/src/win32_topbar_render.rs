@@ -3,32 +3,29 @@
 use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
 use windows::core::Result;
 
+use crate::TopbarSnapshot;
 use crate::win32_dock_render::dip_surface;
-use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows, now_ms};
+use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows};
 use crate::win32_surface_runtime::{SurfaceFrame, SurfaceSizeChange, SurfaceTarget, present_frame};
 use crate::win32_window::OwnedWindow;
-use crate::{PollBudget, QueuedTopbarAction};
 
 impl RuntimeSurfaces {
-    pub(super) fn refresh_topbar_status(
+    pub(super) fn apply_topbar_snapshot(
         &mut self,
-        topbar: &OwnedWindow,
-        dock: &OwnedWindow,
-        popover: &OwnedWindow,
-        preview: &OwnedWindow,
-        settings: &OwnedWindow,
+        snapshot: &TopbarSnapshot,
+        windows: SurfaceWindows<'_>,
     ) -> Result<()> {
-        let now = now_ms();
-        let budget = PollBudget::new(self.last_topbar_poll_ms, 1_000);
-        match self.topbar_controller.refresh_status(budget, now) {
-            QueuedTopbarAction::PollDeferred => Ok(()),
-            QueuedTopbarAction::OpenPopover(_) | QueuedTopbarAction::RedrawTopbar => {
-                self.last_topbar_poll_ms = now;
-                let snapshot = self.topbar_status.snapshot(now);
-                self.topbar_controller.update_snapshot(snapshot);
-                self.redraw_topbar(topbar, dock, popover, preview, settings)
-            }
+        if self.topbar_controller.snapshot() == snapshot {
+            return Ok(());
         }
+        self.topbar_controller.update_snapshot(snapshot.clone());
+        self.redraw_topbar(
+            windows.topbar,
+            windows.dock,
+            windows.popover,
+            windows.preview,
+            windows.settings,
+        )
     }
 
     pub(super) fn redraw_topbar(

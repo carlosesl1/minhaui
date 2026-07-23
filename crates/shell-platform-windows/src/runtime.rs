@@ -87,12 +87,14 @@ impl RuntimeOrchestrator {
             | PlatformEvent::DockContextMenuRequested { .. } => RuntimeAction::None,
             PlatformEvent::TopbarPointer(_) | PlatformEvent::TopbarKey(_) => RuntimeAction::None,
             PlatformEvent::PopoverKey(_) => RuntimeAction::None,
-            PlatformEvent::PopoverPointer(_) | PlatformEvent::PopoverPointerMoved(_) => {
-                RuntimeAction::None
-            }
+            PlatformEvent::PopoverPointer(_)
+            | PlatformEvent::PopoverPointerMoved(_)
+            | PlatformEvent::PopoverScroll(_) => RuntimeAction::None,
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,
-            PlatformEvent::DockDrop { .. } | PlatformEvent::SyncWindows => RuntimeAction::None,
+            PlatformEvent::DockDrop { .. }
+            | PlatformEvent::SyncWindows
+            | PlatformEvent::BackgroundAppsLoaded(_) => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,
         };

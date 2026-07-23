@@ -2,6 +2,8 @@
 
 use shell_core::Popover;
 
+use crate::BackgroundAppId;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PopoverKey {
     Next,
@@ -13,14 +15,41 @@ pub enum PopoverKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PopoverAction {
     OpenSettings,
-    SetVolume(u8),
-    SelectAudioDevice(String),
+    OpenTaskManager,
+    OpenSystemRoute(SystemRoute),
+    OpenQuickSettings,
+    SetProjectionMode(ProjectionMode),
+    VolumeDown,
+    ToggleMute,
+    VolumeUp,
     MediaPrevious,
     MediaPlayPause,
     MediaNext,
-    ControlCenterToggle(&'static str),
-    NetworkDetails,
+    CalendarPrevious,
+    CalendarToday,
+    CalendarNext,
     ConfirmSession(SessionAction),
+    OpenBackgroundApp(BackgroundAppId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionMode {
+    Internal,
+    Duplicate,
+    Extend,
+    External,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemRoute {
+    Network,
+    Wifi,
+    Bluetooth,
+    Sound,
+    Display,
+    Focus,
+    Power,
+    DateTime,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +64,7 @@ pub enum SessionAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QueuedPopoverAction {
     Redraw,
+    Reload,
     Dismiss,
     RequestConfirmation(SessionAction),
     TypedIntent(PopoverAction),
@@ -44,6 +74,7 @@ pub enum QueuedPopoverAction {
 pub struct PopoverItem {
     label: String,
     detail: String,
+    icon_source: Option<String>,
     enabled: bool,
     action: Option<PopoverAction>,
 }
@@ -54,9 +85,16 @@ impl PopoverItem {
         Self {
             label: label.to_owned(),
             detail: detail.to_owned(),
+            icon_source: None,
             enabled,
             action,
         }
+    }
+
+    #[must_use]
+    pub fn with_icon_source(mut self, source: Option<String>) -> Self {
+        self.icon_source = source;
+        self
     }
 
     #[must_use]
@@ -67,6 +105,11 @@ impl PopoverItem {
     #[must_use]
     pub fn detail(&self) -> &str {
         &self.detail
+    }
+
+    #[must_use]
+    pub fn icon_source(&self) -> Option<&str> {
+        self.icon_source.as_deref()
     }
 
     #[must_use]
@@ -82,16 +125,8 @@ impl PopoverItem {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PopoverLoadState {
-    #[expect(
-        dead_code,
-        reason = "the controller supports asynchronous adapters although current adapters are synchronous"
-    )]
     Loading,
     Ready(Vec<PopoverItem>),
-    #[expect(
-        dead_code,
-        reason = "empty adapter results remain a distinct renderer state"
-    )]
     Empty,
     Error(String),
     Offline(Vec<PopoverItem>),
@@ -127,7 +162,12 @@ pub enum PopoverDataError {
 }
 
 pub trait PopoverDataProvider {
-    fn load(&self, kind: Popover) -> Result<PopoverPayload, PopoverDataError>;
+    fn load(
+        &self,
+        kind: Popover,
+        snapshot: &crate::TopbarSnapshot,
+        calendar_offset: i16,
+    ) -> Result<PopoverPayload, PopoverDataError>;
 }
 
 pub trait WeatherProvider {

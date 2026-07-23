@@ -2,7 +2,10 @@ use shell_config::{
     ConfigLoad, MAX_CONFIG_BYTES, PerformancePreset, RecoveryKind, ShellConfigV1, decode_config,
     encode_config,
 };
-use shell_core::{AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, TaskbarPolicy};
+use shell_core::{
+    AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, TaskbarPolicy, TopbarModule,
+    TopbarModuleKind,
+};
 
 #[test]
 fn defaults_are_safe_and_valid() {
@@ -28,6 +31,59 @@ fn current_schema_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
 
     // Then: no recovery is needed and all data round-trips.
     assert_eq!(loaded, ConfigLoad::Current(config));
+    Ok(())
+}
+
+#[test]
+fn topbar_order_and_visibility_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    let modules = vec![
+        TopbarModule::new(TopbarModuleKind::SystemMenu, true),
+        TopbarModule::new(TopbarModuleKind::AppIdentity, true),
+        TopbarModule::new(TopbarModuleKind::Clock, true),
+        TopbarModule::new(TopbarModuleKind::Search, false),
+        TopbarModule::new(TopbarModuleKind::Network, true),
+        TopbarModule::new(TopbarModuleKind::Volume, true),
+        TopbarModule::new(TopbarModuleKind::Power, true),
+        TopbarModule::new(TopbarModuleKind::Notifications, false),
+    ];
+    let config = ShellConfigV1::default().with_topbar_modules(modules.clone());
+
+    let ConfigLoad::Current(decoded) = decode_config(&encode_config(&config)?) else {
+        return Err("topbar configuration must remain current".into());
+    };
+
+    assert_eq!(
+        decoded.topbar_modules(),
+        modules
+            .iter()
+            .filter(|module| module.kind().is_v1_persisted())
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[test]
+fn v1_encoding_never_writes_new_fixed_leading_module_variants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let config = ShellConfigV1::default().with_topbar_modules(vec![
+        TopbarModule::new(TopbarModuleKind::SystemMenu, true),
+        TopbarModule::new(TopbarModuleKind::AppIdentity, true),
+        TopbarModule::new(TopbarModuleKind::Search, true),
+        TopbarModule::new(TopbarModuleKind::Clock, true),
+        TopbarModule::new(TopbarModuleKind::Network, true),
+        TopbarModule::new(TopbarModuleKind::Volume, true),
+        TopbarModule::new(TopbarModuleKind::Power, true),
+        TopbarModule::new(TopbarModuleKind::Notifications, true),
+    ]);
+    let encoded = String::from_utf8(encode_config(&config)?)?;
+
+    assert!(!encoded.contains("app_identity"));
+    assert!(!encoded.contains("\"search\""));
+    assert_eq!(
+        decode_config(encoded.as_bytes()),
+        ConfigLoad::Current(config)
+    );
     Ok(())
 }
 

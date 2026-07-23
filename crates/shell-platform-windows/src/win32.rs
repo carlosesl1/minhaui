@@ -10,6 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW;
 use windows::core::{Result, w};
 
 use crate::PlatformEvent;
+use crate::win32_shell_observation::ShellObservationRuntime;
 use crate::win32_slots::{
     SlotFeatures, create_slots, dispatch_event, handle_broadcast_event, print_monitor_placements,
 };
@@ -26,6 +27,7 @@ pub struct ShowcaseRunConfig {
     pub safe_mode: bool,
     pub high_contrast: bool,
     pub reduced_motion: bool,
+    pub liquid_glass: bool,
 }
 
 pub(super) const TIMER_ID: usize = 0x4D55;
@@ -102,9 +104,10 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         ));
     }
     print_monitor_placements(&monitors);
+    let liquid_glass = config.liquid_glass && !config.safe_mode && !config.high_contrast;
     println!(
-        "ACCESSIBILITY safe_mode={} high_contrast={} reduced_motion={}",
-        config.safe_mode, config.high_contrast, config.reduced_motion
+        "ACCESSIBILITY safe_mode={} high_contrast={} reduced_motion={} liquid_glass={}",
+        config.safe_mode, config.high_contrast, config.reduced_motion, liquid_glass
     );
     let backdrop_enabled = !config.safe_mode
         && !config.high_contrast
@@ -114,14 +117,32 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         safe_mode: config.safe_mode,
         backdrop_enabled,
         reduced_motion: config.reduced_motion,
+        liquid_glass,
     };
-    let mut slots = create_slots(&class, &monitors, features)?;
+    let shell_config = crate::win32_config::load_config();
+    let mut observation_runtime = ShellObservationRuntime::new(1_000);
+    let initial_observation = observation_runtime
+        .refresh_if_changed(crate::win32_owner::now_ms())?
+        .then(|| observation_runtime.current())
+        .flatten()
+        .ok_or_else(|| {
+            windows::core::Error::new(
+                invalid_arg(),
+                "initial shell observation was unexpectedly deferred",
+            )
+        })?;
+    let mut slots = create_slots(
+        &class,
+        &monitors,
+        features,
+        &shell_config,
+        initial_observation,
+    )?;
     let timer = config
         .qa_exit_ms
         .map(|milliseconds| TimerGuard::start(slots[0].topbar_hwnd(), milliseconds))
         .transpose()?;
     for slot in &mut slots {
-        slot.handle_event(PlatformEvent::SyncWindows)?;
         slot.show_shells();
         slot.print_windows();
     }
@@ -136,10 +157,26 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             PlatformEvent::PowerResumed,
             PlatformEvent::TaskbarCreated,
         ] {
-            handle_broadcast_event(&class, features, &mut slots, event)?;
+            handle_broadcast_event(
+                &class,
+                features,
+                &shell_config,
+                initial_observation,
+                &mut slots,
+                event,
+            )?;
         }
     }
-    let result = message_loop(|event| dispatch_event(&class, features, &mut slots, event));
+    let result = message_loop(|event| {
+        dispatch_event(
+            &class,
+            features,
+            &shell_config,
+            &mut observation_runtime,
+            &mut slots,
+            event,
+        )
+    });
     drop(slots);
     drop(timer);
     drop(class);

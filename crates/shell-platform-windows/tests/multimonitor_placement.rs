@@ -117,7 +117,7 @@ fn fullscreen_policy_suppresses_only_the_covered_monitor() {
 }
 
 #[test]
-fn hotplug_reconcile_adds_removes_and_reorders_monitor_slots() {
+fn hotplug_reconcile_creates_replacements_before_removing_old_slots() {
     // Given: two existing slots and a new topology that removes one, keeps one,
     // and adds a third monitor before the reused slot.
     let current = [MonitorId::new(1), MonitorId::new(2)];
@@ -139,13 +139,14 @@ fn hotplug_reconcile_adds_removes_and_reorders_monitor_slots() {
     // When: the current slots are reconciled against the new monitor order.
     let actions = reconcile_monitor_slots(&current, &monitors);
 
-    // Then: removed slots are dropped and remaining slots follow current topology.
+    // Then: replacement windows exist before stale slots are destroyed, so the
+    // Win32 live-window count never reaches zero during a topology transition.
     assert_eq!(
         actions,
         vec![
-            SlotReconcileAction::Remove(MonitorId::new(1)),
             SlotReconcileAction::Create(MonitorId::new(3)),
             SlotReconcileAction::Reuse(MonitorId::new(2)),
+            SlotReconcileAction::Remove(MonitorId::new(1)),
         ]
     );
 }

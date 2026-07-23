@@ -3,14 +3,16 @@
 use std::error::Error;
 use std::fmt;
 
-use shell_core::{Popover, ShellEvent, ShellState, TopbarModuleKind, TransitionError, reduce};
+use shell_core::{
+    Popover, ShellEvent, ShellState, TopbarIntent, TopbarModuleKind, TransitionError, reduce,
+};
 use shell_renderer::{
     DipRect, TopbarDensity, TopbarModuleStatus, TopbarModuleVisual, TopbarScene,
     layout_topbar_scene,
 };
 
 use crate::{
-    PollBudget, QueuedTopbarAction, TopbarKey, TopbarPointerPhase, TopbarPointerSample,
+    QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor, TopbarPointerPhase, TopbarPointerSample,
     TopbarSnapshot,
 };
 
@@ -20,7 +22,7 @@ pub struct TopbarController {
     text_scale: f32,
     surface: DipRect,
     snapshot: TopbarSnapshot,
-    pressed_intent: Option<Popover>,
+    pressed_target: Option<(TopbarOverlayAnchor, TopbarIntent)>,
     focused_module: Option<TopbarModuleKind>,
     visual_generation: u64,
     #[cfg(test)]
@@ -36,7 +38,7 @@ impl TopbarController {
             text_scale: 1.0,
             surface: DipRect::new(0.0, 0.0, 1.0, 1.0),
             snapshot: TopbarSnapshot::default(),
-            pressed_intent: None,
+            pressed_target: None,
             focused_module: None,
             visual_generation: 0,
             #[cfg(test)]
@@ -51,9 +53,12 @@ impl TopbarController {
     }
 
     #[must_use]
-    #[cfg(test)]
-    pub const fn snapshot(&self) -> &TopbarSnapshot {
+    pub(crate) const fn snapshot(&self) -> &TopbarSnapshot {
         &self.snapshot
+    }
+
+    pub(crate) fn module_bounds(&self, kind: TopbarModuleKind) -> Option<DipRect> {
+        layout_topbar_scene(&self.scene(), self.surface).module_bounds(kind)
     }
 
     #[must_use]
@@ -103,29 +108,21 @@ impl TopbarController {
     ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
         match sample.phase() {
             TopbarPointerPhase::Pressed => {
-                self.pressed_intent = self.hit_test(sample);
+                self.pressed_target = self.hit_test(sample);
                 Ok(Vec::new())
             }
             TopbarPointerPhase::Released => {
-                let intent = self.hit_test(sample);
-                if intent.is_some() && intent == self.pressed_intent {
-                    self.pressed_intent = None;
-                    self.open_intent(intent)
+                let target = self.hit_test(sample);
+                if target.is_some() && target == self.pressed_target {
+                    self.pressed_target = None;
+                    self.open_target(target)
                 } else {
-                    self.pressed_intent = None;
+                    self.pressed_target = None;
                     Ok(Vec::new())
                 }
             }
             TopbarPointerPhase::Moved | TopbarPointerPhase::Exited => Ok(Vec::new()),
         }
-    }
-
-    #[must_use]
-    pub fn refresh_status(&mut self, budget: PollBudget, now_ms: u64) -> QueuedTopbarAction {
-        if !budget.permits(now_ms) {
-            return QueuedTopbarAction::PollDeferred;
-        }
-        QueuedTopbarAction::RedrawTopbar
     }
 
     pub fn handle_key(
@@ -141,7 +138,7 @@ impl TopbarController {
                 self.focus_delta(-1);
                 Ok(vec![QueuedTopbarAction::RedrawTopbar])
             }
-            TopbarKey::Activate => self.open_intent(self.focused_intent()),
+            TopbarKey::Activate => self.open_focused(),
             TopbarKey::Escape => {
                 self.set_focused_module(None);
                 Ok(vec![QueuedTopbarAction::RedrawTopbar])
@@ -149,20 +146,59 @@ impl TopbarController {
         }
     }
 
-    fn hit_test(&self, sample: TopbarPointerSample) -> Option<Popover> {
-        layout_topbar_scene(&self.scene(), self.surface).hit_test(sample.point())
+    fn hit_test(&self, sample: TopbarPointerSample) -> Option<(TopbarOverlayAnchor, TopbarIntent)> {
+        let layout = layout_topbar_scene(&self.scene(), self.surface);
+        layout
+            .item_at(sample.point())
+            .and_then(|item| {
+                item.intent()
+                    .map(|intent| (TopbarOverlayAnchor::Module(item.kind()), intent))
+            })
+            .or_else(|| {
+                layout
+                    .hit_test(sample.point())
+                    .map(|intent| (TopbarOverlayAnchor::Overflow, intent))
+            })
+    }
+
+    fn open_target(
+        &mut self,
+        target: Option<(TopbarOverlayAnchor, TopbarIntent)>,
+    ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
+        let Some(target) = target else {
+            return Ok(Vec::new());
+        };
+        self.open_intent(target.1, target.0)
+    }
+
+    fn open_focused(&mut self) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
+        let Some(focused) = self.focused_module else {
+            return Ok(Vec::new());
+        };
+        let Some(intent) = self
+            .visible_modules()
+            .into_iter()
+            .find(|module| module.kind() == focused)
+            .and_then(|module| module.intent())
+        else {
+            return Ok(Vec::new());
+        };
+        self.open_intent(intent, TopbarOverlayAnchor::Module(focused))
     }
 
     fn open_intent(
         &mut self,
-        intent: Option<Popover>,
+        intent: TopbarIntent,
+        anchor: TopbarOverlayAnchor,
     ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
-        let Some(popover) = intent else {
-            return Ok(Vec::new());
-        };
-        let transition = reduce(&self.state, ShellEvent::OpenPopover(popover))?;
-        self.state = transition.state;
-        Ok(vec![QueuedTopbarAction::OpenPopover(popover)])
+        match intent {
+            TopbarIntent::Popover(popover) => {
+                let transition = reduce(&self.state, ShellEvent::OpenPopover(popover))?;
+                self.state = transition.state;
+                Ok(vec![QueuedTopbarAction::OpenPopover { popover, anchor }])
+            }
+            TopbarIntent::OpenSearch => Ok(vec![QueuedTopbarAction::OpenSearch]),
+        }
     }
 
     fn focus_delta(&mut self, delta: isize) {
@@ -192,14 +228,6 @@ impl TopbarController {
         self.set_focused_module(Some(modules[next]));
     }
 
-    fn focused_intent(&self) -> Option<Popover> {
-        let focused = self.focused_module?;
-        self.visible_modules()
-            .into_iter()
-            .find(|module| module.kind() == focused)
-            .and_then(|module| module.intent())
-    }
-
     fn set_focused_module(&mut self, focused_module: Option<TopbarModuleKind>) {
         if self.focused_module != focused_module {
             self.focused_module = focused_module;
@@ -223,42 +251,63 @@ impl TopbarController {
                 "\u{E700}",
                 "Minha UI",
                 TopbarModuleStatus::Neutral,
-                Popover::SystemMenu,
+                Some(TopbarIntent::Popover(Popover::SystemMenu)),
+            ),
+            TopbarModuleKind::AppIdentity => visual(
+                kind,
+                "\u{E77B}",
+                self.snapshot.app_label(),
+                TopbarModuleStatus::Neutral,
+                None,
+            ),
+            TopbarModuleKind::Search => visual(
+                kind,
+                "\u{E721}",
+                "Search",
+                TopbarModuleStatus::Neutral,
+                Some(TopbarIntent::OpenSearch),
             ),
             TopbarModuleKind::Clock => visual(
                 kind,
                 "\u{E823}",
                 &self.snapshot.clock,
                 TopbarModuleStatus::Neutral,
-                Popover::Calendar,
+                Some(TopbarIntent::Popover(Popover::Calendar)),
             ),
             TopbarModuleKind::Network => visual(
                 kind,
                 "\u{E701}",
                 &network_text(&self.snapshot.network),
                 network_status(&self.snapshot.network),
-                Popover::Network,
+                Some(TopbarIntent::Popover(Popover::Network)),
             ),
             TopbarModuleKind::Volume => visual(
                 kind,
                 "\u{E767}",
                 &format!("{}%", self.snapshot.volume_percent),
                 TopbarModuleStatus::Neutral,
-                Popover::Volume,
+                Some(TopbarIntent::Popover(Popover::Volume)),
             ),
             TopbarModuleKind::Power => visual(
                 kind,
                 "\u{E83F}",
                 &self.snapshot.battery.label(),
                 power_status(self.snapshot.battery),
-                Popover::Power,
+                Some(TopbarIntent::Popover(Popover::Power)),
             ),
             TopbarModuleKind::Notifications => visual(
                 kind,
                 "\u{E7F4}",
                 notification_text(self.snapshot.notifications),
                 TopbarModuleStatus::Neutral,
-                Popover::Notifications,
+                Some(TopbarIntent::Popover(Popover::Notifications)),
+            ),
+            TopbarModuleKind::BackgroundApps => visual(
+                kind,
+                "\u{E74A}",
+                "Apps",
+                TopbarModuleStatus::Neutral,
+                Some(TopbarIntent::Popover(Popover::BackgroundApps)),
             ),
         }
     }
@@ -296,9 +345,9 @@ fn visual(
     icon: &str,
     text: &str,
     status: TopbarModuleStatus,
-    intent: Popover,
+    intent: Option<TopbarIntent>,
 ) -> TopbarModuleVisual {
-    TopbarModuleVisual::new(kind, icon, text, status, Some(intent))
+    TopbarModuleVisual::new(kind, icon, text, status, intent)
 }
 
 #[derive(Debug)]

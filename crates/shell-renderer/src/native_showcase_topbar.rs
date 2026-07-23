@@ -1,7 +1,7 @@
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrush};
 
-use crate::native_showcase_primitives::{draw_text, fill_round, rect};
+use crate::native_showcase_primitives::{draw_text, draw_text_clipped, fill_round, rect};
 use crate::native_showcase_resources::ShowcaseFormats;
 use crate::{DipRect, TopbarModuleStatus, TopbarOverflow, TopbarScene, layout_topbar_scene};
 
@@ -59,7 +59,7 @@ pub(crate) fn draw_functional_topbar(
             },
             status_brush(item.status(), &brushes),
         );
-        draw_text(
+        draw_text_clipped(
             context,
             item.text(),
             formats.text,
