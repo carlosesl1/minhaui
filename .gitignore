@@ -1,4 +1,6 @@
 /target/
+/target-*/
+/artifacts/
 /.omo/
 /.worktrees/
 /.agents/
