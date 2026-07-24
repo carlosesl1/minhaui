@@ -2,6 +2,12 @@
 
 mod diagnostics;
 
+#[allow(
+    dead_code,
+    reason = "external menu lifecycle is consumed by the native adapter incrementally"
+)]
+mod external_menu_coordinator;
+
 #[cfg(windows)]
 #[allow(
     unsafe_code,
@@ -306,6 +312,11 @@ pub(crate) use dock_types::{
 };
 pub(crate) use dock_visibility_motion::DockVisibilityMotion;
 pub(crate) use dock_window_sync::ObservedWindow;
+#[allow(unused_imports)]
+pub(crate) use external_menu_coordinator::{
+    EXTERNAL_MENU_OBSERVATION_TIMEOUT, EXTERNAL_MENU_WATCHDOG, ExternalMenuCoordinator,
+    ExternalMenuEffect, ExternalMenuPhase,
+};
 pub(crate) use native_event_route::{NativeEventTarget, NativeWindowId, NativeWindowSlot};
 #[cfg(test)]
 pub(crate) use native_event_route::{NativeRouteDecision, route_native_event_to_slot};

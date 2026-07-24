@@ -456,7 +456,7 @@ fn draw_balanced_apps(
         } else {
             brushes.secondary
         };
-        if item.focused() {
+        if item.focused() || item.externally_active() {
             fill_round(
                 context,
                 rect(

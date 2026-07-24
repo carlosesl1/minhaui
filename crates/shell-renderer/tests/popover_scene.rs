@@ -31,6 +31,10 @@ fn system_panel_scene() -> PopoverScene {
 }
 
 fn balanced_apps_scene() -> PopoverScene {
+    balanced_apps_scene_with_focus(Some(0))
+}
+
+fn balanced_apps_scene_with_focus(focused: Option<usize>) -> PopoverScene {
     let rows = (0..12)
         .map(|index| {
             PopoverRow::new(
@@ -50,7 +54,7 @@ fn balanced_apps_scene() -> PopoverScene {
         "Background apps",
         PopoverContentState::Ready,
         rows,
-        Some(0),
+        focused,
     )
     .with_layout_style(PopoverLayoutStyle::BalancedApps)
     .with_header_detail("12")
@@ -168,6 +172,69 @@ fn balanced_apps_long_label_uses_all_remaining_row_width() {
     assert_eq!(
         layout.label_bounds(0),
         Some(DipRect::new(56.0, 60.0, 216.0, 40.0))
+    );
+}
+
+#[test]
+fn external_active_apps_row_reuses_focus_band_without_geometry_changes() {
+    let focused = balanced_apps_scene();
+    let externally_active =
+        balanced_apps_scene_with_focus(Some(3)).with_external_active_row(Some(0));
+    let focused_size = popover_surface_size(&focused);
+    let external_size = popover_surface_size(&externally_active);
+    let focused_layout = layout_popover_scene(
+        &focused,
+        DipRect::new(0.0, 0.0, focused_size.width(), focused_size.height()),
+    );
+    let external_layout = layout_popover_scene(
+        &externally_active,
+        DipRect::new(0.0, 0.0, external_size.width(), external_size.height()),
+    );
+
+    assert_eq!(focused_size, external_size);
+    assert_eq!(focused_layout.rows().len(), external_layout.rows().len());
+    for (focused_row, external_row) in focused_layout.rows().iter().zip(external_layout.rows()) {
+        assert_eq!(focused_row.index(), external_row.index());
+        assert_eq!(focused_row.bounds(), external_row.bounds());
+    }
+    assert!(focused_layout.rows()[0].focused());
+    assert!(!focused_layout.rows()[0].externally_active());
+    assert!(!external_layout.rows()[0].focused());
+    assert!(external_layout.rows()[0].externally_active());
+    assert!(external_layout.rows()[3].focused());
+}
+
+#[test]
+fn external_active_metadata_does_not_change_compact_or_system_geometry() {
+    let compact = PopoverScene::new(
+        Popover::Network,
+        "Network",
+        PopoverContentState::Ready,
+        vec![PopoverRow::new("Online", "", true)],
+        Some(0),
+    )
+    .with_external_active_row(Some(0));
+    let system = system_panel_scene().with_external_active_row(Some(2));
+
+    let compact_size = popover_surface_size(&compact);
+    let compact_layout = layout_popover_scene(
+        &compact,
+        DipRect::new(0.0, 0.0, compact_size.width(), compact_size.height()),
+    );
+    assert_eq!(compact_size.width(), 244.0);
+    assert!(!compact_layout.rows()[0].externally_active());
+
+    let system_size = popover_surface_size(&system);
+    let system_layout = layout_popover_scene(
+        &system,
+        DipRect::new(0.0, 0.0, system_size.width(), system_size.height()),
+    );
+    assert_eq!(system_size, PopoverSurfaceSize::new(288.0, 372.0));
+    assert!(
+        system_layout
+            .rows()
+            .iter()
+            .all(|row| !row.externally_active())
     );
 }
 

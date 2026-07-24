@@ -92,6 +92,7 @@ pub struct PopoverLaidOutRow {
     index: usize,
     bounds: DipRect,
     focused: bool,
+    externally_active: bool,
 }
 
 impl PopoverLaidOutRow {
@@ -108,6 +109,11 @@ impl PopoverLaidOutRow {
     #[must_use]
     pub const fn focused(self) -> bool {
         self.focused
+    }
+
+    #[must_use]
+    pub const fn externally_active(self) -> bool {
+        self.externally_active
     }
 }
 
@@ -200,6 +206,7 @@ fn layout_compact_popover_scene(scene: &PopoverScene, surface: DipRect) -> Popov
             index,
             bounds: DipRect::new(surface.x + 12.0, y, surface.width - 24.0, 24.0),
             focused: row.enabled() && scene.focused() == Some(index),
+            externally_active: false,
         });
         y += 24.0;
     }
@@ -242,6 +249,7 @@ fn layout_system_panel_scene(scene: &PopoverScene, surface: DipRect) -> PopoverL
             index,
             bounds: DipRect::new(surface.x + 16.0, y, surface.width - 32.0, SYSTEM_ROW_HEIGHT),
             focused: row.enabled() && scene.focused() == Some(index),
+            externally_active: false,
         });
         y += SYSTEM_ROW_HEIGHT;
     }
@@ -296,6 +304,7 @@ fn layout_balanced_apps_scene(scene: &PopoverScene, surface: DipRect) -> Popover
             index,
             bounds,
             focused: row.enabled() && scene.focused() == Some(index),
+            externally_active: row.enabled() && scene.external_active_row() == Some(index),
         });
         icon_bounds.push((index, icon));
         label_bounds.push((index, label));

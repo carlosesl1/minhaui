@@ -100,6 +100,7 @@ pub struct PopoverScene {
     layout_style: PopoverLayoutStyle,
     anchor_x: Option<f32>,
     header_detail: Option<String>,
+    external_active_row: Option<usize>,
 }
 
 impl PopoverScene {
@@ -122,6 +123,7 @@ impl PopoverScene {
             layout_style: PopoverLayoutStyle::Compact,
             anchor_x: None,
             header_detail: None,
+            external_active_row: None,
         }
     }
 
@@ -146,6 +148,14 @@ impl PopoverScene {
     #[must_use]
     pub fn with_header_detail(mut self, detail: &str) -> Self {
         self.header_detail = Some(detail.to_owned());
+        self
+    }
+
+    /// Marks one stable row index as active in an application-owned menu.
+    /// This metadata is visual only; it never changes row geometry or focus.
+    #[must_use]
+    pub const fn with_external_active_row(mut self, row: Option<usize>) -> Self {
+        self.external_active_row = row;
         self
     }
 
@@ -203,6 +213,11 @@ impl PopoverScene {
     #[must_use]
     pub fn header_detail(&self) -> Option<&str> {
         self.header_detail.as_deref()
+    }
+
+    #[must_use]
+    pub const fn external_active_row(&self) -> Option<usize> {
+        self.external_active_row
     }
 }
 

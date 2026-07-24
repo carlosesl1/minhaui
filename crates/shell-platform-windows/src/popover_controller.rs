@@ -10,7 +10,7 @@ use shell_renderer::{
 };
 
 use crate::{
-    PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
+    BackgroundAppId, PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
     PopoverLoadState, QueuedPopoverAction, SessionAction,
 };
 
@@ -18,6 +18,7 @@ pub struct PopoverController {
     active: Option<ActivePopover>,
     calendar_offset: i16,
     load_generation: u64,
+    external_active: Option<BackgroundAppId>,
 }
 
 const COMPACT_MAX_VISIBLE_ROWS: usize = 17;
@@ -43,6 +44,7 @@ impl PopoverController {
             active: None,
             calendar_offset: 0,
             load_generation: 0,
+            external_active: None,
         }
     }
 
@@ -56,6 +58,7 @@ impl PopoverController {
 
     pub fn dismiss(&mut self) -> Vec<QueuedPopoverAction> {
         self.load_generation = self.load_generation.wrapping_add(1);
+        self.external_active = None;
         if self.active.take().is_some() {
             vec![QueuedPopoverAction::Dismiss]
         } else {
@@ -97,7 +100,85 @@ impl PopoverController {
 
     pub fn begin_loading(&mut self, kind: Popover) -> u64 {
         self.load_generation = self.load_generation.wrapping_add(1);
+        self.external_active = None;
         self.active = Some(ActivePopover::loading(kind));
+        self.load_generation
+    }
+
+    /// Marks a stable background-app row as externally active while its
+    /// application-owned menu is open.  The ID is resolved to an index only
+    /// when a BackgroundApps popover is active; no row geometry is changed.
+    #[allow(
+        dead_code,
+        reason = "external menu lifecycle is consumed by the native adapter incrementally"
+    )]
+    pub fn mark_external_active(&mut self, app: BackgroundAppId) -> Vec<QueuedPopoverAction> {
+        if !self.has_background_app(app) {
+            return Vec::new();
+        }
+        if self.external_active == Some(app) {
+            return Vec::new();
+        }
+        self.external_active = Some(app);
+        vec![QueuedPopoverAction::Redraw]
+    }
+
+    #[allow(
+        dead_code,
+        reason = "external menu lifecycle is consumed by the native adapter incrementally"
+    )]
+    pub fn clear_external_active(&mut self) -> Vec<QueuedPopoverAction> {
+        if self.external_active.take().is_some() {
+            vec![QueuedPopoverAction::Redraw]
+        } else {
+            Vec::new()
+        }
+    }
+
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "external menu lifecycle is consumed by the native adapter incrementally"
+    )]
+    pub const fn external_active(&self) -> Option<BackgroundAppId> {
+        self.external_active
+    }
+
+    /// Restores focus by the stable application ID.  An index captured before
+    /// a reload is intentionally not accepted, so stale worker results cannot
+    /// move focus to another row.
+    #[allow(
+        dead_code,
+        reason = "external menu lifecycle is consumed by the native adapter incrementally"
+    )]
+    pub fn restore_focus(&mut self, app: BackgroundAppId) -> Vec<QueuedPopoverAction> {
+        let Some(active) = self.active.as_mut() else {
+            return Vec::new();
+        };
+        if active.kind != Popover::BackgroundApps {
+            return Vec::new();
+        }
+        let Some(index) = active
+            .items
+            .iter()
+            .position(|item| background_app_id(item) == Some(app))
+        else {
+            return Vec::new();
+        };
+        if !active.items[index].enabled() || active.focused == Some(index) {
+            return Vec::new();
+        }
+        active.focused = Some(index);
+        active.pending_confirmation = None;
+        vec![QueuedPopoverAction::Redraw]
+    }
+
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "external menu lifecycle is consumed by the native adapter incrementally"
+    )]
+    pub const fn load_generation(&self) -> u64 {
         self.load_generation
     }
 
@@ -110,6 +191,8 @@ impl PopoverController {
         {
             return false;
         }
+
+        self.external_active = None;
 
         let state = match result {
             Ok(items) if items.is_empty() => PopoverLoadState::Empty,
@@ -174,7 +257,7 @@ impl PopoverController {
         let Some(active) = &mut self.active else {
             return Vec::new();
         };
-        let scene = active.scene();
+        let scene = active.scene(self.external_active);
         let Some(index) = layout_popover_scene(&scene, surface).hit_test(point) else {
             return Vec::new();
         };
@@ -201,7 +284,7 @@ impl PopoverController {
         if active.kind != Popover::BackgroundApps {
             return Vec::new();
         }
-        let scene = active.scene();
+        let scene = active.scene(self.external_active);
         let Some(index) = layout_popover_scene(&scene, surface).hit_test(point) else {
             return Vec::new();
         };
@@ -226,7 +309,7 @@ impl PopoverController {
         if active.kind != Popover::BackgroundApps {
             return Vec::new();
         }
-        let scene = active.scene();
+        let scene = active.scene(self.external_active);
         let Some(index) = layout_popover_scene(&scene, surface).hit_test(point) else {
             return Vec::new();
         };
@@ -248,7 +331,7 @@ impl PopoverController {
         let Some(active) = &mut self.active else {
             return Vec::new();
         };
-        let scene = active.scene();
+        let scene = active.scene(self.external_active);
         let hovered = layout_popover_scene(&scene, surface)
             .hit_test(point)
             .filter(|index| active.items[*index].enabled());
@@ -262,7 +345,23 @@ impl PopoverController {
 
     #[must_use]
     pub fn scene(&self) -> Option<PopoverScene> {
-        self.active.as_ref().map(ActivePopover::scene)
+        self.active
+            .as_ref()
+            .map(|active| active.scene(self.external_active))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "external menu lifecycle is consumed by the native adapter incrementally"
+    )]
+    fn has_background_app(&self, app: BackgroundAppId) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            active.kind == Popover::BackgroundApps
+                && active
+                    .items
+                    .iter()
+                    .any(|item| background_app_id(item) == Some(app))
+        })
     }
 
     fn apply_internal_actions(&mut self, actions: &[QueuedPopoverAction]) {
@@ -407,7 +506,7 @@ impl ActivePopover {
         }
     }
 
-    fn scene(&self) -> PopoverScene {
+    fn scene(&self, external_active: Option<BackgroundAppId>) -> PopoverScene {
         let rows = self
             .items
             .iter()
@@ -434,11 +533,21 @@ impl ActivePopover {
             Popover::BackgroundApps => PopoverLayoutStyle::BalancedApps,
             _ => PopoverLayoutStyle::Compact,
         };
+        let external_active_row = (self.kind == Popover::BackgroundApps)
+            .then(|| {
+                external_active.and_then(|app| {
+                    self.items
+                        .iter()
+                        .position(|item| background_app_id(item) == Some(app))
+                })
+            })
+            .flatten();
         let mut scene =
             PopoverScene::new(self.kind, title(self.kind), self.state, rows, self.focused)
                 .with_scroll_offset(self.scroll_offset)
                 .with_status_text(&self.status_text)
-                .with_layout_style(layout_style);
+                .with_layout_style(layout_style)
+                .with_external_active_row(external_active_row);
         if self.kind == Popover::BackgroundApps {
             scene = scene.with_header_detail(&self.items.len().to_string());
         }
@@ -448,6 +557,14 @@ impl ActivePopover {
 
 fn first_enabled(items: &[PopoverItem]) -> Option<usize> {
     items.iter().position(PopoverItem::enabled)
+}
+
+fn background_app_id(item: &PopoverItem) -> Option<BackgroundAppId> {
+    match item.action() {
+        Some(PopoverAction::OpenBackgroundApp(app))
+        | Some(PopoverAction::OpenBackgroundAppContextMenu(app)) => Some(*app),
+        _ => None,
+    }
 }
 
 fn enabled_indexes(items: &[PopoverItem]) -> Vec<usize> {
