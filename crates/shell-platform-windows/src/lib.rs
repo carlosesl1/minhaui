@@ -272,6 +272,12 @@ mod tray_record_decoder;
 mod win32_background_apps;
 #[cfg(windows)]
 mod win32_media_sessions;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "bounded Explorer toolbar discovery and remote-memory reads are isolated here"
+)]
+mod win32_tray_source;
 mod window_preview;
 
 #[cfg(test)]

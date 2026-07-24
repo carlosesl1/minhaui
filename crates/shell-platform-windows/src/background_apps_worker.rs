@@ -16,14 +16,14 @@ use crate::{NativeWindowId, PlatformEvent};
 pub(super) const BACKGROUND_APPS_WAKE_MESSAGE: u32 = WM_APP + 0x62;
 
 pub(crate) trait BackgroundAppsSource {
-    fn capture(&self) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError>;
+    fn capture(&self, generation: u64) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError>;
 }
 
 struct NativeBackgroundAppsSource;
 
 impl BackgroundAppsSource for NativeBackgroundAppsSource {
-    fn capture(&self) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
-        capture_background_apps()
+    fn capture(&self, generation: u64) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+        capture_background_apps(generation)
     }
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn load_request(
     source: &impl BackgroundAppsSource,
     generation: u64,
 ) -> BackgroundAppsLoadResult {
-    BackgroundAppsLoadResult::new(generation, source.capture())
+    BackgroundAppsLoadResult::new(generation, source.capture(generation))
 }
 
 #[derive(Clone, Copy)]
@@ -135,6 +135,7 @@ fn wake_owner_window(window: NativeWindowId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::Duration;
@@ -149,10 +150,12 @@ mod tests {
 
     struct FixedBackgroundAppsSource {
         snapshot: Result<Vec<BackgroundAppEntry>, BackgroundAppsError>,
+        observed_generation: Cell<u64>,
     }
 
     impl BackgroundAppsSource for FixedBackgroundAppsSource {
-        fn capture(&self) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+        fn capture(&self, generation: u64) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+            self.observed_generation.set(generation);
             self.snapshot.clone()
         }
     }
@@ -163,10 +166,12 @@ mod tests {
         let processes = [RunningProcess::new(7, r"D:\Live\Steam.exe", "Steam")];
         let source = FixedBackgroundAppsSource {
             snapshot: Ok(build_background_apps(&registrations, &processes)),
+            observed_generation: Cell::new(0),
         };
 
         let result = load_request(&source, 41);
 
+        assert_eq!(source.observed_generation.get(), 41);
         assert_eq!(result.generation(), 41);
         assert_eq!(result.snapshot().as_ref().unwrap()[0].label(), "Steam");
         let (generation, snapshot) = result.into_parts();
@@ -180,13 +185,18 @@ mod tests {
         release_first: Arc<(Mutex<bool>, Condvar)>,
         capture_active: Arc<AtomicBool>,
         concurrent_capture: Arc<AtomicBool>,
+        captured_generations: Arc<Mutex<Vec<u64>>>,
     }
 
     impl BackgroundAppsSource for BlockingBackgroundAppsSource {
-        fn capture(&self) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+        fn capture(&self, generation: u64) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
             if self.capture_active.swap(true, Ordering::AcqRel) {
                 self.concurrent_capture.store(true, Ordering::Release);
             }
+            self.captured_generations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(generation);
             let capture = self.captures.fetch_add(1, Ordering::AcqRel);
             if capture == 0 {
                 let _ = self.first_started.send(());
@@ -211,6 +221,7 @@ mod tests {
         let capture_active = Arc::new(AtomicBool::new(false));
         let concurrent_capture = Arc::new(AtomicBool::new(false));
         let release_first = Arc::new((Mutex::new(false), Condvar::new()));
+        let captured_generations = Arc::new(Mutex::new(Vec::new()));
         let (first_started_tx, first_started_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         let source = BlockingBackgroundAppsSource {
@@ -219,6 +230,7 @@ mod tests {
             release_first: Arc::clone(&release_first),
             capture_active: Arc::clone(&capture_active),
             concurrent_capture: Arc::clone(&concurrent_capture),
+            captured_generations: Arc::clone(&captured_generations),
         };
         let worker = BackgroundAppsWorker::with_source(source, move |result, _wake_window| {
             let _ = result_tx.send(result.generation());
@@ -253,6 +265,12 @@ mod tests {
             3
         );
         assert_eq!(captures.load(Ordering::Acquire), 2);
+        assert_eq!(
+            *captured_generations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![1, 3]
+        );
         assert!(!concurrent_capture.load(Ordering::Acquire));
         drop(worker);
         assert_eq!(

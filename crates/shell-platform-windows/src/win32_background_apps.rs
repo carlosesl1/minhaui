@@ -20,7 +20,10 @@ use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::background_apps::{
     BackgroundAppEntry, MAX_NOTIFICATION_REGISTRATIONS, NotificationRegistration, RunningProcess,
-    build_background_apps,
+    build_background_apps, merge_background_apps,
+};
+use crate::win32_tray_source::{
+    NativeTrayCapture, NativeTrayCaptureOutcome, capture_native_tray_apps,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -81,10 +84,65 @@ pub(super) fn activate_background_app(
     }
 }
 
-pub(super) fn capture_background_apps() -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
-    let registrations = capture_notification_registrations()?;
-    let processes = capture_running_processes()?;
-    Ok(build_background_apps(&registrations, &processes))
+pub(super) fn capture_background_apps(
+    generation: u64,
+) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+    capture_background_apps_with(generation, capture_native_tray_apps, || {
+        let registrations = capture_notification_registrations()?;
+        let processes = capture_running_processes()?;
+        Ok(build_background_apps(&registrations, &processes))
+    })
+}
+
+fn capture_background_apps_with(
+    generation: u64,
+    capture_native: impl FnOnce(u64) -> NativeTrayCapture,
+    capture_fallback: impl FnOnce() -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError>,
+) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+    let native = capture_native(generation);
+    if let Some(diagnostic) = native_capture_diagnostic(native.outcome) {
+        crate::diagnostics::record(
+            crate::diagnostics::DiagnosticModule::AppLifecycle,
+            crate::diagnostics::LogLevel::Info,
+            diagnostic.event,
+            &[("code", diagnostic.code)],
+        );
+    }
+    match capture_fallback() {
+        Ok(fallback) => Ok(merge_background_apps(native.entries, fallback)),
+        Err(error) if native.entries.is_empty() => Err(error),
+        Err(error) => {
+            crate::diagnostics::record(
+                crate::diagnostics::DiagnosticModule::AppLifecycle,
+                crate::diagnostics::LogLevel::Info,
+                "background_apps.fallback_capture.unavailable",
+                &[("code", error.code())],
+            );
+            Ok(merge_background_apps(native.entries, []))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeCaptureDiagnostic {
+    event: &'static str,
+    code: &'static str,
+}
+
+const fn native_capture_diagnostic(
+    outcome: NativeTrayCaptureOutcome,
+) -> Option<NativeCaptureDiagnostic> {
+    match outcome {
+        NativeTrayCaptureOutcome::Complete => None,
+        NativeTrayCaptureOutcome::Partial(_) => Some(NativeCaptureDiagnostic {
+            event: "background_apps.native_capture.partial",
+            code: outcome.code(),
+        }),
+        NativeTrayCaptureOutcome::Unavailable(_) => Some(NativeCaptureDiagnostic {
+            event: "background_apps.native_capture.unavailable",
+            code: outcome.code(),
+        }),
+    }
 }
 
 fn capture_notification_registrations() -> Result<Vec<NotificationRegistration>, BackgroundAppsError>
@@ -279,7 +337,19 @@ impl Drop for OwnedHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::BackgroundAppsError;
+    use std::cell::Cell;
+
+    use crate::NativeWindowId;
+    use crate::background_apps::{BackgroundAppEntry, BackgroundAppOrigin, MAX_BACKGROUND_APPS};
+    use crate::native_tray::NativeTrayIdentity;
+    use crate::win32_tray_source::{
+        NativeTrayCapture, NativeTrayCaptureError, NativeTrayCaptureOutcome,
+    };
+
+    use super::{
+        BackgroundAppsError, NativeCaptureDiagnostic, capture_background_apps_with,
+        native_capture_diagnostic,
+    };
 
     #[test]
     fn adapter_error_is_typed_and_path_free() {
@@ -287,5 +357,157 @@ mod tests {
 
         assert_eq!(error.code(), "registry_unavailable");
         assert!(!format!("{error:?}").contains("Carlos"));
+    }
+
+    fn fallback_entry() -> BackgroundAppEntry {
+        BackgroundAppEntry::registry_fallback(
+            42,
+            "Discord fallback",
+            r"C:\Apps\Discord.exe",
+            r"C:\Apps\Discord.exe",
+        )
+    }
+
+    fn native_entry(generation: u64) -> BackgroundAppEntry {
+        let identity =
+            NativeTrayIdentity::new(NativeWindowId::new(7), 42, 9, 0x8001, 0, None, generation)
+                .expect("synthetic native identity");
+        BackgroundAppEntry::native(
+            identity,
+            "Discord native",
+            r"c:/apps/discord.exe",
+            r"c:/apps/discord.exe",
+        )
+    }
+
+    #[test]
+    fn unavailable_native_capture_preserves_registry_fallback() {
+        for error in [
+            NativeTrayCaptureError::AccessDenied,
+            NativeTrayCaptureError::Unsupported,
+        ] {
+            let result = capture_background_apps_with(
+                91,
+                |_| NativeTrayCapture {
+                    entries: Vec::new(),
+                    outcome: NativeTrayCaptureOutcome::Unavailable(error),
+                },
+                || Ok(vec![fallback_entry()]),
+            )
+            .expect("fallback must remain available");
+
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].label(), "Discord fallback");
+            assert!(matches!(
+                result[0].origin(),
+                BackgroundAppOrigin::RegistryFallback
+            ));
+        }
+    }
+
+    #[test]
+    fn capture_passes_generation_and_native_entry_wins_registry_duplicate() {
+        let captured_generation = Cell::new(0_u64);
+
+        let result = capture_background_apps_with(
+            92,
+            |generation| {
+                captured_generation.set(generation);
+                NativeTrayCapture {
+                    entries: vec![native_entry(generation)],
+                    outcome: NativeTrayCaptureOutcome::Complete,
+                }
+            },
+            || Ok(vec![fallback_entry()]),
+        )
+        .expect("injected capture");
+
+        assert_eq!(captured_generation.get(), 92);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].label(), "Discord native");
+        assert!(matches!(result[0].origin(), BackgroundAppOrigin::Native(_)));
+    }
+
+    #[test]
+    fn fallback_error_returns_bounded_native_entries() {
+        let generation = 93;
+        let native_entries = (0..MAX_BACKGROUND_APPS + 7)
+            .map(|index| {
+                let identity = NativeTrayIdentity::new(
+                    NativeWindowId::new(index as isize + 1),
+                    42,
+                    index as u32 + 1,
+                    0x8001,
+                    0,
+                    None,
+                    generation,
+                )
+                .expect("synthetic native identity");
+                let executable = format!(r"C:\Apps\Native{index:02}.exe");
+                BackgroundAppEntry::native(
+                    identity,
+                    format!("Native {index:02}"),
+                    executable.clone(),
+                    executable,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let result = capture_background_apps_with(
+            generation,
+            |_| NativeTrayCapture {
+                entries: native_entries,
+                outcome: NativeTrayCaptureOutcome::Partial(NativeTrayCaptureError::HostUnavailable),
+            },
+            || Err(BackgroundAppsError::Registry),
+        )
+        .expect("native entries must survive a fallback failure");
+
+        assert_eq!(result.len(), MAX_BACKGROUND_APPS);
+        assert!(
+            result
+                .iter()
+                .all(|entry| matches!(entry.origin(), BackgroundAppOrigin::Native(_)))
+        );
+    }
+
+    #[test]
+    fn empty_unavailable_native_capture_preserves_fallback_error() {
+        let result = capture_background_apps_with(
+            94,
+            |_| NativeTrayCapture {
+                entries: Vec::new(),
+                outcome: NativeTrayCaptureOutcome::Unavailable(NativeTrayCaptureError::Unsupported),
+            },
+            || Err(BackgroundAppsError::ProcessSnapshot),
+        );
+
+        assert_eq!(result, Err(BackgroundAppsError::ProcessSnapshot));
+    }
+
+    #[test]
+    fn native_capture_diagnostic_is_closed_redacted_and_skips_complete_outcomes() {
+        assert_eq!(
+            native_capture_diagnostic(NativeTrayCaptureOutcome::Complete),
+            None
+        );
+        assert_eq!(
+            native_capture_diagnostic(NativeTrayCaptureOutcome::Partial(
+                NativeTrayCaptureError::AccessDenied,
+            )),
+            Some(NativeCaptureDiagnostic {
+                event: "background_apps.native_capture.partial",
+                code: "native_tray_access_denied",
+            })
+        );
+        assert_eq!(
+            native_capture_diagnostic(NativeTrayCaptureOutcome::Unavailable(
+                NativeTrayCaptureError::Unsupported,
+            )),
+            Some(NativeCaptureDiagnostic {
+                event: "background_apps.native_capture.unavailable",
+                code: "native_tray_unsupported",
+            })
+        );
     }
 }
