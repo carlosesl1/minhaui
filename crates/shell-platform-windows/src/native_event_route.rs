@@ -29,6 +29,10 @@ pub struct NativeWindowSlot {
 }
 
 impl NativeWindowSlot {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one typed native handle is required for each owned surface"
+    )]
     #[must_use]
     pub const fn new(
         monitor: MonitorId,

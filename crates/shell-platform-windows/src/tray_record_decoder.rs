@@ -551,6 +551,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::reversed_empty_ranges,
+        reason = "the decoder contract explicitly rejects reversed remote memory ranges"
+    )]
     fn accepts_pointer_at_range_start_but_rejects_end_overflow_empty_and_reversed_ranges() {
         let exact_start = decode_x64_button(&button(0x1000, 0), 0x1000..0x1000 + 32);
         assert!(exact_start.is_ok());

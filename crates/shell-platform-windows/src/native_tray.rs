@@ -44,6 +44,10 @@ impl NativeTrayIdentity {
         dead_code,
         reason = "native tray identity construction is consumed by the adapter incrementally"
     )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the identity preserves the complete immutable Explorer tray record"
+    )]
     #[must_use]
     pub(crate) const fn new(
         owner_window: NativeWindowId,

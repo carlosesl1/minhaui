@@ -297,19 +297,10 @@ struct PendingActivation {
     expected_count: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct AppCompatibility {
     succeeded: Option<TrayActivationStrategy>,
     failed: [bool; 3],
-}
-
-impl Default for AppCompatibility {
-    fn default() -> Self {
-        Self {
-            succeeded: None,
-            failed: [false; 3],
-        }
-    }
 }
 
 impl AppCompatibility {
@@ -455,10 +446,8 @@ impl TrayActivationCoordinator {
             return TrayActivationEffect::NoPending;
         };
         let protocol_failed = pending.delivered_count == pending.expected_count;
-        if protocol_failed {
-            if let Some(compatibility) = self.compatibility.get_mut(&pending.key) {
-                compatibility.mark_failed(pending.strategy);
-            }
+        if protocol_failed && let Some(compatibility) = self.compatibility.get_mut(&pending.key) {
+            compatibility.mark_failed(pending.strategy);
         }
         TrayActivationEffect::TimedOut {
             id: pending.id,
@@ -607,7 +596,7 @@ mod tests {
             self.accept
                 && self
                     .fail_at
-                    .map_or(true, |fail_at| self.posted.len() - 1 < fail_at)
+                    .is_none_or(|fail_at| self.posted.len() - 1 < fail_at)
         }
     }
 
