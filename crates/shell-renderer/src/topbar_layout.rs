@@ -7,6 +7,9 @@ pub struct TopbarLaidOutItem {
     visual: TopbarModuleVisual,
     bounds: DipRect,
     focused: bool,
+    hovered: bool,
+    pressed: bool,
+    active: bool,
 }
 
 impl TopbarLaidOutItem {
@@ -23,6 +26,21 @@ impl TopbarLaidOutItem {
     #[must_use]
     pub const fn focused(&self) -> bool {
         self.focused
+    }
+
+    #[must_use]
+    pub const fn hovered(&self) -> bool {
+        self.hovered
+    }
+
+    #[must_use]
+    pub const fn pressed(&self) -> bool {
+        self.pressed
+    }
+
+    #[must_use]
+    pub const fn active(&self) -> bool {
+        self.active
     }
 
     #[must_use]
@@ -122,6 +140,9 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
             visual: visual.clone(),
             bounds: DipRect::new(left_x, surface.y + metrics.y, width, metrics.height),
             focused: scene.focused_module() == Some(visual.kind()),
+            hovered: scene.hovered_module() == Some(visual.kind()),
+            pressed: scene.pressed_module() == Some(visual.kind()),
+            active: scene.active_module() == Some(visual.kind()),
         });
         left_x += width + metrics.gap;
     }
@@ -159,6 +180,9 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
                 visual: visual.clone(),
                 bounds: DipRect::new(x, surface.y + metrics.y, width, metrics.height),
                 focused: scene.focused_module() == Some(visual.kind()),
+                hovered: scene.hovered_module() == Some(visual.kind()),
+                pressed: scene.pressed_module() == Some(visual.kind()),
+                active: scene.active_module() == Some(visual.kind()),
             });
             x += width + metrics.gap;
         }
@@ -177,6 +201,9 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
                 visual: visual.clone(),
                 bounds: DipRect::new(candidate, surface.y + metrics.y, width, metrics.height),
                 focused: scene.focused_module() == Some(visual.kind()),
+                hovered: scene.hovered_module() == Some(visual.kind()),
+                pressed: scene.pressed_module() == Some(visual.kind()),
+                active: scene.active_module() == Some(visual.kind()),
             });
             x = candidate - metrics.gap;
         }

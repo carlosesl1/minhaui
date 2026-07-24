@@ -88,7 +88,7 @@ fn parses_accessibility_and_safe_mode_smoke_flags() {
 }
 
 #[test]
-fn liquid_glass_is_disabled_by_default_and_requires_explicit_opt_in() {
-    assert!(!parse_args(["shell-app.exe"]).liquid_glass);
+fn liquid_glass_is_enabled_for_the_normal_launch() {
+    assert!(parse_args(["shell-app.exe"]).liquid_glass);
     assert!(parse_args(["shell-app.exe", "--liquid-glass"]).liquid_glass);
 }

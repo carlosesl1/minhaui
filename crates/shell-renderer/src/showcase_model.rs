@@ -101,7 +101,7 @@ impl ShowcaseTokens {
             text_disabled: Rgba8::new(0x68, 0x71, 0x7D, 0xFF),
             accent: Rgba8::new(0x4C, 0x9A, 0xFF, 0xFF),
             focus_outer: Rgba8::new(0x9D, 0xCA, 0xFF, 0xFF),
-            rim_outer: Rgba8::new(0x00, 0x00, 0x00, 0x40),
+            rim_outer: Rgba8::new(0x00, 0x00, 0x00, 0x28),
             rim_inner: Rgba8::new(0xFF, 0xFF, 0xFF, 0x24),
             warning: Rgba8::new(0xF2, 0xB8, 0x4B, 0xFF),
             error: Rgba8::new(0xFF, 0x73, 0x73, 0xFF),
@@ -165,10 +165,10 @@ impl DockInsetShadow {
 #[must_use]
 pub const fn dock_inset_shadows() -> [DockInsetShadow; 4] {
     [
-        DockInsetShadow::new(2.5, 1.5, -2.5, Rgba8::new(0x80, 0x80, 0x80, 0xFF)),
-        DockInsetShadow::new(-2.5, 1.5, -2.5, Rgba8::new(0x80, 0x80, 0x80, 0xFF)),
-        DockInsetShadow::new(16.0, 16.0, -16.0, Rgba8::new(0x16, 0x16, 0x16, 0xFF)),
-        DockInsetShadow::new(-16.0, 16.0, -16.0, Rgba8::new(0x16, 0x16, 0x16, 0xFF)),
+        DockInsetShadow::new(1.25, 2.0, -1.5, Rgba8::new(0xC0, 0xC0, 0xC0, 0x24)),
+        DockInsetShadow::new(-1.25, 2.0, -1.5, Rgba8::new(0xC0, 0xC0, 0xC0, 0x24)),
+        DockInsetShadow::new(8.0, 16.0, -14.0, Rgba8::new(0x16, 0x16, 0x16, 0x30)),
+        DockInsetShadow::new(-8.0, 16.0, -14.0, Rgba8::new(0x16, 0x16, 0x16, 0x30)),
     ]
 }
 

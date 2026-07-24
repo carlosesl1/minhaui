@@ -1,11 +1,62 @@
 use shell_config::{
-    ConfigLoad, MAX_CONFIG_BYTES, PerformancePreset, RecoveryKind, ShellConfigV1, decode_config,
-    encode_config,
+    ConfigLoad, MAX_CONFIG_BYTES, PerformancePreset, QuickSettingsSettings, RecoveryKind,
+    ShellConfigV1, decode_config, encode_config,
 };
 use shell_core::{
-    AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, TaskbarPolicy, TopbarModule,
-    TopbarModuleKind,
+    AppId, DockItem, DockItemId, DockLayoutEntry, DockSeparatorId, QuickControlKind,
+    QuickControlPlacement, TaskbarPolicy, TopbarModule, TopbarModuleKind,
 };
+
+#[test]
+fn old_v1_defaults_quick_settings_without_recovery() -> Result<(), Box<dyn std::error::Error>> {
+    let encoded = encode_config(&ShellConfigV1::default())?;
+    let mut value: serde_json::Value = serde_json::from_slice(&encoded)?;
+    value
+        .as_object_mut()
+        .ok_or("config must encode as an object")?
+        .remove("quick_settings");
+
+    let ConfigLoad::Current(decoded) = decode_config(&serde_json::to_vec(&value)?) else {
+        return Err("old V1 config must remain current".into());
+    };
+
+    assert_eq!(decoded.quick_settings(), &QuickSettingsSettings::default());
+    Ok(())
+}
+
+#[test]
+fn quick_control_order_and_visibility_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = QuickSettingsSettings::default()
+        .with_visibility(QuickControlKind::Bluetooth, false)
+        .reordered(QuickControlKind::Volume, Some(QuickControlKind::Wifi));
+    let config = ShellConfigV1::default().with_quick_settings(settings.clone());
+
+    let ConfigLoad::Current(decoded) = decode_config(&encode_config(&config)?) else {
+        return Err("quick settings must remain current".into());
+    };
+
+    assert_eq!(decoded.quick_settings(), &settings);
+    assert_eq!(settings.controls()[0].kind(), QuickControlKind::Volume);
+    assert!(
+        !settings
+            .controls()
+            .iter()
+            .find(|control| control.kind() == QuickControlKind::Bluetooth)
+            .ok_or("bluetooth placement missing")?
+            .visible()
+    );
+    Ok(())
+}
+
+#[test]
+fn duplicate_quick_controls_are_rejected() {
+    let duplicate = QuickSettingsSettings::from_controls(vec![
+        QuickControlPlacement::new(QuickControlKind::Wifi, true),
+        QuickControlPlacement::new(QuickControlKind::Wifi, false),
+    ]);
+
+    assert!(!duplicate.validate());
+}
 
 #[test]
 fn defaults_are_safe_and_valid() {

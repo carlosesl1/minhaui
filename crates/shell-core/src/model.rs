@@ -313,6 +313,8 @@ pub enum Popover {
     Power,
     /// Notification center popover.
     Notifications,
+    /// Adaptive device-aware control panel.
+    QuickSettings,
     /// Running applications registered in the Windows notification area.
     BackgroundApps,
 }

@@ -1,18 +1,22 @@
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
-use windows::Win32::Graphics::DirectWrite::IDWriteFactory;
+use windows::Win32::Graphics::DirectWrite::{DWRITE_TEXT_ALIGNMENT_CENTER, IDWriteFactory};
 use windows::core::Result;
 
 use crate::native::{ShellScenes, ShowcaseRole};
+use crate::native_desktop_capture::DesktopBlurCapture;
 use crate::native_icons::NativeIconCache;
-use crate::native_liquid_glass::DockLiquidGlassResources;
+use crate::native_liquid_glass::LiquidGlassResources;
 use crate::native_showcase_context_menu::{
     ContextMenuBrushes, INSET_ALPHA_PROFILE, MENU_BODY_ALPHA, SHADOW_ALPHA_PROFILE,
     draw_context_menu,
 };
 use crate::native_showcase_dock::draw_functional_dock;
 use crate::native_showcase_dock_states::draw_dock_states;
-use crate::native_showcase_material::{MaterialBrushes, MaterialSurface, draw_shell_material};
+use crate::native_showcase_material::{
+    MaterialBrushes, MaterialSurface, draw_shell_material, panel_base_color, panel_luminance_color,
+    panel_reflection_color, panel_veil_color,
+};
 use crate::native_showcase_popover::{PopoverBrushes, PopoverFormats, draw_functional_popover};
 use crate::native_showcase_preview::{
     PREVIEW_CARD_FILL, PREVIEW_CLOSE_FILL, PREVIEW_CLOSE_HOVER_FILL, PREVIEW_CLOSE_HOVER_GLYPH,
@@ -20,19 +24,26 @@ use crate::native_showcase_preview::{
     PREVIEW_PANEL_SOLID_FILL, PreviewBrushes, draw_window_preview,
 };
 use crate::native_showcase_primitives::{draw_text, fill_round, rect};
+use crate::native_showcase_quick_settings::{
+    QuickSettingsBrushes, QuickSettingsFormats, draw_quick_settings,
+};
 use crate::native_showcase_resources::{
     DockBrushes, DockInsetBitmap, DockRenderResources, ShowcaseFormats, create_brush,
-    create_detail_format, create_icon_format, create_text_format,
+    create_detail_format, create_icon_format, create_popover_title_format,
+    create_quick_settings_detail_format, create_quick_settings_label_format, create_text_format,
 };
 use crate::native_showcase_settings::{SettingsBrushes, draw_functional_settings};
 use crate::native_showcase_topbar::{TopbarBrushes, draw_functional_topbar};
-use crate::{DipRect, Rgba8, ShowcaseTokens, TopbarScene};
+use crate::{
+    DipRect, PopoverLayoutStyle, QUICK_SETTINGS_BODY_TOP, Rgba8, ShowcaseTokens, TopbarScene,
+};
 
 pub(crate) struct ShowcaseStyle<'a> {
     role: ShowcaseRole,
     solid_material: bool,
     dock_inset: Option<&'a DockInsetBitmap>,
-    dock_liquid_glass: Option<&'a DockLiquidGlassResources>,
+    liquid_glass: Option<&'a LiquidGlassResources>,
+    desktop_blur: Option<&'a DesktopBlurCapture>,
 }
 
 impl<'a> ShowcaseStyle<'a> {
@@ -40,13 +51,15 @@ impl<'a> ShowcaseStyle<'a> {
         role: ShowcaseRole,
         solid_material: bool,
         dock_inset: Option<&'a DockInsetBitmap>,
-        dock_liquid_glass: Option<&'a DockLiquidGlassResources>,
+        liquid_glass: Option<&'a LiquidGlassResources>,
+        desktop_blur: Option<&'a DesktopBlurCapture>,
     ) -> Self {
         Self {
             role,
             solid_material,
             dock_inset,
-            dock_liquid_glass,
+            liquid_glass,
+            desktop_blur,
         }
     }
 }
@@ -62,7 +75,8 @@ pub(crate) fn draw_showcase(
     let role = style.role;
     let solid_material = style.solid_material;
     let dock_inset = style.dock_inset;
-    let dock_liquid_glass = style.dock_liquid_glass;
+    let liquid_glass = style.liquid_glass;
+    let desktop_blur = style.desktop_blur;
     let width = surface.width;
     let height = surface.height;
     let tokens = if solid_material {
@@ -80,6 +94,10 @@ pub(crate) fn draw_showcase(
         tokens.surface_base
     };
     let base = create_brush(context, base_color)?;
+    let panel_base = create_brush(context, panel_base_color(solid_material))?;
+    let panel_luminance = create_brush(context, panel_luminance_color(solid_material))?;
+    let panel_veil = create_brush(context, panel_veil_color(solid_material))?;
+    let panel_reflection = create_brush(context, panel_reflection_color(solid_material))?;
     let raised = create_brush(context, tokens.surface_raised)?;
     let hover = create_brush(context, tokens.surface_hover)?;
     let pressed = create_brush(context, tokens.surface_pressed)?;
@@ -90,16 +108,141 @@ pub(crate) fn draw_showcase(
     let topbar_tint = create_brush(context, tokens.topbar_tint)?;
     let primary = create_brush(context, tokens.text_primary)?;
     let secondary = create_brush(context, tokens.text_secondary)?;
+    let contrast_shadow = &topbar_tint;
     let disabled = create_brush(context, tokens.text_disabled)?;
     let accent = create_brush(context, tokens.accent)?;
     let focus = create_brush(context, tokens.focus_outer)?;
     let rim_outer = create_brush(context, tokens.rim_outer)?;
+    let panel_rim = if solid_material {
+        create_brush(context, tokens.dock_luminance)?
+    } else {
+        create_brush(context, Rgba8::new(0x00, 0x00, 0x00, 0x20))?
+    };
+    let panel_hover = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_hover
+        } else {
+            Rgba8::new(0x00, 0x00, 0x00, 0x14)
+        },
+    )?;
+    let panel_raised = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_raised
+        } else {
+            Rgba8::new(0x00, 0x00, 0x00, 0x0C)
+        },
+    )?;
+    let panel_divider = create_brush(
+        context,
+        if solid_material {
+            tokens.rim_inner
+        } else {
+            Rgba8::new(0x00, 0x00, 0x00, 0x24)
+        },
+    )?;
+    let panel_focus = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_selected
+        } else {
+            Rgba8::new(0x0A, 0x64, 0xD8, 0x26)
+        },
+    )?;
+    let panel_notch = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_base
+        } else {
+            Rgba8::new(0xD9, 0xD9, 0xD9, 0xBA)
+        },
+    )?;
+    let panel_primary = create_brush(
+        context,
+        if solid_material {
+            tokens.text_primary
+        } else {
+            Rgba8::new(0x1A, 0x1A, 0x1A, 0xFF)
+        },
+    )?;
+    let panel_secondary = create_brush(
+        context,
+        if solid_material {
+            tokens.text_secondary
+        } else {
+            Rgba8::new(0x45, 0x45, 0x48, 0xFF)
+        },
+    )?;
+    let panel_accent = create_brush(
+        context,
+        if solid_material {
+            tokens.accent
+        } else {
+            Rgba8::new(0x0A, 0x64, 0xD8, 0xFF)
+        },
+    )?;
+    let panel_error = create_brush(
+        context,
+        if solid_material {
+            tokens.error
+        } else {
+            Rgba8::new(0xB4, 0x23, 0x18, 0xFF)
+        },
+    )?;
+    let quick_section = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_raised
+        } else {
+            Rgba8::new(0xFF, 0xFF, 0xFF, 0x1E)
+        },
+    )?;
+    let quick_tile = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_raised
+        } else {
+            Rgba8::new(0xFF, 0xFF, 0xFF, 0x2A)
+        },
+    )?;
+    let quick_hover = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_hover
+        } else {
+            Rgba8::new(0xFF, 0xFF, 0xFF, 0x46)
+        },
+    )?;
+    let quick_pressed = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_pressed
+        } else {
+            Rgba8::new(0x00, 0x00, 0x00, 0x18)
+        },
+    )?;
+    let quick_selected = create_brush(
+        context,
+        if solid_material {
+            tokens.surface_selected
+        } else {
+            Rgba8::new(0x0A, 0x64, 0xD8, 0x30)
+        },
+    )?;
+    let quick_on_accent = create_brush(context, Rgba8::new(0xFF, 0xFF, 0xFF, 0xF2))?;
     let rim_inner = create_brush(context, tokens.rim_inner)?;
     let warning = create_brush(context, tokens.warning)?;
     let error = create_brush(context, tokens.error)?;
     let text_scale = scenes.topbar.map_or(1.0, TopbarScene::text_scale);
     let text_format = create_text_format(dwrite, role, text_scale)?;
     let detail_format = create_detail_format(dwrite, role, text_scale)?;
+    let quick_label_format = create_quick_settings_label_format(dwrite)?;
+    let quick_detail_format = create_quick_settings_detail_format(dwrite)?;
+    let quick_footer_format = create_quick_settings_detail_format(dwrite)?;
+    // SAFETY: Category 8 (FFI boundary). This dedicated format remains live
+    // throughout the draw call and is not shared with leading-aligned details.
+    unsafe { quick_footer_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     let icon_format = create_icon_format(dwrite, role)?;
     let formats = ShowcaseFormats {
         text: &text_format,
@@ -117,6 +260,9 @@ pub(crate) fn draw_showcase(
     unsafe { context.BeginDraw() };
     // SAFETY: Category 8 (FFI boundary). Null clears the target to transparent.
     unsafe { context.Clear(None) };
+    if let Some(desktop_blur) = desktop_blur {
+        desktop_blur.draw(context, width, height, radius)?;
+    }
     if matches!(role, ShowcaseRole::Dock | ShowcaseRole::Topbar) {
         let motion_strength = scenes
             .dock
@@ -138,16 +284,62 @@ pub(crate) fn draw_showcase(
                 content_bounds,
             },
             MaterialBrushes {
+                base: &panel_base,
                 luminance: &dock_luminance,
                 veil: &dock_veil,
                 reflection: &dock_reflection,
                 topbar_tint: &topbar_tint,
                 rim_outer: &rim_outer,
+                panel_rim: &panel_rim,
                 dock_inset,
-                liquid_glass: dock_liquid_glass,
+                liquid_glass,
             },
         );
-    } else if role != ShowcaseRole::Popover || scenes.context_menu.is_none() {
+    } else if role == ShowcaseRole::Popover && scenes.context_menu.is_none() {
+        if scenes.quick_settings.is_some() || scenes.popover.is_some() {
+            let content_bounds = if scenes.quick_settings.is_some() {
+                DipRect::new(
+                    0.0,
+                    QUICK_SETTINGS_BODY_TOP,
+                    width,
+                    (height - QUICK_SETTINGS_BODY_TOP).max(1.0),
+                )
+            } else if let Some(popover) = scenes.popover {
+                match popover.layout_style() {
+                    PopoverLayoutStyle::Compact => DipRect::new(0.0, 0.0, width, height),
+                    PopoverLayoutStyle::SystemPanel => {
+                        DipRect::new(0.0, 8.0, width, (height - 8.0).max(1.0))
+                    }
+                }
+            } else {
+                DipRect::new(0.0, 0.0, width, height)
+            };
+            draw_shell_material(
+                context,
+                MaterialSurface {
+                    role,
+                    width,
+                    height,
+                    radius,
+                    solid: solid_material,
+                    motion_strength: 0.0,
+                    hover_position_x: None,
+                    content_bounds: Some(content_bounds),
+                },
+                MaterialBrushes {
+                    base: &panel_base,
+                    luminance: &panel_luminance,
+                    veil: &panel_veil,
+                    reflection: &panel_reflection,
+                    topbar_tint: &topbar_tint,
+                    rim_outer: &rim_outer,
+                    panel_rim: &panel_rim,
+                    dock_inset: None,
+                    liquid_glass,
+                },
+            );
+        }
+    } else if role != ShowcaseRole::Popover {
         fill_round(
             context,
             rect(0.5, 0.5, width - 0.5, height - 0.5, radius),
@@ -174,7 +366,10 @@ pub(crate) fn draw_showcase(
                     primary: &primary,
                     secondary: &secondary,
                     accent: &accent,
+                    focus: &focus,
                     warning: &warning,
+                    contrast_shadow,
+                    liquid_glass,
                 },
             );
         } else {
@@ -224,7 +419,36 @@ pub(crate) fn draw_showcase(
                     separator: &menu_separator,
                 },
             );
+        } else if let Some(scene) = scenes.quick_settings {
+            draw_quick_settings(
+                context,
+                icons,
+                QuickSettingsFormats {
+                    label: &quick_label_format,
+                    detail: &quick_detail_format,
+                    footer: &quick_footer_format,
+                    icon: &icon_format,
+                },
+                DipRect::new(0.0, 0.0, width, height),
+                scene,
+                QuickSettingsBrushes {
+                    section: &quick_section,
+                    tile: &quick_tile,
+                    hover: &quick_hover,
+                    pressed: &quick_pressed,
+                    selected: &quick_selected,
+                    primary: &panel_primary,
+                    secondary: &panel_secondary,
+                    accent: &panel_accent,
+                    on_accent: &quick_on_accent,
+                    focus: &focus,
+                    error: &panel_error,
+                    base: &panel_notch,
+                    rim: &panel_rim,
+                },
+            );
         } else if let Some(scene) = scenes.popover {
+            let title_format = create_popover_title_format(dwrite)?;
             draw_functional_popover(
                 context,
                 icons,
@@ -232,17 +456,23 @@ pub(crate) fn draw_showcase(
                     label: &text_format,
                     detail: &detail_format,
                     icon: &icon_format,
+                    title: &title_format,
                 },
                 DipRect::new(0.0, 0.0, width, height),
                 scene,
                 PopoverBrushes {
-                    hover: &hover,
-                    primary: &primary,
-                    secondary: &secondary,
-                    accent: &accent,
-                    error: &error,
+                    hover: &panel_hover,
+                    raised: &panel_raised,
+                    divider: &panel_divider,
+                    focus: &panel_focus,
+                    base: &panel_notch,
+                    rim: &panel_rim,
+                    primary: &panel_primary,
+                    secondary: &panel_secondary,
+                    accent: &panel_accent,
+                    error: &panel_error,
                 },
-            );
+            )?;
         }
     } else if role == ShowcaseRole::Preview {
         if let Some(scene) = scenes.preview {

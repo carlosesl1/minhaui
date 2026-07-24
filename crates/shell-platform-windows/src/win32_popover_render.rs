@@ -3,7 +3,8 @@
 use shell_core::Popover;
 use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
 use shell_renderer::{
-    PhysicalRect, context_menu_height_for_entries, physical_from_dip, popover_height_for_rows,
+    PhysicalRect, PopoverSurfaceSize, context_menu_height_for_entries, physical_from_dip,
+    popover_surface_size, quick_settings_surface_size,
 };
 use windows::core::Result;
 
@@ -13,8 +14,8 @@ use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows};
 use crate::win32_surface_runtime::{SurfaceFrame, SurfaceSizeChange, SurfaceTarget, present_frame};
 use crate::win32_window::OwnedWindow;
 use crate::{
-    PopoverAction, QueuedContextMenuAction, QueuedPopoverAction, QueuedTopbarAction,
-    TopbarOverlayAnchor,
+    PopoverAction, QueuedContextMenuAction, QueuedPopoverAction, QueuedQuickSettingsAction,
+    QueuedTopbarAction, QuickSettingsIntent, TopbarOverlayAnchor,
 };
 
 const POPOVER_SURFACE_ROLE: ShowcaseRole = ShowcaseRole::Popover;
@@ -38,14 +39,74 @@ impl RuntimeSurfaces {
                 } => {
                     self.dismiss_context_menu(topbar, dock, popover, preview, settings)?;
                     popover.hide();
-                    popover.set_backdrop_enabled(true);
-                    if self.popover_controller.active_kind() == Some(*kind) {
+                    popover.set_backdrop_enabled(false);
+                    if (matches!(*kind, Popover::QuickSettings | Popover::Volume)
+                        && self.quick_settings_controller.is_open()
+                        && self.active_topbar_anchor == Some(*anchor))
+                        || self.popover_controller.active_kind() == Some(*kind)
+                    {
+                        self.clear_active_topbar_module();
                         self.popover_controller.dismiss();
+                        self.quick_settings_controller.dismiss();
                         popover.hide();
                         continue;
                     }
                     settings.hide();
                     self.active_topbar_anchor = Some(*anchor);
+                    let active_module = match anchor {
+                        TopbarOverlayAnchor::Module(kind) => Some(*kind),
+                        TopbarOverlayAnchor::Overflow => None,
+                    };
+                    self.topbar_controller.set_active_module(active_module);
+                    self.popover_controller.dismiss();
+                    self.quick_settings_controller.dismiss();
+                    if matches!(*kind, Popover::QuickSettings | Popover::Volume) {
+                        if *kind == Popover::QuickSettings {
+                            if self.media_session_worker.is_none() {
+                                self.media_session_worker =
+                                    Some(crate::media_session_worker::MediaSessionWorker::start(
+                                        crate::win32_event_queue::native_window_id(topbar.hwnd),
+                                    ));
+                            } else if let Some(worker) = self.media_session_worker.as_ref() {
+                                worker
+                                    .send(crate::media_session_types::MediaWorkerCommand::Refresh);
+                            }
+                        }
+                        let capabilities =
+                            crate::win32_quick_settings_capabilities::read_capabilities();
+                        let audio = crate::win32_audio_panel::read().unwrap_or_default();
+                        if *kind == Popover::Volume {
+                            self.quick_settings_controller
+                                .open_audio(capabilities, audio);
+                        } else {
+                            self.quick_settings_controller.open(capabilities);
+                            self.quick_settings_controller.replace_audio_panel(audio);
+                        }
+                        let work = crate::win32_windowing::window_work_area(topbar.hwnd)?;
+                        let scene = self.quick_settings_controller.scene();
+                        let (width, height) = quick_settings_surface_size(
+                            &scene,
+                            work.height as f32 / topbar.dpi().scale(),
+                        );
+                        popover.place_popover(
+                            work,
+                            self.topbar_anchor_rect(topbar, *anchor),
+                            PopoverSurfaceSize::new(width, height),
+                        )?;
+                        self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                        self.animate_surface_entrance(
+                            POPOVER_SURFACE_ROLE,
+                            SurfaceWindows {
+                                topbar,
+                                dock,
+                                popover,
+                                preview,
+                                settings,
+                            },
+                        )?;
+                        popover.show_activating();
+                        continue;
+                    }
                     let background_generation = if *kind == Popover::BackgroundApps {
                         Some(self.popover_controller.begin_loading(*kind))
                     } else {
@@ -61,15 +122,13 @@ impl RuntimeSurfaces {
                         None
                     };
                     let work = crate::win32_windowing::window_work_area(topbar.hwnd)?;
-                    let row_count = self
+                    let size = self
                         .popover_controller
                         .scene()
-                        .map_or(0, |scene| scene.rows().len());
-                    popover.place_popover(
-                        work,
-                        self.topbar_anchor_rect(topbar, *anchor),
-                        popover_height_for_rows(row_count),
-                    )?;
+                        .as_ref()
+                        .map_or(PopoverSurfaceSize::new(244.0, 58.0), popover_surface_size);
+                    popover.place_popover(work, self.topbar_anchor_rect(topbar, *anchor), size)?;
+                    popover.set_backdrop_enabled(false);
                     self.redraw_popover(topbar, dock, popover, preview, settings)?;
                     self.animate_surface_entrance(
                         POPOVER_SURFACE_ROLE,
@@ -90,7 +149,9 @@ impl RuntimeSurfaces {
                     }
                 }
                 QueuedTopbarAction::OpenSearch => {
+                    self.clear_active_topbar_module();
                     self.popover_controller.dismiss();
+                    self.quick_settings_controller.dismiss();
                     popover.hide();
                     settings.hide();
                     record_system_action(
@@ -114,9 +175,11 @@ impl RuntimeSurfaces {
         preview: &OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<()> {
+        let active_changed = self.clear_active_topbar_module();
         self.dismiss_context_menu(topbar, dock, popover, preview, settings)?;
         popover.hide();
         self.popover_controller.dismiss();
+        self.quick_settings_controller.dismiss();
         popover.set_backdrop_enabled(false);
         settings.hide();
         let before = self.dock_controller.state().clone();
@@ -141,6 +204,9 @@ impl RuntimeSurfaces {
         let work = crate::win32_windowing::window_work_area(dock.hwnd)?;
         self.place_active_overlay(work, topbar, dock, popover)?;
         self.redraw_popover(topbar, dock, popover, preview, settings)?;
+        if active_changed {
+            self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+        }
         self.animate_surface_entrance(
             POPOVER_SURFACE_ROLE,
             SurfaceWindows {
@@ -159,13 +225,22 @@ impl RuntimeSurfaces {
         &mut self,
         topbar: &OwnedWindow,
         dock: &mut OwnedWindow,
-        popover: &OwnedWindow,
+        popover: &mut OwnedWindow,
         preview: &OwnedWindow,
         settings: &OwnedWindow,
     ) -> Result<()> {
+        let had_topbar_invoker = self.active_topbar_anchor.is_some();
+        let active_changed = self.clear_active_topbar_module();
         self.popover_controller.dismiss();
+        self.quick_settings_controller.dismiss();
         self.dismiss_context_menu(topbar, dock, popover, preview, settings)?;
         popover.hide();
+        if active_changed {
+            self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+        }
+        if had_topbar_invoker {
+            topbar.restore_focus();
+        }
         Ok(())
     }
 
@@ -229,7 +304,17 @@ impl RuntimeSurfaces {
             let anchor = self.active_topbar_anchor.map_or(topbar.rect, |anchor| {
                 self.topbar_anchor_rect(topbar, anchor)
             });
-            popover.place_popover(work, anchor, popover_height_for_rows(scene.rows().len()))?;
+            popover.place_popover(work, anchor, popover_surface_size(&scene))?;
+            return Ok(true);
+        }
+        if self.quick_settings_controller.is_open() {
+            let scene = self.quick_settings_controller.scene();
+            let anchor = self.active_topbar_anchor.map_or(topbar.rect, |anchor| {
+                self.topbar_anchor_rect(topbar, anchor)
+            });
+            let (width, height) =
+                quick_settings_surface_size(&scene, work.height as f32 / topbar.dpi().scale());
+            popover.place_popover(work, anchor, PopoverSurfaceSize::new(width, height))?;
             return Ok(true);
         }
         Ok(false)
@@ -308,6 +393,7 @@ impl RuntimeSurfaces {
                 }
                 QueuedPopoverAction::TypedIntent(PopoverAction::OpenSettings) => {
                     let work = crate::win32_windowing::window_work_area(settings.hwnd)?;
+                    let active_changed = self.clear_active_topbar_module();
                     self.popover_controller.dismiss();
                     popover.hide();
                     settings.place_settings(work)?;
@@ -322,6 +408,9 @@ impl RuntimeSurfaces {
                             settings,
                         },
                     )?;
+                    if active_changed {
+                        self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                    }
                     settings.show_activating();
                 }
                 QueuedPopoverAction::TypedIntent(PopoverAction::OpenBackgroundApp(id)) => {
@@ -334,8 +423,12 @@ impl RuntimeSurfaces {
                         &self.latest_observed_windows,
                     ) {
                         Ok(()) => {
+                            let active_changed = self.clear_active_topbar_module();
                             self.popover_controller.dismiss();
                             popover.hide();
+                            if active_changed {
+                                self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                            }
                         }
                         Err(error) => crate::diagnostics::record(
                             crate::diagnostics::DiagnosticModule::AppLifecycle,
@@ -346,11 +439,25 @@ impl RuntimeSurfaces {
                     }
                 }
                 QueuedPopoverAction::TypedIntent(action) => {
-                    record_system_action(
-                        "popover.system_action",
-                        crate::win32_system_actions::apply(action),
+                    let hides_popover = matches!(
+                        action,
+                        PopoverAction::OpenTaskManager
+                            | PopoverAction::OpenSystemRoute(_)
+                            | PopoverAction::OpenQuickSettings
                     );
-                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                    let result = crate::win32_system_actions::apply(action);
+                    let succeeded = result.is_ok();
+                    record_system_action("popover.system_action", result);
+                    if hides_popover && succeeded {
+                        let active_changed = self.clear_active_topbar_module();
+                        self.popover_controller.dismiss();
+                        popover.hide();
+                        if active_changed {
+                            self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                        }
+                    } else {
+                        self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                    }
                 }
                 QueuedPopoverAction::Reload => {
                     self.popover_controller
@@ -360,7 +467,174 @@ impl RuntimeSurfaces {
                         })?;
                     self.redraw_popover(topbar, dock, popover, preview, settings)?;
                 }
-                QueuedPopoverAction::Dismiss => popover.hide(),
+                QueuedPopoverAction::Dismiss => {
+                    let had_topbar_invoker = self.active_topbar_anchor.is_some();
+                    let active_changed = self.clear_active_topbar_module();
+                    popover.hide();
+                    if active_changed {
+                        self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                    }
+                    if had_topbar_invoker {
+                        topbar.restore_focus();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_quick_settings_actions(
+        &mut self,
+        actions: &[QueuedQuickSettingsAction],
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        popover: &mut OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &mut OwnedWindow,
+    ) -> Result<()> {
+        let mut redraw_popover = false;
+        let mut redraw_topbar = false;
+        let mut reflow_popover = false;
+        for action in actions {
+            match action {
+                QueuedQuickSettingsAction::Redraw => {
+                    redraw_popover = true;
+                }
+                QueuedQuickSettingsAction::Reflow => {
+                    redraw_popover = true;
+                    reflow_popover = true;
+                }
+                QueuedQuickSettingsAction::Media(command) => {
+                    if let Some(worker) = self.media_session_worker.as_ref() {
+                        worker.send(*command);
+                    }
+                }
+                QueuedQuickSettingsAction::NightLight(request) => {
+                    crate::night_light_worker::request_night_light(
+                        *request,
+                        crate::win32_event_queue::native_window_id(topbar.hwnd),
+                    );
+                }
+                QueuedQuickSettingsAction::Brightness(request) => {
+                    crate::brightness_worker::request_brightness(
+                        *request,
+                        crate::win32_event_queue::native_window_id(topbar.hwnd),
+                    );
+                }
+                QueuedQuickSettingsAction::Intent(QuickSettingsIntent::Dismiss) => {
+                    self.quick_settings_controller.dismiss();
+                    redraw_topbar |= self.clear_active_topbar_module();
+                    popover.hide();
+                    redraw_popover = false;
+                }
+                QueuedQuickSettingsAction::Intent(QuickSettingsIntent::EditControls) => {
+                    self.settings_controller.set_supported_quick_controls(
+                        self.quick_settings_controller
+                            .capabilities()
+                            .supported_kinds(),
+                    );
+                    self.settings_controller
+                        .open_section(crate::settings_controller::SettingsSection::QuickControls);
+                    self.quick_settings_controller.dismiss();
+                    self.clear_active_topbar_module();
+                    popover.hide();
+                    let work = crate::win32_windowing::window_work_area(settings.hwnd)?;
+                    settings.place_settings(work)?;
+                    self.redraw_settings(topbar, dock, popover, preview, settings)?;
+                    settings.show_activating();
+                    redraw_popover = false;
+                }
+                QueuedQuickSettingsAction::Intent(intent) => {
+                    let capability = match intent {
+                        QuickSettingsIntent::Activate(kind)
+                        | QuickSettingsIntent::SetValue { kind, .. } => {
+                            self.quick_settings_controller.capabilities().get(*kind)
+                        }
+                        QuickSettingsIntent::SetDoNotDisturbMode(_) => self
+                            .quick_settings_controller
+                            .capabilities()
+                            .get(shell_core::QuickControlKind::Focus),
+                        QuickSettingsIntent::SetProjectionMode(_) => self
+                            .quick_settings_controller
+                            .capabilities()
+                            .get(shell_core::QuickControlKind::Projection),
+                        QuickSettingsIntent::OpenMediaSessions
+                        | QuickSettingsIntent::MediaAction(_)
+                        | QuickSettingsIntent::SelectMediaSession(_) => None,
+                        QuickSettingsIntent::SetAudioSessionVolume { .. }
+                        | QuickSettingsIntent::SelectAudioOutput(_)
+                        | QuickSettingsIntent::OpenSoundSettings => None,
+                        QuickSettingsIntent::EditControls | QuickSettingsIntent::Dismiss => None,
+                    };
+                    match crate::win32_quick_settings_actions::apply_quick_settings_intent(
+                        intent,
+                        capability,
+                    ) {
+                        crate::win32_quick_settings_actions::QuickSettingsActionResult::Applied(control) => {
+                            self.quick_settings_controller.apply_capability_update(control);
+                            redraw_popover = true;
+                        }
+                        crate::win32_quick_settings_actions::QuickSettingsActionResult::AudioChanged(snapshot) => {
+                            self.quick_settings_controller.replace_audio_panel(snapshot);
+                            self.quick_settings_controller.replace_capabilities(
+                                crate::win32_quick_settings_capabilities::read_capabilities(),
+                            );
+                            redraw_popover = true;
+                            reflow_popover = true;
+                        }
+                        crate::win32_quick_settings_actions::QuickSettingsActionResult::OpenSystemRoute(route) => {
+                            let result = crate::win32_system_actions::apply(
+                                &PopoverAction::OpenSystemRoute(route),
+                            );
+                            let succeeded = result.is_ok();
+                            record_system_action("quick_settings.open_system_route", result);
+                            if succeeded {
+                                self.quick_settings_controller.dismiss();
+                                redraw_topbar |= self.clear_active_topbar_module();
+                                popover.hide();
+                                redraw_popover = false;
+                            } else {
+                                self.quick_settings_controller
+                                    .set_error("Could not open Windows settings");
+                                redraw_popover = true;
+                            }
+                        }
+                        crate::win32_quick_settings_actions::QuickSettingsActionResult::NoChange => {}
+                        crate::win32_quick_settings_actions::QuickSettingsActionResult::Failed(error) => {
+                            crate::diagnostics::record(
+                                crate::diagnostics::DiagnosticModule::AppLifecycle,
+                                crate::diagnostics::LogLevel::Error,
+                                "quick_settings_action_failed",
+                                &[("error", &error.to_string())],
+                            );
+                            self.quick_settings_controller.set_error("Action unavailable");
+                            redraw_popover = true;
+                        }
+                    }
+                }
+            }
+        }
+        if redraw_topbar {
+            self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+        }
+        if redraw_popover && self.quick_settings_controller.is_open() {
+            if reflow_popover {
+                let work = crate::win32_windowing::window_work_area(topbar.hwnd)?;
+                self.place_active_overlay(work, topbar, dock, popover)?;
+            }
+            self.redraw_popover(topbar, dock, popover, preview, settings)?;
+            if reflow_popover {
+                self.animate_surface_entrance(
+                    POPOVER_SURFACE_ROLE,
+                    SurfaceWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        preview,
+                        settings,
+                    },
+                )?;
             }
         }
         Ok(())
@@ -387,6 +661,7 @@ impl RuntimeSurfaces {
             topbar: None,
             dock: None,
             popover: None,
+            quick_settings: None,
             context_menu: None,
             settings: Some(&scene),
             preview: None,
@@ -421,7 +696,15 @@ impl RuntimeSurfaces {
             preview,
             settings,
         };
-        let scene = self.popover_controller.scene();
+        let scene = self
+            .popover_controller
+            .scene()
+            .map(|scene| scene.with_anchor_x(popover.popover_anchor_x_dip()));
+        let quick_settings = self.quick_settings_controller.is_open().then(|| {
+            self.quick_settings_controller
+                .scene()
+                .with_anchor_x(popover.popover_anchor_x_dip())
+        });
         let context_menu = self.context_menu_controller.scene();
         let (width, height) = popover.surface_physical_size();
         let update = present_frame(
@@ -436,6 +719,7 @@ impl RuntimeSurfaces {
                     topbar: None,
                     dock: None,
                     popover: scene.as_ref(),
+                    quick_settings: quick_settings.as_ref(),
                     context_menu: context_menu.as_ref(),
                     settings: None,
                     preview: None,
@@ -455,6 +739,13 @@ impl RuntimeSurfaces {
             .surface_runtime
             .animate_entrance(role, self.reduced_motion);
         self.complete_surface_update(update, windows)
+    }
+
+    fn clear_active_topbar_module(&mut self) -> bool {
+        let visual_generation = self.topbar_controller.visual_generation();
+        self.active_topbar_anchor = None;
+        self.topbar_controller.set_active_module(None);
+        self.topbar_controller.visual_generation() != visual_generation
     }
 
     pub(super) fn topbar_anchor_rect(

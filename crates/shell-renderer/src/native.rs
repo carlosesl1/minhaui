@@ -30,18 +30,22 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
     IDXGISwapChain3,
 };
+use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::core::{Interface, Result};
 
 use crate::ShowcaseTokens;
+use crate::native_desktop_capture::{DesktopBlurCapture, wants_desktop_blur};
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
-use crate::native_liquid_glass::{DockLiquidGlassResources, LiquidGlassMode, liquid_glass_mode};
+use crate::native_liquid_glass::{
+    LiquidGlassMode, LiquidGlassProfile, LiquidGlassResources, liquid_glass_mode, profile_for_role,
+};
 use crate::native_present::{present_swap_chain, present_swap_chain_initial};
 use crate::native_showcase::{ShowcaseStyle, draw_showcase};
 use crate::native_showcase_resources::{DockInsetBitmap, create_dock_inset_bitmap};
 use crate::{
-    ContextMenuScene, DockScene, Dpi, PopoverScene, SettingsScene, TopbarScene, WindowPreviewScene,
-    logical_surface_rect,
+    ContextMenuScene, DockScene, Dpi, PopoverScene, QuickSettingsScene, SettingsScene, TopbarScene,
+    WindowPreviewScene, logical_surface_rect,
 };
 
 pub use crate::native_present::{
@@ -69,6 +73,7 @@ pub struct ShellScenes<'a> {
     pub topbar: Option<&'a TopbarScene>,
     pub dock: Option<&'a DockScene>,
     pub popover: Option<&'a PopoverScene>,
+    pub quick_settings: Option<&'a QuickSettingsScene>,
     pub context_menu: Option<&'a ContextMenuScene>,
     pub settings: Option<&'a SettingsScene>,
     pub preview: Option<&'a WindowPreviewScene>,
@@ -86,18 +91,24 @@ pub struct CompositionRenderer {
 }
 
 pub struct WindowSurface {
+    hwnd: HWND,
     pub(super) swap_chain: IDXGISwapChain1,
     pub(super) back_buffers: RefCell<BackBufferCache<ID2D1Bitmap1>>,
     device: ID3D11Device,
-    dcomp: IDCompositionDevice,
-    _target: IDCompositionTarget,
-    visual: IDCompositionVisual,
-    opacity_effect: IDCompositionEffectGroup,
+    composition: DirectCompositionAttachment,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) dpi: Dpi,
     dock_inset: Option<DockInsetBitmap>,
-    dock_liquid_glass: Option<DockLiquidGlassResources>,
+    liquid_glass: Option<LiquidGlassResources>,
+    desktop_blur: RefCell<Option<DesktopBlurCapture>>,
+}
+
+struct DirectCompositionAttachment {
+    dcomp: IDCompositionDevice,
+    _target: IDCompositionTarget,
+    visual: IDCompositionVisual,
+    opacity_effect: IDCompositionEffectGroup,
 }
 
 pub(super) struct BackBufferCache<T> {
@@ -263,14 +274,49 @@ impl CompositionRenderer {
         } else {
             None
         };
-        let dock_liquid_glass = if role == ShowcaseRole::Dock {
-            DockLiquidGlassResources::create(
+        let liquid_glass = if let Some(profile) = profile_for_role(role) {
+            let tokens = ShowcaseTokens::obsidian_glass();
+            let (glass_width, glass_height, radius) = match profile {
+                LiquidGlassProfile::Dock => (
+                    logical_surface.width,
+                    logical_surface.height,
+                    tokens.dock_radius,
+                ),
+                LiquidGlassProfile::Panel => (
+                    logical_surface.width,
+                    logical_surface.height,
+                    tokens.popover_radius,
+                ),
+                LiquidGlassProfile::ActiveModule => {
+                    (160.0, logical_surface.height, logical_surface.height / 2.0)
+                }
+            };
+            LiquidGlassResources::create(
                 &self.d2d_context,
-                logical_surface.width,
-                (logical_surface.height - 2.0).max(1.0),
-                ShowcaseTokens::obsidian_glass().dock_radius,
+                profile,
+                glass_width,
+                glass_height,
+                radius,
                 self.liquid_glass_mode,
             )?
+        } else {
+            None
+        };
+        let desktop_blur = if wants_desktop_blur(
+            role,
+            scenes.popover.map(PopoverScene::layout_style),
+            scenes.quick_settings.is_some(),
+            self.solid_material,
+        ) {
+            DesktopBlurCapture::capture(&self.d2d_context, hwnd, width, height, dpi).unwrap_or_else(
+                |error| {
+                    eprintln!(
+                        "DESKTOP_BLUR stage=initial_capture status=fallback hresult={:#010X}",
+                        error.code().0 as u32,
+                    );
+                    None
+                },
+            )
         } else {
             None
         };
@@ -282,12 +328,36 @@ impl CompositionRenderer {
                 role,
                 self.solid_material,
                 dock_inset.as_ref(),
-                dock_liquid_glass.as_ref(),
+                liquid_glass.as_ref(),
+                desktop_blur.as_ref(),
             ),
             logical_surface,
             scenes,
         )?;
 
+        let composition = self.create_direct_attachment(hwnd, &swap_chain)?;
+        let surface = WindowSurface {
+            hwnd,
+            swap_chain,
+            back_buffers: RefCell::new(back_buffers),
+            device: self._d3d.clone(),
+            composition,
+            width,
+            height,
+            dpi,
+            dock_inset,
+            liquid_glass,
+            desktop_blur: RefCell::new(desktop_blur),
+        };
+        validate_initial_present_outcome(surface.present_initial()?)?;
+        Ok(surface)
+    }
+
+    fn create_direct_attachment(
+        &self,
+        hwnd: HWND,
+        swap_chain: &IDXGISwapChain1,
+    ) -> Result<DirectCompositionAttachment> {
         // SAFETY: Category 8 (FFI boundary). `hwnd` is a live top-level window owned
         // by the caller and remains valid for the lifetime of the returned surface.
         let target = unsafe { self.dcomp.CreateTargetForHwnd(hwnd, true) }?;
@@ -296,7 +366,7 @@ impl CompositionRenderer {
         let visual = unsafe { self.dcomp.CreateVisual() }?;
         // SAFETY: Category 8 (FFI boundary). A composition swap chain is a supported
         // visual content object and remains owned by this surface.
-        unsafe { visual.SetContent(&swap_chain) }?;
+        unsafe { visual.SetContent(swap_chain) }?;
         // SAFETY: Category 8 (FFI boundary). Both COM objects come from this
         // composition device and remain retained by the returned surface.
         let opacity_effect = unsafe {
@@ -310,22 +380,12 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). All pending operations reference live
         // resources retained in this renderer/surface pair.
         unsafe { self.dcomp.Commit() }?;
-        let surface = WindowSurface {
-            swap_chain,
-            back_buffers: RefCell::new(back_buffers),
-            device: self._d3d.clone(),
+        Ok(DirectCompositionAttachment {
             dcomp: self.dcomp.clone(),
             _target: target,
-            opacity_effect,
             visual,
-            width,
-            height,
-            dpi,
-            dock_inset,
-            dock_liquid_glass,
-        };
-        validate_initial_present_outcome(surface.present_initial()?)?;
-        Ok(surface)
+            opacity_effect,
+        })
     }
 
     pub fn redraw_surface(
@@ -334,6 +394,33 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> Result<PresentOutcome> {
+        let desktop_blur_enabled = wants_desktop_blur(
+            role,
+            scenes.popover.map(PopoverScene::layout_style),
+            scenes.quick_settings.is_some(),
+            self.solid_material,
+        );
+        if !desktop_blur_enabled {
+            surface.desktop_blur.borrow_mut().take();
+        // SAFETY: The surface owns this HWND and visibility is queried only to
+        // avoid capturing the popover into its own background.
+        } else if !unsafe { IsWindowVisible(surface.hwnd) }.as_bool() {
+            let capture = DesktopBlurCapture::capture(
+                &self.d2d_context,
+                surface.hwnd,
+                surface.width,
+                surface.height,
+                surface.dpi,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "DESKTOP_BLUR stage=refresh status=fallback hresult={:#010X}",
+                    error.code().0 as u32,
+                );
+                None
+            });
+            *surface.desktop_blur.borrow_mut() = capture;
+        }
         let bitmap = self.current_target_bitmap(surface)?;
         // SAFETY: Category 8 (FFI boundary). The freshly acquired back-buffer
         // bitmap belongs to this D2D device; its DPI matches the logical scene.
@@ -351,7 +438,8 @@ impl CompositionRenderer {
                 role,
                 self.solid_material,
                 surface.dock_inset.as_ref(),
-                surface.dock_liquid_glass.as_ref(),
+                surface.liquid_glass.as_ref(),
+                surface.desktop_blur.borrow().as_ref(),
             ),
             logical_surface_rect(surface.width, surface.height, surface.dpi),
             scenes,
@@ -422,6 +510,30 @@ fn validate_initial_present_outcome(outcome: PresentOutcome) -> Result<()> {
     }
 }
 
+impl DirectCompositionAttachment {
+    fn set_opacity(&self, opacity: f32) -> Result<()> {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        // SAFETY: The effect and device are retained by this attachment.
+        unsafe {
+            self.opacity_effect.SetOpacity2(opacity)?;
+            self.dcomp.Commit()
+        }
+    }
+
+    pub(super) fn set_visibility_state(&self, offset_y: f32, opacity: f32) -> Result<()> {
+        // SAFETY: The visual, effect and device are retained by this attachment.
+        unsafe {
+            self.visual.SetOffsetY2(offset_y)?;
+            self.opacity_effect.SetOpacity2(opacity.clamp(0.0, 1.0))?;
+            self.dcomp.Commit()
+        }
+    }
+}
+
 impl WindowSurface {
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
@@ -442,32 +554,22 @@ impl WindowSurface {
     }
 
     pub fn set_opacity(&self, opacity: f32) -> Result<()> {
-        let opacity = if opacity.is_finite() {
-            opacity.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        // SAFETY: Category 8 (FFI boundary). The visual belongs to this live
-        // composition device and receives a finite normalized opacity.
-        unsafe { self.opacity_effect.SetOpacity2(opacity) }?;
-        // SAFETY: Category 8 (FFI boundary). The visual update references only
-        // resources owned by this surface.
-        unsafe { self.dcomp.Commit() }
+        self.composition.set_opacity(opacity)
     }
 
     pub fn animate_entrance(&self, reduced_motion: bool) -> Result<()> {
+        let attachment = &self.composition;
         if reduced_motion {
-            // SAFETY: Category 8 (FFI boundary). The visual belongs to this live
-            // composition device and accepts a finite immediate offset.
-            unsafe { self.visual.SetOffsetY2(0.0) }?;
+            // SAFETY: Category 8 (FFI boundary). The visual belongs to this
+            // live composition attachment and accepts an immediate offset.
+            unsafe { attachment.visual.SetOffsetY2(0.0) }?;
         } else {
             let duration = 0.18_f64;
             let start = -6.0_f32;
-            // SAFETY: Category 8 (FFI boundary). The device returns an owned
-            // animation and all polynomial coefficients are finite.
-            let animation = unsafe { self.dcomp.CreateAnimation() }?;
-            // SAFETY: Category 8 (FFI boundary). The cubic segment and terminal
-            // value form one bounded 180 ms ease-out animation.
+            // SAFETY: Category 8 (FFI boundary). The attachment owns the
+            // device, returned animation, and target visual.
+            let animation = unsafe { attachment.dcomp.CreateAnimation() }?;
+            // SAFETY: The bounded coefficients and visual share one device.
             unsafe {
                 animation.AddCubic(
                     0.0,
@@ -477,12 +579,11 @@ impl WindowSurface {
                     2.0 * start / (duration * duration * duration) as f32,
                 )?;
                 animation.End(duration, 0.0)?;
-                self.visual.SetOffsetY(&animation)?;
+                attachment.visual.SetOffsetY(&animation)?;
             }
         }
-        // SAFETY: Category 8 (FFI boundary). All pending animation operations
-        // reference resources owned by this surface.
-        unsafe { self.dcomp.Commit() }
+        // SAFETY: Every pending operation references retained resources.
+        unsafe { attachment.dcomp.Commit() }
     }
 }
 

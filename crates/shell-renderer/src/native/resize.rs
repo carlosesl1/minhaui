@@ -7,7 +7,7 @@ use super::{
 };
 use crate::ShowcaseTokens;
 use crate::logical_surface_rect;
-use crate::native_liquid_glass::DockLiquidGlassResources;
+use crate::native_liquid_glass::{LiquidGlassProfile, LiquidGlassResources, profile_for_role};
 use crate::native_showcase_resources::create_dock_inset_bitmap;
 
 impl CompositionRenderer {
@@ -37,6 +37,7 @@ impl CompositionRenderer {
         surface.width = width;
         surface.height = height;
         surface.dpi = dpi;
+        surface.desktop_blur.borrow_mut().take();
         let logical_surface = logical_surface_rect(width, height, dpi);
         surface.dock_inset = if role == ShowcaseRole::Dock && !self.solid_material {
             Some(create_dock_inset_bitmap(
@@ -48,12 +49,29 @@ impl CompositionRenderer {
         } else {
             None
         };
-        surface.dock_liquid_glass = if role == ShowcaseRole::Dock {
-            DockLiquidGlassResources::create(
+        surface.liquid_glass = if let Some(profile) = profile_for_role(role) {
+            let tokens = ShowcaseTokens::obsidian_glass();
+            let (glass_width, glass_height, radius) = match profile {
+                LiquidGlassProfile::Dock => (
+                    logical_surface.width,
+                    logical_surface.height,
+                    tokens.dock_radius,
+                ),
+                LiquidGlassProfile::Panel => (
+                    logical_surface.width,
+                    logical_surface.height,
+                    tokens.popover_radius,
+                ),
+                LiquidGlassProfile::ActiveModule => {
+                    (160.0, logical_surface.height, logical_surface.height / 2.0)
+                }
+            };
+            LiquidGlassResources::create(
                 &self.d2d_context,
-                logical_surface.width,
-                (logical_surface.height - 2.0).max(1.0),
-                ShowcaseTokens::obsidian_glass().dock_radius,
+                profile,
+                glass_width,
+                glass_height,
+                radius,
                 self.liquid_glass_mode,
             )?
         } else {

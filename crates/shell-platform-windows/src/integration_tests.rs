@@ -24,6 +24,8 @@ mod popover_controller;
 mod preview_controller;
 #[path = "../tests/preview_entrance_motion.rs"]
 mod preview_entrance_motion;
+#[path = "../tests/quick_settings_controller.rs"]
+mod quick_settings_controller;
 #[path = "../tests/settings_controller.rs"]
 mod settings_controller;
 #[path = "../tests/shell_observation_runtime.rs"]

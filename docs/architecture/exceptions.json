@@ -84,6 +84,18 @@
       "compensation": "The allow is function-scoped and popover controller tests remain required.",
       "expires": "2026-07-29",
       "removal_plan": "Apply typed popover effects through the shared overlay surface context."
+    },
+    {
+      "id": "ARCH-EX-008",
+      "file": "crates/shell-platform-windows/src/win32_popover_render.rs",
+      "rule": "clippy::too_many_arguments",
+      "symbol": "apply_quick_settings_actions",
+      "owner": "platform-overlays",
+      "reason": "Quick Settings actions currently coordinate the topbar and every transient native overlay.",
+      "risk": "The action handler duplicates overlay lifecycle knowledge and broadens the impact of panel changes.",
+      "compensation": "The allow is function-scoped and the platform and current-panel regression suites remain required.",
+      "expires": "2026-07-29",
+      "removal_plan": "Apply typed Quick Settings effects through the shared overlay surface context."
     }
   ]
 }

@@ -92,6 +92,7 @@ impl RuntimeSurfaces {
             topbar: None,
             dock: None,
             popover: None,
+            quick_settings: None,
             context_menu: None,
             settings: None,
             preview: Some(scene),

@@ -859,6 +859,7 @@ mod tests {
             topbar: None,
             dock: None,
             popover: None,
+            quick_settings: None,
             context_menu: None,
             settings: None,
             preview: None,

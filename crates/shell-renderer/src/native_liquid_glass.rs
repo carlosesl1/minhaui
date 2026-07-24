@@ -1,5 +1,5 @@
 use crate::DipRect;
-use crate::native::DeviceKind;
+use crate::native::{DeviceKind, ShowcaseRole};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -17,6 +17,22 @@ pub(crate) enum LiquidGlassMode {
     Disabled,
     Static,
     Dynamic,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LiquidGlassProfile {
+    Dock,
+    Panel,
+    ActiveModule,
+}
+
+pub(crate) const fn profile_for_role(role: ShowcaseRole) -> Option<LiquidGlassProfile> {
+    match role {
+        ShowcaseRole::Dock => Some(LiquidGlassProfile::Dock),
+        ShowcaseRole::Popover => Some(LiquidGlassProfile::Panel),
+        ShowcaseRole::Topbar => Some(LiquidGlassProfile::ActiveModule),
+        ShowcaseRole::Preview | ShowcaseRole::Settings => None,
+    }
 }
 
 pub(crate) const fn liquid_glass_mode(
@@ -41,7 +57,7 @@ pub(crate) struct LiquidGlassRaster {
 }
 
 impl LiquidGlassRaster {
-    pub(crate) fn new(width: f32, height: f32, radius: f32) -> Self {
+    pub(crate) fn new(profile: LiquidGlassProfile, width: f32, height: f32, radius: f32) -> Self {
         let width = raster_dimension(width);
         let height = raster_dimension(height);
         let radius = finite(radius, 0.0).clamp(0.0, width.min(height) as f32 / 2.0);
@@ -57,21 +73,46 @@ impl LiquidGlassRaster {
                     height as f32,
                     radius,
                 );
-                if distance > 0.0 {
+                let coverage = pixel_coverage(distance);
+                if coverage <= 0.0 {
                     continue;
                 }
                 let edge = ((distance + 4.0) / 4.0).clamp(0.0, 1.0);
                 let horizontal = point_x / width as f32;
                 let vertical = point_y / height as f32;
-                let top_light = edge * (1.0 - vertical).powf(2.2) * 0.34;
-                let inner_rim = edge * 0.16;
-                let cool = edge * (1.0 - horizontal).powf(3.0) * 0.10;
-                let warm = edge * horizontal.powf(3.0) * 0.075;
+                let (top_light, inner_rim, cool_rgb, cool, warm) = match profile {
+                    LiquidGlassProfile::Dock => (
+                        edge * (1.0 - vertical).powf(2.2) * 0.22,
+                        edge * 0.08,
+                        [0.82, 0.86, 0.90],
+                        edge * (1.0 - horizontal).powf(3.0) * 0.04,
+                        0.0,
+                    ),
+                    LiquidGlassProfile::Panel => (
+                        edge * (1.0 - vertical).powf(2.2) * 0.16,
+                        edge * (0.008 + (1.0 - vertical).powf(3.0) * 0.045),
+                        [0.82, 0.86, 0.90],
+                        edge * (1.0 - horizontal).powf(3.0)
+                            * (0.20 + 0.80 * (1.0 - vertical).powf(1.5))
+                            * 0.012,
+                        0.0,
+                    ),
+                    LiquidGlassProfile::ActiveModule => (
+                        edge * (1.0 - vertical).powf(2.2) * 0.16,
+                        edge * 0.07,
+                        [0.70, 0.74, 0.82],
+                        edge * (0.75 + 0.25 * (1.0 - horizontal)) * 0.06,
+                        0.0,
+                    ),
+                };
                 let mut color = [0.0; 4];
-                composite(&mut color, [0.62, 0.82, 1.0], cool);
+                composite(&mut color, cool_rgb, cool);
                 composite(&mut color, [1.0, 0.72, 0.48], warm);
                 composite(&mut color, [1.0, 1.0, 1.0], inner_rim);
                 composite(&mut color, [1.0, 1.0, 1.0], top_light);
+                for channel in &mut color {
+                    *channel *= coverage;
+                }
                 write_bgra(&mut pixels, width, x, y, color);
             }
         }
@@ -98,12 +139,14 @@ impl LiquidGlassRaster {
                     height as f32,
                     radius,
                 );
-                if distance > 0.0 {
+                let coverage = pixel_coverage(distance);
+                if coverage <= 0.0 {
                     continue;
                 }
                 let horizontal = ((point_x / width as f32) - 0.5).abs() * 2.0;
                 let vertical = point_y / height as f32;
-                let alpha = (1.0 - horizontal).powf(2.8) * (1.0 - vertical).powf(2.0) * 0.46;
+                let alpha =
+                    (1.0 - horizontal).powf(2.8) * (1.0 - vertical).powf(2.0) * 0.46 * coverage;
                 write_bgra(&mut pixels, width, x, y, [alpha, alpha, alpha, alpha]);
             }
         }
@@ -155,6 +198,7 @@ struct LiquidGlassPresentation {
 }
 
 fn presentation(
+    profile: LiquidGlassProfile,
     mode: LiquidGlassMode,
     bounds: DipRect,
     hover_position_x: Option<f32>,
@@ -166,28 +210,38 @@ fn presentation(
     } else {
         0.0
     };
+    let (overlay_opacity, specular_opacity) = match profile {
+        LiquidGlassProfile::Dock => (
+            0.74 + 0.06 * strength,
+            if matches!(mode, LiquidGlassMode::Dynamic) {
+                0.06 + 0.12 * strength
+            } else {
+                0.0
+            },
+        ),
+        LiquidGlassProfile::Panel => (0.72, 0.0),
+        LiquidGlassProfile::ActiveModule => (0.78, 0.0),
+    };
     LiquidGlassPresentation {
         overlay_bounds: bounds,
-        overlay_opacity: 0.72 + 0.18 * strength,
-        specular_opacity: if matches!(mode, LiquidGlassMode::Dynamic) {
-            0.12 + 0.28 * strength
-        } else {
-            0.0
-        },
+        overlay_opacity,
+        specular_opacity,
         specular_left: specular_left(bounds, hover_position_x, specular_width),
     }
 }
 
-pub(crate) struct DockLiquidGlassResources {
+pub(crate) struct LiquidGlassResources {
+    profile: LiquidGlassProfile,
     overlay: ID2D1Bitmap1,
-    specular: ID2D1Bitmap1,
+    specular: Option<ID2D1Bitmap1>,
     specular_width: f32,
     mode: LiquidGlassMode,
 }
 
-impl DockLiquidGlassResources {
+impl LiquidGlassResources {
     pub(crate) fn create(
         context: &ID2D1DeviceContext,
+        profile: LiquidGlassProfile,
         width: f32,
         height: f32,
         radius: f32,
@@ -196,11 +250,19 @@ impl DockLiquidGlassResources {
         if matches!(mode, LiquidGlassMode::Disabled) {
             return Ok(None);
         }
-        let overlay = create_bitmap(context, &LiquidGlassRaster::new(width, height, radius))?;
-        let specular_raster = LiquidGlassRaster::specular(height, radius);
-        let specular_width = specular_raster.width() as f32;
-        let specular = create_bitmap(context, &specular_raster)?;
+        let overlay = create_bitmap(
+            context,
+            &LiquidGlassRaster::new(profile, width, height, radius),
+        )?;
+        let (specular, specular_width) = if matches!(profile, LiquidGlassProfile::Dock) {
+            let raster = LiquidGlassRaster::specular(height, radius);
+            let width = raster.width() as f32;
+            (Some(create_bitmap(context, &raster)?), width)
+        } else {
+            (None, SPECULAR_WIDTH_DIP)
+        };
         Ok(Some(Self {
+            profile,
             overlay,
             specular,
             specular_width,
@@ -216,6 +278,7 @@ impl DockLiquidGlassResources {
         material_strength: f32,
     ) {
         let frame = presentation(
+            self.profile,
             self.mode,
             bounds,
             hover_position_x,
@@ -235,6 +298,9 @@ impl DockLiquidGlassResources {
                 None,
             )
         };
+        let Some(specular_bitmap) = self.specular.as_ref() else {
+            return;
+        };
         if frame.specular_opacity <= 0.0 {
             return;
         }
@@ -248,7 +314,7 @@ impl DockLiquidGlassResources {
         // bounded destination are valid for the synchronous Direct2D draw.
         unsafe {
             context.DrawBitmap(
-                &self.specular,
+                specular_bitmap,
                 Some(&specular),
                 frame.specular_opacity,
                 D2D1_INTERPOLATION_MODE_LINEAR,
@@ -310,6 +376,11 @@ fn rounded_rect_signed_distance(x: f32, y: f32, width: f32, height: f32, radius:
     qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius
 }
 
+fn pixel_coverage(distance: f32) -> f32 {
+    let coverage = (0.5 - finite(distance, 1.0)).clamp(0.0, 1.0);
+    coverage * coverage * (3.0 - 2.0 * coverage)
+}
+
 fn composite(destination: &mut [f32; 4], source_rgb: [f32; 3], source_alpha: f32) {
     let source_alpha = source_alpha.clamp(0.0, 1.0);
     let remaining = 1.0 - source_alpha;
@@ -334,11 +405,65 @@ fn channel(value: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use crate::DipRect;
-    use crate::native::DeviceKind;
+    use crate::native::{DeviceKind, ShowcaseRole};
 
     use super::{
-        LiquidGlassMode, LiquidGlassRaster, liquid_glass_mode, presentation, specular_left,
+        LiquidGlassMode, LiquidGlassProfile, LiquidGlassRaster, liquid_glass_mode, presentation,
+        profile_for_role, specular_left,
     };
+
+    #[test]
+    fn surface_profiles_keep_dock_dynamic_but_panel_and_active_module_static() {
+        let dock = presentation(
+            LiquidGlassProfile::Dock,
+            LiquidGlassMode::Dynamic,
+            DipRect::new(0.0, 0.0, 500.0, 53.0),
+            Some(420.0),
+            1.0,
+            96.0,
+        );
+        let panel = presentation(
+            LiquidGlassProfile::Panel,
+            LiquidGlassMode::Dynamic,
+            DipRect::new(0.0, 8.0, 288.0, 356.0),
+            Some(240.0),
+            1.0,
+            96.0,
+        );
+        let active = presentation(
+            LiquidGlassProfile::ActiveModule,
+            LiquidGlassMode::Dynamic,
+            DipRect::new(10.0, 4.0, 92.0, 24.0),
+            Some(60.0),
+            1.0,
+            96.0,
+        );
+
+        assert!((dock.specular_opacity - 0.18).abs() <= f32::EPSILON);
+        assert_eq!(panel.specular_opacity, 0.0);
+        assert_eq!(active.specular_opacity, 0.0);
+        assert!((panel.overlay_opacity - 0.72).abs() <= f32::EPSILON);
+        assert!((active.overlay_opacity - 0.78).abs() <= f32::EPSILON);
+        assert!(active.overlay_opacity > panel.overlay_opacity);
+    }
+
+    #[test]
+    fn only_supported_native_roles_allocate_glass_profiles() {
+        assert_eq!(
+            profile_for_role(ShowcaseRole::Dock),
+            Some(LiquidGlassProfile::Dock)
+        );
+        assert_eq!(
+            profile_for_role(ShowcaseRole::Popover),
+            Some(LiquidGlassProfile::Panel)
+        );
+        assert_eq!(
+            profile_for_role(ShowcaseRole::Topbar),
+            Some(LiquidGlassProfile::ActiveModule)
+        );
+        assert_eq!(profile_for_role(ShowcaseRole::Preview), None);
+        assert_eq!(profile_for_role(ShowcaseRole::Settings), None);
+    }
 
     #[test]
     fn liquid_glass_selects_dynamic_static_and_disabled_modes() {
@@ -366,7 +491,8 @@ mod tests {
 
     #[test]
     fn overlay_raster_is_bounded_premultiplied_and_nonempty() {
-        let raster = LiquidGlassRaster::new(513.0, 53.0, 19.0);
+        let raster = LiquidGlassRaster::new(LiquidGlassProfile::Dock, 513.0, 53.0, 19.0);
+        let panel = LiquidGlassRaster::new(LiquidGlassProfile::Panel, 288.0, 356.0, 14.0);
 
         assert_eq!(raster.stride(), raster.width() * 4);
         assert_eq!(
@@ -379,6 +505,45 @@ mod tests {
                 pixel[0] <= pixel[3] && pixel[1] <= pixel[3] && pixel[2] <= pixel[3]
             })
         );
+        let dock_peak = raster
+            .pixels()
+            .chunks_exact(4)
+            .map(|pixel| pixel[3])
+            .max()
+            .unwrap_or_default();
+        let panel_peak = panel
+            .pixels()
+            .chunks_exact(4)
+            .map(|pixel| pixel[3])
+            .max()
+            .unwrap_or_default();
+        assert!(
+            (0x40..=0x65).contains(&dock_peak) && (0x18..=0x38).contains(&panel_peak),
+            "dock_peak={dock_peak:#04X}, panel_peak={panel_peak:#04X}"
+        );
+    }
+
+    #[test]
+    fn panel_rim_concentrates_light_at_the_top_instead_of_outlining_every_edge() {
+        let raster = LiquidGlassRaster::new(LiquidGlassProfile::Panel, 288.0, 356.0, 14.0);
+        let top = alpha_at(&raster, raster.width() / 2, 1);
+        let side = alpha_at(&raster, 1, raster.height() / 2);
+        let bottom = alpha_at(&raster, raster.width() / 2, raster.height() - 2);
+
+        assert!((0x18..=0x30).contains(&top), "top={top:#04X}");
+        assert!(side <= 0x0A, "side={side:#04X}");
+        assert!(bottom <= 0x05, "bottom={bottom:#04X}");
+        assert!(top >= side.saturating_mul(2));
+    }
+
+    #[test]
+    fn rounded_raster_edge_uses_partial_alpha_coverage() {
+        let raster = LiquidGlassRaster::new(LiquidGlassProfile::Panel, 288.0, 356.0, 14.0);
+        let outside_edge = alpha_at(&raster, 7, 1);
+        let inside_edge = alpha_at(&raster, 8, 1);
+
+        assert!(outside_edge > 0, "outside_edge={outside_edge:#04X}");
+        assert!(outside_edge < inside_edge);
     }
 
     #[test]
@@ -393,8 +558,22 @@ mod tests {
     #[test]
     fn static_mode_ignores_hover_and_dynamic_mode_tracks_it() {
         let bounds = DipRect::new(0.0, 2.0, 500.0, 53.0);
-        let static_frame = presentation(LiquidGlassMode::Static, bounds, Some(420.0), 1.0, 96.0);
-        let dynamic_frame = presentation(LiquidGlassMode::Dynamic, bounds, Some(420.0), 1.0, 96.0);
+        let static_frame = presentation(
+            LiquidGlassProfile::Dock,
+            LiquidGlassMode::Static,
+            bounds,
+            Some(420.0),
+            1.0,
+            96.0,
+        );
+        let dynamic_frame = presentation(
+            LiquidGlassProfile::Dock,
+            LiquidGlassMode::Dynamic,
+            bounds,
+            Some(420.0),
+            1.0,
+            96.0,
+        );
 
         assert_eq!(static_frame.specular_opacity, 0.0);
         assert!(dynamic_frame.specular_opacity > 0.0);
@@ -404,8 +583,19 @@ mod tests {
     #[test]
     fn liquid_glass_never_changes_material_bounds() {
         let bounds = DipRect::new(3.0, 2.0, 507.0, 53.0);
-        let frame = presentation(LiquidGlassMode::Dynamic, bounds, Some(250.0), 1.0, 96.0);
+        let frame = presentation(
+            LiquidGlassProfile::Dock,
+            LiquidGlassMode::Dynamic,
+            bounds,
+            Some(250.0),
+            1.0,
+            96.0,
+        );
 
         assert_eq!(frame.overlay_bounds, bounds);
+    }
+
+    fn alpha_at(raster: &LiquidGlassRaster, x: u32, y: u32) -> u8 {
+        raster.pixels()[((y * raster.width() + x) * 4 + 3) as usize]
     }
 }

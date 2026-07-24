@@ -68,7 +68,7 @@ pub(super) fn create_slot(
     let runtime = RuntimeSurfaces::new(
         RuntimeOptions {
             force_warp: features.force_warp,
-            solid_material: features.safe_mode || !topbar.backdrop_active(),
+            solid_material: features.solid_material,
             reduced_motion: features.reduced_motion,
             liquid_glass: features.liquid_glass,
         },

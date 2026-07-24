@@ -52,7 +52,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
     let mut safe_mode = false;
     let mut high_contrast = false;
     let mut reduced_motion = false;
-    let mut liquid_glass = false;
+    let mut liquid_glass = true;
     let mut index = 1;
 
     while index < args.len() {
@@ -110,7 +110,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
     let mut safe_mode = false;
     let mut high_contrast = false;
     let mut reduced_motion = false;
-    let mut liquid_glass = false;
+    let mut liquid_glass = true;
     let mut index = 1;
 
     while index < args.len() {

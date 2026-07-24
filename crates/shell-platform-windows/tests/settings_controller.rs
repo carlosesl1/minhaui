@@ -141,7 +141,7 @@ fn settings_keyboard_navigation_activates_sections_and_escapes()
     let mut controller = SettingsController::new(ShellConfigV1::default());
 
     // When: keyboard navigation moves to Appearance and activates it.
-    for _ in 0..4 {
+    for _ in 0..5 {
         assert_eq!(
             controller.handle_key(SettingsKey::Next)?,
             vec![QueuedSettingsAction::Redraw]
@@ -164,6 +164,64 @@ fn settings_keyboard_navigation_activates_sections_and_escapes()
     // Then: the draft is cancelled and the native settings surface can close.
     assert_eq!(escape, vec![QueuedSettingsAction::Dismiss]);
     assert_eq!(controller.preview(), controller.committed());
+    Ok(())
+}
+
+#[test]
+fn quick_controls_editor_lists_only_supported_controls() {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.set_supported_quick_controls([
+        shell_core::QuickControlKind::Wifi,
+        shell_core::QuickControlKind::Focus,
+    ]);
+    controller.open_section(SettingsSection::QuickControls);
+    let scene = controller.scene();
+
+    assert_eq!(
+        scene
+            .quick_controls()
+            .unwrap()
+            .iter()
+            .map(shell_renderer::QuickControlSettingsRow::kind)
+            .collect::<Vec<_>>(),
+        vec![
+            shell_core::QuickControlKind::Wifi,
+            shell_core::QuickControlKind::Focus,
+        ]
+    );
+}
+
+#[test]
+fn hiding_supported_control_preserves_absent_preferences() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.set_supported_quick_controls([
+        shell_core::QuickControlKind::Wifi,
+        shell_core::QuickControlKind::Focus,
+    ]);
+    controller.edit(SettingsEdit::QuickControlVisibility {
+        control: shell_core::QuickControlKind::Focus,
+        visible: false,
+    })?;
+
+    assert!(
+        controller
+            .preview()
+            .quick_settings()
+            .controls()
+            .iter()
+            .any(|item| item.kind() == shell_core::QuickControlKind::Bluetooth)
+    );
+    assert!(
+        !controller
+            .preview()
+            .quick_settings()
+            .controls()
+            .iter()
+            .find(|item| item.kind() == shell_core::QuickControlKind::Focus)
+            .ok_or("focus preference missing")?
+            .visible()
+    );
     Ok(())
 }
 

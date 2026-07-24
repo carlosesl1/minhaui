@@ -31,7 +31,7 @@ pub(super) struct ShellSlot {
 #[derive(Clone, Copy)]
 pub(super) struct SlotFeatures {
     pub(super) force_warp: bool,
-    pub(super) safe_mode: bool,
+    pub(super) solid_material: bool,
     pub(super) backdrop_enabled: bool,
     pub(super) reduced_motion: bool,
     pub(super) liquid_glass: bool,

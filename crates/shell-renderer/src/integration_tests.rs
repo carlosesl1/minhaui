@@ -7,8 +7,12 @@ mod identity;
 #[cfg(windows)]
 #[path = "../tests/native_slice.rs"]
 mod native_slice;
+#[path = "../tests/panel_version_regression.rs"]
+mod panel_version_regression;
 #[path = "../tests/popover_scene.rs"]
 mod popover_scene;
+#[path = "../tests/quick_settings_scene.rs"]
+mod quick_settings_scene;
 #[path = "../tests/topbar_scene.rs"]
 mod topbar_scene;
 #[path = "../tests/window_preview_layout.rs"]

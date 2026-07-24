@@ -1,7 +1,7 @@
 use shell_renderer::native::ShowcaseRole;
 use shell_renderer::{
-    Dpi, PhysicalRect, ShellMetrics, context_menu_anchor_rect, dock_showcase_rect,
-    physical_from_dip, popover_anchor_rect, popover_anchor_rect_with_height,
+    Dpi, PhysicalRect, PopoverSurfaceSize, ShellMetrics, context_menu_anchor_rect,
+    dock_showcase_rect, physical_from_dip, popover_anchor_rect, popover_placement,
     topbar_height_for_text_scale, topbar_rect,
 };
 use windows::Win32::Foundation::{HINSTANCE, HWND};
@@ -13,8 +13,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, HTTRANSPARENT,
     IsWindowVisible, RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
     SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, UnregisterClassW, WINDOW_EX_STYLE,
-    WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -111,7 +111,9 @@ pub(super) struct OwnedWindow {
     dpi: Dpi,
     dock_width_dip: f32,
     topbar_height_dip: f32,
+    popover_width_dip: f32,
     popover_height_dip: f32,
+    popover_anchor_x_dip: f32,
     backdrop_allowed: bool,
     backdrop_active: bool,
 }
@@ -130,14 +132,7 @@ impl OwnedWindow {
             ShowcaseRole::Preview => (w!("Minha UI Preview"), "Minha UI Preview"),
             ShowcaseRole::Settings => (w!("Minha UI Settings"), "Minha UI Settings"),
         };
-        let ex_style: WINDOW_EX_STYLE = match role {
-            ShowcaseRole::Topbar | ShowcaseRole::Dock => {
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-            }
-            ShowcaseRole::Popover | ShowcaseRole::Preview | ShowcaseRole::Settings => {
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW
-            }
-        };
+        let ex_style = window_ex_style(role);
         // SAFETY: Category 8 (FFI boundary). The class is registered, parameters are
         // value types or static strings, and no application pointer crosses the API.
         let hwnd = unsafe {
@@ -156,7 +151,11 @@ impl OwnedWindow {
                 None,
             )
         }?;
-        let backdrop_active = apply_if_supported(hwnd, role, backdrop_enabled);
+        let backdrop_active = apply_if_supported(
+            hwnd,
+            role,
+            backdrop_enabled && role != ShowcaseRole::Popover,
+        );
         LIVE_WINDOWS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         match role {
             ShowcaseRole::Topbar => register_topbar_window(hwnd),
@@ -196,7 +195,9 @@ impl OwnedWindow {
             dpi,
             dock_width_dip: 760.0,
             topbar_height_dip: 32.0,
+            popover_width_dip: 244.0,
             popover_height_dip: 420.0,
+            popover_anchor_x_dip: 122.0,
             backdrop_allowed: backdrop_enabled,
             backdrop_active,
         })
@@ -207,20 +208,25 @@ impl OwnedWindow {
         // current effective DPI is queried for work-area placement.
         self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
         let metrics = ShellMetrics::default().with_topbar_height(self.topbar_height_dip);
-        self.rect = match self.role {
+        let rect = match self.role {
             ShowcaseRole::Topbar => topbar_rect(work, self.dpi, metrics),
             ShowcaseRole::Dock => {
                 dock_showcase_rect(work, self.dpi, metrics.with_dock_width(self.dock_width_dip))
             }
-            ShowcaseRole::Popover => popover_anchor_rect_with_height(
-                topbar_rect(work, self.dpi, metrics),
-                work,
-                self.dpi,
-                self.popover_height_dip,
-            ),
+            ShowcaseRole::Popover => {
+                let placement = popover_placement(
+                    topbar_rect(work, self.dpi, metrics),
+                    work,
+                    self.dpi,
+                    PopoverSurfaceSize::new(self.popover_width_dip, self.popover_height_dip),
+                );
+                self.popover_anchor_x_dip = placement.anchor_x_dip();
+                placement.rect()
+            }
             ShowcaseRole::Preview => preview_initial_rect(work, self.dpi),
             ShowcaseRole::Settings => settings_rect(work, self.dpi),
         };
+        self.rect = rect;
         set_rect(self.hwnd, self.rect)
     }
 
@@ -255,7 +261,7 @@ impl OwnedWindow {
         &mut self,
         work: PhysicalRect,
         anchor: PhysicalRect,
-        height_dip: f32,
+        size: PopoverSurfaceSize,
     ) -> Result<()> {
         if self.role != ShowcaseRole::Popover {
             return Ok(());
@@ -263,10 +269,22 @@ impl OwnedWindow {
         // SAFETY: Category 8 (FFI boundary). The owned HWND is live while its
         // current effective DPI is queried for popover placement.
         self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
-        self.popover_height_dip = height_dip.clamp(58.0, 420.0);
-        self.rect =
-            popover_anchor_rect_with_height(anchor, work, self.dpi, self.popover_height_dip);
+        self.popover_width_dip = size.width().clamp(244.0, 440.0);
+        let max_height_dip = work.height as f32 / self.dpi.scale();
+        self.popover_height_dip = size.height().clamp(58.0, max_height_dip);
+        let placement = popover_placement(
+            anchor,
+            work,
+            self.dpi,
+            PopoverSurfaceSize::new(self.popover_width_dip, self.popover_height_dip),
+        );
+        self.popover_anchor_x_dip = placement.anchor_x_dip();
+        self.rect = placement.rect();
         set_rect(self.hwnd, self.rect)
+    }
+
+    pub(super) const fn popover_anchor_x_dip(&self) -> f32 {
+        self.popover_anchor_x_dip
     }
 
     pub(super) fn place_context_menu(
@@ -310,9 +328,18 @@ impl OwnedWindow {
         let _ = unsafe { SetFocus(Some(self.hwnd)) };
     }
 
+    pub(super) fn restore_focus(&self) {
+        // SAFETY: Category 8 (FFI boundary). The top-bar HWND is owned by this UI
+        // thread and remains live while a child popup is dismissed.
+        let _ = unsafe { SetForegroundWindow(self.hwnd) };
+        // SAFETY: Category 8 (FFI boundary). Focus returns to the invoker after the
+        // popup releases activation.
+        let _ = unsafe { SetFocus(Some(self.hwnd)) };
+    }
+
     pub(super) fn set_backdrop_enabled(&mut self, enabled: bool) {
-        self.backdrop_active =
-            apply_if_supported(self.hwnd, self.role, self.backdrop_allowed && enabled);
+        let requested = self.backdrop_allowed && enabled;
+        self.backdrop_active = apply_if_supported(self.hwnd, self.role, requested);
     }
 
     pub(super) fn apply_dock_visibility(
@@ -428,9 +455,16 @@ impl OwnedWindow {
     pub(super) const fn dpi(&self) -> Dpi {
         self.dpi
     }
+}
 
-    pub(super) const fn backdrop_active(&self) -> bool {
-        self.backdrop_active
+fn window_ex_style(role: ShowcaseRole) -> WINDOW_EX_STYLE {
+    match role {
+        ShowcaseRole::Topbar => {
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP
+        }
+        ShowcaseRole::Dock => WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        ShowcaseRole::Popover => WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+        ShowcaseRole::Preview | ShowcaseRole::Settings => WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
     }
 }
 
@@ -518,4 +552,20 @@ fn settings_rect(work: PhysicalRect, dpi: Dpi) -> PhysicalRect {
         width.max((480.0 * scale).round() as i32),
         height.max((360.0 * scale).round() as i32),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use shell_renderer::native::ShowcaseRole;
+    use windows::Win32::UI::WindowsAndMessaging::WS_EX_NOREDIRECTIONBITMAP;
+
+    use super::window_ex_style;
+
+    #[test]
+    fn custom_alpha_windows_use_no_redirection_bitmap() {
+        for role in [ShowcaseRole::Topbar, ShowcaseRole::Popover] {
+            let style = window_ex_style(role);
+            assert_ne!(style.0 & WS_EX_NOREDIRECTIONBITMAP.0, 0);
+        }
+    }
 }

@@ -13,16 +13,17 @@ pub struct SurfaceVisibilityAnimation {
 
 impl WindowSurface {
     pub fn animate_visibility(&self, spec: SurfaceVisibilityAnimation) -> Result<()> {
+        let attachment = &self.composition;
         let duration = spec.duration_seconds.max(0.001);
         let offset = smoothstep_coefficients(spec.start_offset_y, spec.target_offset_y, duration);
         let opacity = smoothstep_coefficients(spec.start_opacity, spec.target_opacity, duration);
 
         // SAFETY: Category 8 (FFI boundary). The composition device returns two
         // owned animations whose coefficients are finite and duration is positive.
-        let offset_animation = unsafe { self.dcomp.CreateAnimation() }?;
+        let offset_animation = unsafe { attachment.dcomp.CreateAnimation() }?;
         // SAFETY: Category 8 (FFI boundary). The same live device creates the
         // independent opacity channel used by this surface's effect group.
-        let opacity_animation = unsafe { self.dcomp.CreateAnimation() }?;
+        let opacity_animation = unsafe { attachment.dcomp.CreateAnimation() }?;
         // SAFETY: Category 8 (FFI boundary). Both animations and targets belong to
         // this live composition device and all values form bounded cubic segments.
         unsafe {
@@ -30,20 +31,14 @@ impl WindowSurface {
             offset_animation.End(f64::from(duration), spec.target_offset_y)?;
             opacity_animation.AddCubic(0.0, opacity[0], opacity[1], opacity[2], opacity[3])?;
             opacity_animation.End(f64::from(duration), spec.target_opacity)?;
-            self.visual.SetOffsetY(&offset_animation)?;
-            self.opacity_effect.SetOpacity(&opacity_animation)?;
-            self.dcomp.Commit()
+            attachment.visual.SetOffsetY(&offset_animation)?;
+            attachment.opacity_effect.SetOpacity(&opacity_animation)?;
+            attachment.dcomp.Commit()
         }
     }
 
     pub fn set_visibility_state(&self, offset_y: f32, opacity: f32) -> Result<()> {
-        // SAFETY: Category 8 (FFI boundary). The live visual and effect group accept
-        // finite values, replacing any previous animation on the same properties.
-        unsafe {
-            self.visual.SetOffsetY2(offset_y)?;
-            self.opacity_effect.SetOpacity2(opacity.clamp(0.0, 1.0))?;
-            self.dcomp.Commit()
-        }
+        self.composition.set_visibility_state(offset_y, opacity)
     }
 }
 

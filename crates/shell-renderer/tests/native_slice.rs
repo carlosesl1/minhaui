@@ -115,7 +115,7 @@ fn showcase_tokens_match_design_contract() {
     assert_eq!(tokens.dock_depth, Rgba8::new(0x16, 0x16, 0x16, 0x18));
     assert_eq!(tokens.dock_inset_edge, Rgba8::new(0x80, 0x80, 0x80, 0xFF));
     assert_eq!(tokens.accent, Rgba8::new(0x4C, 0x9A, 0xFF, 0xFF));
-    assert_eq!(tokens.rim_outer, Rgba8::new(0x00, 0x00, 0x00, 0x40));
+    assert_eq!(tokens.rim_outer, Rgba8::new(0x00, 0x00, 0x00, 0x28));
     assert_eq!(tokens.rim_inner, Rgba8::new(0xFF, 0xFF, 0xFF, 0x24));
     assert_eq!(tokens.popover_radius, 12.0);
     assert_eq!(tokens.warning, Rgba8::new(0xF2, 0xB8, 0x4B, 0xFF));
@@ -127,10 +127,10 @@ fn dock_inset_shadows_match_the_supplied_glass_contract() {
     assert_eq!(
         dock_inset_shadows(),
         [
-            DockInsetShadow::new(2.5, 1.5, -2.5, Rgba8::new(0x80, 0x80, 0x80, 0xFF)),
-            DockInsetShadow::new(-2.5, 1.5, -2.5, Rgba8::new(0x80, 0x80, 0x80, 0xFF)),
-            DockInsetShadow::new(16.0, 16.0, -16.0, Rgba8::new(0x16, 0x16, 0x16, 0xFF)),
-            DockInsetShadow::new(-16.0, 16.0, -16.0, Rgba8::new(0x16, 0x16, 0x16, 0xFF)),
+            DockInsetShadow::new(1.25, 2.0, -1.5, Rgba8::new(0xC0, 0xC0, 0xC0, 0x24)),
+            DockInsetShadow::new(-1.25, 2.0, -1.5, Rgba8::new(0xC0, 0xC0, 0xC0, 0x24)),
+            DockInsetShadow::new(8.0, 16.0, -14.0, Rgba8::new(0x16, 0x16, 0x16, 0x30)),
+            DockInsetShadow::new(-8.0, 16.0, -14.0, Rgba8::new(0x16, 0x16, 0x16, 0x30)),
         ]
     );
 }

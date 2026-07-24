@@ -5,7 +5,8 @@ use std::fmt;
 
 use shell_core::Popover;
 use shell_renderer::{
-    DipPoint, DipRect, PopoverContentState, PopoverRow, PopoverScene, layout_popover_scene,
+    DipPoint, DipRect, PopoverContentState, PopoverLayoutStyle, PopoverRow, PopoverScene,
+    layout_popover_scene,
 };
 
 use crate::{
@@ -177,6 +178,26 @@ impl PopoverController {
         actions
     }
 
+    pub fn handle_pointer_move(
+        &mut self,
+        point: DipPoint,
+        surface: DipRect,
+    ) -> Vec<QueuedPopoverAction> {
+        let Some(active) = &mut self.active else {
+            return Vec::new();
+        };
+        let scene = active.scene();
+        let hovered = layout_popover_scene(&scene, surface)
+            .hit_test(point)
+            .filter(|index| active.items[*index].enabled());
+        if active.focused == hovered {
+            return Vec::new();
+        }
+        active.focused = hovered;
+        active.pending_confirmation = None;
+        vec![QueuedPopoverAction::Redraw]
+    }
+
     #[must_use]
     pub fn scene(&self) -> Option<PopoverScene> {
         self.active.as_ref().map(ActivePopover::scene)
@@ -319,13 +340,26 @@ impl ActivePopover {
                 } else {
                     item.detail()
                 };
-                PopoverRow::new(item.label(), detail, item.enabled())
-                    .with_icon_source(item.icon_source().map(str::to_owned))
+                let mut row = PopoverRow::new(item.label(), detail, item.enabled())
+                    .with_icon_source(item.icon_source().map(str::to_owned));
+                if let Some(glyph) = item.icon_glyph() {
+                    row = row.with_icon_glyph(glyph);
+                }
+                if item.section_start() {
+                    row = row.with_section_start();
+                }
+                row
             })
             .collect();
+        let layout_style = if self.kind == Popover::SystemMenu {
+            PopoverLayoutStyle::SystemPanel
+        } else {
+            PopoverLayoutStyle::Compact
+        };
         PopoverScene::new(self.kind, title(self.kind), self.state, rows, self.focused)
             .with_scroll_offset(self.scroll_offset)
             .with_status_text(&self.status_text)
+            .with_layout_style(layout_style)
     }
 }
 
@@ -343,12 +377,13 @@ fn enabled_indexes(items: &[PopoverItem]) -> Vec<usize> {
 
 const fn title(kind: Popover) -> &'static str {
     match kind {
-        Popover::SystemMenu => "System",
+        Popover::SystemMenu => "Minha UI",
         Popover::Calendar => "Calendar",
         Popover::Network => "Network",
         Popover::Volume => "Audio",
         Popover::Power => "Power",
         Popover::Notifications => "Control Center",
+        Popover::QuickSettings => "Controls",
         Popover::BackgroundApps => "Aplicativos em segundo plano",
     }
 }

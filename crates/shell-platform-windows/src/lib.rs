@@ -51,14 +51,12 @@ mod win32_backdrop;
     reason = "Windows package identity and installed-path queries are isolated here"
 )]
 mod win32_package_icon;
-#[cfg(windows)]
 #[allow(
     unsafe_code,
     reason = "Hosted Win32 window identity lookup is isolated here"
 )]
 mod win32_window_identity;
 
-#[cfg(windows)]
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 window discovery is isolated here")]
 mod win32_discovery;
@@ -87,6 +85,12 @@ mod win32_shell_observation;
 mod win32_pointer;
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows Notification Facility reads and version-probed quiet-hours interop are isolated here"
+)]
+mod win32_do_not_disturb;
+#[cfg(windows)]
 mod win32_dock_render;
 mod win32_dock_visibility;
 #[cfg(windows)]
@@ -114,6 +118,21 @@ mod win32_installed_package_icons;
 mod win32_timer;
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Core Audio endpoint access is isolated here")]
+mod win32_audio_endpoint;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Core Audio session and endpoint access is isolated here"
+)]
+mod win32_audio_panel;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "documented WMI and DDC/CI brightness adapters are isolated here"
+)]
+mod win32_brightness;
+#[cfg(windows)]
 #[allow(
     unsafe_code,
     reason = "Windows system commands and input injection are isolated in this Adapter"
@@ -122,6 +141,28 @@ mod win32_system_actions;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 topbar status adapters are isolated here")]
 mod win32_topbar_status;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "documented Windows capability probes are isolated and wired incrementally"
+)]
+mod win32_quick_settings_capabilities;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "documented direct actions are isolated and wired incrementally"
+)]
+mod win32_quick_settings_actions;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "native quick-settings state adapters are isolated here"
+)]
+mod win32_quick_settings_system;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 HWND ownership is isolated here")]
@@ -158,6 +199,13 @@ mod background_apps;
     reason = "the owned catalog worker only uses PostMessageW to wake the owner window"
 )]
 mod background_apps_worker;
+mod brightness_coordinator;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the brightness worker only posts a wake message to the owner window"
+)]
+mod brightness_worker;
 mod dock_context_menu;
 mod dock_controller;
 mod dock_controller_interaction;
@@ -170,12 +218,42 @@ mod dock_visibility_motion;
 mod dock_visuals;
 mod dock_window_sync;
 mod latest_request_worker;
+#[allow(
+    dead_code,
+    reason = "media controller is wired into the native owner incrementally"
+)]
+mod media_session_controller;
+#[allow(dead_code, reason = "media worker contracts are wired incrementally")]
+mod media_session_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the media worker only posts a wake message to the owner window"
+)]
+mod media_session_worker;
 mod native_event_route;
+mod night_light_coordinator;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the night light worker only posts a wake message"
+)]
+mod night_light_worker;
 mod popover_adapters;
 mod popover_controller;
 mod popover_types;
 mod preview_controller;
 mod preview_motion;
+#[allow(
+    dead_code,
+    reason = "adaptive controller is wired into the native owner incrementally"
+)]
+mod quick_settings_controller;
+#[allow(
+    dead_code,
+    reason = "adaptive control intents are consumed by the native owner incrementally"
+)]
+mod quick_settings_types;
 mod runtime;
 mod settings_controller;
 mod topbar_controller;
@@ -186,6 +264,8 @@ mod topbar_types;
     reason = "read-only notification registration and process capture is isolated here"
 )]
 mod win32_background_apps;
+#[cfg(windows)]
+mod win32_media_sessions;
 mod window_preview;
 
 #[cfg(test)]
@@ -223,6 +303,12 @@ pub(crate) use popover_types::{
 pub(crate) use preview_controller::{PREVIEW_BRIDGE_MS, PREVIEW_DWELL_MS};
 pub(crate) use preview_controller::{PreviewController, PreviewEffect, PreviewPhase};
 pub(crate) use preview_motion::{PreviewEntranceMotion, PreviewMotionSpec};
+pub(crate) use quick_settings_controller::QuickSettingsController;
+pub(crate) use quick_settings_types::{
+    AudioOutputId, AudioOutputSnapshot, AudioPanelSnapshot, AudioSessionId, AudioSessionSnapshot,
+    DoNotDisturbMode, QueuedQuickSettingsAction, QuickControlAvailability, QuickControlCapability,
+    QuickSettingsCapabilities, QuickSettingsIntent, QuickSettingsKey,
+};
 pub(crate) use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
@@ -253,6 +339,13 @@ pub(crate) enum PlatformEvent {
     DpiChanged(PhysicalRect),
     DisplayChanged,
     PowerResumed,
+    QuickSettingsRefresh(RefreshScope),
+    MediaSessionsChanged(
+        Result<media_session_types::MediaSessionSnapshot, media_session_types::MediaSessionError>,
+    ),
+    MediaTransportCompleted(media_session_types::MediaTransportResult),
+    NightLightCompleted(night_light_worker::NightLightWorkerResult),
+    BrightnessCompleted(brightness_worker::BrightnessWorkerResult),
     DeviceLost,
     DockPointer(DockPointerSample),
     DockEdgeProbe,
@@ -281,6 +374,7 @@ pub(crate) enum PlatformEvent {
         path: String,
     },
     PopoverKey(PopoverKey),
+    PopoverPointerPressed(DipPoint),
     PopoverPointer(DipPoint),
     PopoverPointerMoved(DipPoint),
     PopoverScroll(isize),
@@ -292,6 +386,11 @@ pub(crate) enum PlatformEvent {
     QaExitRequested,
     CloseRequested,
     Destroyed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefreshScope {
+    Devices,
 }
 
 #[must_use]

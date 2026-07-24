@@ -83,6 +83,7 @@ impl<W: WeatherProvider> PopoverDataProvider for DefaultPopoverDataProvider<W> {
             Popover::Volume => PopoverLoadState::Ready(audio_rows(snapshot)),
             Popover::Power => PopoverLoadState::Ready(power_rows(snapshot)),
             Popover::Notifications => PopoverLoadState::Ready(control_center_rows()),
+            Popover::QuickSettings => PopoverLoadState::Empty,
             Popover::BackgroundApps => PopoverLoadState::Loading,
         };
         Ok(PopoverPayload::new(kind, state))
@@ -167,43 +168,52 @@ fn system_rows() -> Vec<PopoverItem> {
             "Ctrl+,",
             true,
             Some(PopoverAction::OpenSettings),
-        ),
+        )
+        .with_icon_glyph("\u{E713}"),
         PopoverItem::new(
             "Task Manager",
             "",
             true,
             Some(PopoverAction::OpenTaskManager),
-        ),
+        )
+        .with_icon_glyph("\u{E9D9}"),
         PopoverItem::new(
             "Lock",
             "Win+L",
             true,
             Some(PopoverAction::ConfirmSession(SessionAction::Lock)),
-        ),
+        )
+        .with_icon_glyph("\u{E72E}")
+        .with_section_start(),
         PopoverItem::new(
             "Sleep",
             "Requires confirmation",
             true,
             Some(PopoverAction::ConfirmSession(SessionAction::Sleep)),
-        ),
+        )
+        .with_icon_glyph("\u{E708}"),
         PopoverItem::new(
             "Sign out",
             "Requires confirmation",
             true,
             Some(PopoverAction::ConfirmSession(SessionAction::SignOut)),
-        ),
+        )
+        .with_icon_glyph("\u{E8AC}"),
         PopoverItem::new(
             "Restart",
             "Requires confirmation",
             true,
             Some(PopoverAction::ConfirmSession(SessionAction::Restart)),
-        ),
+        )
+        .with_icon_glyph("\u{E777}")
+        .with_section_start(),
         PopoverItem::new(
             "Shut down",
             "Requires confirmation",
             true,
             Some(PopoverAction::ConfirmSession(SessionAction::ShutDown)),
-        ),
+        )
+        .with_icon_glyph("\u{E7E8}"),
     ]
 }
 
@@ -328,7 +338,7 @@ fn control_center_rows() -> Vec<PopoverItem> {
             Some(PopoverAction::OpenSystemRoute(SystemRoute::Bluetooth)),
         ),
         PopoverItem::new(
-            "Focus",
+            "Do not disturb",
             "Windows settings",
             true,
             Some(PopoverAction::OpenSystemRoute(SystemRoute::Focus)),

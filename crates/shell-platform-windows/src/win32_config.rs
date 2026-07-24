@@ -25,6 +25,14 @@ pub(super) fn persist_dock_state(state: &ShellState) -> Result<()> {
         .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
 }
 
+pub(super) fn persist_config(config: &ShellConfigV1) -> Result<()> {
+    let store = default_store()
+        .ok_or_else(|| windows::core::Error::new(invalid_arg(), "LOCALAPPDATA is unavailable"))?;
+    store
+        .persist(config)
+        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
+}
+
 fn configured_state(config: &ShellConfigV1, defaults: ShellState) -> Option<ShellState> {
     let layout = if config.dock_layout().is_empty() {
         None

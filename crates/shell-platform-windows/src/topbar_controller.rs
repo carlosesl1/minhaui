@@ -24,6 +24,8 @@ pub struct TopbarController {
     snapshot: TopbarSnapshot,
     pressed_target: Option<(TopbarOverlayAnchor, TopbarIntent)>,
     focused_module: Option<TopbarModuleKind>,
+    hovered_module: Option<TopbarModuleKind>,
+    active_module: Option<TopbarModuleKind>,
     visual_generation: u64,
     #[cfg(test)]
     resource_generation: u64,
@@ -40,6 +42,8 @@ impl TopbarController {
             snapshot: TopbarSnapshot::default(),
             pressed_target: None,
             focused_module: None,
+            hovered_module: None,
+            active_module: None,
             visual_generation: 0,
             #[cfg(test)]
             resource_generation: 0,
@@ -62,10 +66,6 @@ impl TopbarController {
     }
 
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "retained for parity with dock render generation diagnostics"
-    )]
     pub const fn visual_generation(&self) -> u64 {
         self.visual_generation
     }
@@ -99,7 +99,17 @@ impl TopbarController {
     pub fn scene(&self) -> TopbarScene {
         TopbarScene::new(self.density, self.visible_modules())
             .with_focused_module(self.focused_module)
+            .with_hovered_module(self.hovered_module)
+            .with_pressed_module(self.pressed_module())
+            .with_active_module(self.active_module)
             .with_text_scale(self.text_scale)
+    }
+
+    pub(crate) fn set_active_module(&mut self, active_module: Option<TopbarModuleKind>) {
+        if self.active_module != active_module {
+            self.active_module = active_module;
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
     }
 
     pub fn handle_pointer(
@@ -109,20 +119,41 @@ impl TopbarController {
         match sample.phase() {
             TopbarPointerPhase::Pressed => {
                 self.pressed_target = self.hit_test(sample);
-                Ok(Vec::new())
+                Ok(vec![QueuedTopbarAction::RedrawTopbar])
             }
             TopbarPointerPhase::Released => {
                 let target = self.hit_test(sample);
-                if target.is_some() && target == self.pressed_target {
-                    self.pressed_target = None;
-                    self.open_target(target)
+                let opens_target = target.is_some() && target == self.pressed_target;
+                self.pressed_target = None;
+                let mut actions = if opens_target {
+                    self.open_target(target)?
                 } else {
-                    self.pressed_target = None;
-                    Ok(Vec::new())
-                }
+                    Vec::new()
+                };
+                actions.push(QueuedTopbarAction::RedrawTopbar);
+                Ok(actions)
             }
-            TopbarPointerPhase::Moved | TopbarPointerPhase::Exited => Ok(Vec::new()),
+            TopbarPointerPhase::Moved => {
+                let hovered = self.hit_test(sample).and_then(|(anchor, _)| match anchor {
+                    TopbarOverlayAnchor::Module(kind) => Some(kind),
+                    TopbarOverlayAnchor::Overflow => None,
+                });
+                Ok(self.set_hovered_module(hovered))
+            }
+            TopbarPointerPhase::Exited => Ok(self.set_hovered_module(None)),
         }
+    }
+
+    fn set_hovered_module(
+        &mut self,
+        hovered_module: Option<TopbarModuleKind>,
+    ) -> Vec<QueuedTopbarAction> {
+        if self.hovered_module == hovered_module {
+            return Vec::new();
+        }
+        self.hovered_module = hovered_module;
+        self.visual_generation = self.visual_generation.wrapping_add(1);
+        vec![QueuedTopbarAction::RedrawTopbar]
     }
 
     pub fn handle_key(
@@ -235,6 +266,15 @@ impl TopbarController {
         }
     }
 
+    fn pressed_module(&self) -> Option<TopbarModuleKind> {
+        self.pressed_target
+            .as_ref()
+            .and_then(|(anchor, _)| match anchor {
+                TopbarOverlayAnchor::Module(kind) => Some(*kind),
+                TopbarOverlayAnchor::Overflow => None,
+            })
+    }
+
     fn visible_modules(&self) -> Vec<TopbarModuleVisual> {
         self.state
             .topbar_modules()
@@ -297,10 +337,10 @@ impl TopbarController {
             ),
             TopbarModuleKind::Notifications => visual(
                 kind,
-                "\u{E7F4}",
-                notification_text(self.snapshot.notifications),
+                "\u{E713}",
+                "Controls",
                 TopbarModuleStatus::Neutral,
-                Some(TopbarIntent::Popover(Popover::Notifications)),
+                Some(TopbarIntent::Popover(Popover::QuickSettings)),
             ),
             TopbarModuleKind::BackgroundApps => visual(
                 kind,
@@ -334,10 +374,6 @@ const fn power_status(power: crate::PowerSnapshot) -> TopbarModuleStatus {
         Some(percent) if percent <= 20 && !power.plugged_in() => TopbarModuleStatus::Warning,
         Some(_) | None => TopbarModuleStatus::Neutral,
     }
-}
-
-fn notification_text(count: u16) -> &'static str {
-    if count == 0 { "Clear" } else { "Attention" }
 }
 
 fn visual(

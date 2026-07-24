@@ -3,6 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::WinRT::{RO_INIT_SINGLETHREADED, RoInitialize, RoUninitialize};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
@@ -114,7 +115,7 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         && std::env::var_os("MINHA_UI_DISABLE_BACKDROP").is_none();
     let features = SlotFeatures {
         force_warp: config.force_warp,
-        safe_mode: config.safe_mode,
+        solid_material: solid_material_for_accessibility(config.safe_mode, config.high_contrast),
         backdrop_enabled,
         reduced_motion: config.reduced_motion,
         liquid_glass,
@@ -176,6 +177,10 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     result
 }
 
+const fn solid_material_for_accessibility(safe_mode: bool, high_contrast: bool) -> bool {
+    safe_mode || high_contrast
+}
+
 struct ComApartment;
 
 impl ComApartment {
@@ -183,12 +188,23 @@ impl ComApartment {
         // SAFETY: Category 8 (FFI boundary). The UI thread initializes one STA
         // before creating shell, WIC, or composition resources.
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok()?;
+        // SAFETY: Category 8 (FFI boundary). The same long-lived STA owns WinRT
+        // activation used by native Quick Settings actions.
+        if let Err(error) = unsafe { RoInitialize(RO_INIT_SINGLETHREADED) } {
+            // SAFETY: Category 8 (FFI boundary). Balance the successful COM
+            // initialization when WinRT initialization cannot be completed.
+            unsafe { CoUninitialize() };
+            return Err(error);
+        }
         Ok(Self)
     }
 }
 
 impl Drop for ComApartment {
     fn drop(&mut self) {
+        // SAFETY: Category 8 (FFI boundary). This balances the successful
+        // RoInitialize call on the same UI thread.
+        unsafe { RoUninitialize() };
         // SAFETY: Category 8 (FFI boundary). This balances the successful
         // CoInitializeEx call on the same UI thread.
         unsafe { CoUninitialize() };
@@ -308,4 +324,16 @@ fn contains_window(
 
 const fn invalid_arg() -> windows::core::HRESULT {
     windows::core::HRESULT(0x8007_0057_u32 as i32)
+}
+
+#[cfg(test)]
+mod material_policy_tests {
+    use super::solid_material_for_accessibility;
+
+    #[test]
+    fn system_backdrop_is_not_required_for_translucent_composition() {
+        assert!(!solid_material_for_accessibility(false, false));
+        assert!(solid_material_for_accessibility(true, false));
+        assert!(solid_material_for_accessibility(false, true));
+    }
 }

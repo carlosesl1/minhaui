@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use shell_renderer::native::{
     DeviceKind, ShellScenes, ShowcaseRole, SurfaceMetrics, SurfaceVisibilityAnimation,
 };
-use shell_renderer::{PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene};
+use shell_renderer::{
+    PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene, popover_surface_size,
+};
 use windows::core::Result;
 
 use crate::dock_edge_detection::dock_edge_probe_mode;
@@ -28,7 +30,8 @@ use crate::win32_windowing::{window_monitor_bounds, window_work_area};
 use crate::{
     DefaultPopoverDataProvider, DockContextMenuController, DockController, DockVisibilityMotion,
     PlatformEvent, PopoverController, PreviewController, PreviewEffect, PreviewEntranceMotion,
-    PreviewPhase, RuntimeAction, RuntimeOrchestrator, SettingsController, TopbarController,
+    PreviewPhase, QuickSettingsController, RuntimeAction, RuntimeOrchestrator, SettingsController,
+    TopbarController,
 };
 
 const EDGE_REVEAL_GRACE: Duration = Duration::from_millis(450);
@@ -42,6 +45,8 @@ pub(super) struct RuntimeSurfaces {
     pub(super) dock_controller: DockController,
     pub(super) topbar_controller: TopbarController,
     pub(super) popover_controller: PopoverController,
+    pub(super) quick_settings_controller: QuickSettingsController,
+    pub(super) media_session_worker: Option<crate::media_session_worker::MediaSessionWorker>,
     pub(super) context_menu_controller: DockContextMenuController,
     pub(super) settings_controller: SettingsController,
     pub(super) popover_provider: DefaultPopoverDataProvider<crate::OfflineWeatherProvider>,
@@ -96,6 +101,7 @@ impl RuntimeSurfaces {
         topbar_controller: TopbarController,
         config: shell_config::ShellConfigV1,
     ) -> Result<Self> {
+        let quick_settings_preferences = config.quick_settings().clone();
         let mut runtime = Self {
             reduced_motion: options.reduced_motion,
             background_apps_worker: crate::background_apps_worker::BackgroundAppsWorker::new()?,
@@ -110,6 +116,11 @@ impl RuntimeSurfaces {
             dock_controller,
             topbar_controller,
             popover_controller: PopoverController::new(),
+            quick_settings_controller: QuickSettingsController::new(
+                quick_settings_preferences,
+                crate::QuickSettingsCapabilities::default(),
+            ),
+            media_session_worker: None,
             context_menu_controller: DockContextMenuController::new(),
             settings_controller: SettingsController::new(config),
             popover_provider: DefaultPopoverDataProvider::offline(),
@@ -169,17 +180,76 @@ impl RuntimeSurfaces {
                     self.background_apps = catalog;
                     if let Some(anchor) = self.active_topbar_anchor {
                         let work = window_work_area(topbar.hwnd)?;
-                        let rows = self
-                            .popover_controller
-                            .scene()
-                            .map_or(0, |scene| scene.rows().len());
-                        popover.place_popover(
-                            work,
-                            self.topbar_anchor_rect(topbar, anchor),
-                            shell_renderer::popover_height_for_rows(rows),
-                        )?;
+                        if let Some(scene) = self.popover_controller.scene() {
+                            popover.place_popover(
+                                work,
+                                self.topbar_anchor_rect(topbar, anchor),
+                                popover_surface_size(&scene),
+                            )?;
+                        }
                     }
                     self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::MediaSessionsChanged(result) => {
+                let reflow = match result {
+                    Ok(snapshot) => self
+                        .quick_settings_controller
+                        .apply_media_snapshot(snapshot),
+                    Err(error) => {
+                        crate::diagnostics::record(
+                            crate::diagnostics::DiagnosticModule::AppLifecycle,
+                            crate::diagnostics::LogLevel::Error,
+                            "media_sessions_failed",
+                            &[("error", &error.to_string())],
+                        );
+                        self.quick_settings_controller.apply_media_snapshot(
+                            crate::media_session_types::MediaSessionSnapshot::default(),
+                        )
+                    }
+                };
+                if self.quick_settings_controller.is_open() {
+                    if reflow {
+                        let work = window_work_area(topbar.hwnd)?;
+                        self.place_active_overlay(work, topbar, dock, popover)?;
+                    }
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::MediaTransportCompleted(result) => {
+                if self
+                    .quick_settings_controller
+                    .complete_media_transport(result)
+                    && self.quick_settings_controller.is_open()
+                {
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                if let Some(worker) = self.media_session_worker.as_ref() {
+                    worker.send(crate::media_session_types::MediaWorkerCommand::Refresh);
+                }
+                return Ok(true);
+            }
+            PlatformEvent::NightLightCompleted(result) => {
+                let actions = self
+                    .quick_settings_controller
+                    .complete_night_light(result.request, result.result);
+                if self.quick_settings_controller.is_open() {
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::BrightnessCompleted(result) => {
+                let actions = self
+                    .quick_settings_controller
+                    .complete_brightness(result.request, result.result);
+                if self.quick_settings_controller.is_open() {
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
                 }
                 return Ok(true);
             }
@@ -577,8 +647,28 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     );
                 }
+                if self.quick_settings_controller.is_open() {
+                    let actions = self
+                        .quick_settings_controller
+                        .handle_key(quick_settings_key(*key));
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                    return Ok(true);
+                }
                 let actions = self.popover_controller.handle_key(*key);
                 self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
+                return Ok(true);
+            }
+            PlatformEvent::PopoverPointerPressed(point) => {
+                if self.quick_settings_controller.is_open() {
+                    let actions = self
+                        .quick_settings_controller
+                        .pointer_press(*point, crate::win32_dock_render::dip_surface(popover));
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                }
                 return Ok(true);
             }
             PlatformEvent::PopoverPointer(point) => {
@@ -590,6 +680,16 @@ impl RuntimeSurfaces {
                     return self.apply_context_menu_actions(
                         &actions, topbar, dock, popover, preview, settings,
                     );
+                }
+                if self.quick_settings_controller.is_open() {
+                    let surface = crate::win32_dock_render::dip_surface(popover);
+                    let actions = self
+                        .quick_settings_controller
+                        .pointer_release(*point, surface);
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                    return Ok(true);
                 }
                 let actions = self
                     .popover_controller
@@ -607,10 +707,30 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     );
                 }
+                if self.quick_settings_controller.is_open() {
+                    let actions = self
+                        .quick_settings_controller
+                        .pointer_move(*point, crate::win32_dock_render::dip_surface(popover));
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                    return Ok(true);
+                }
+                let actions = self
+                    .popover_controller
+                    .handle_pointer_move(*point, crate::win32_dock_render::dip_surface(popover));
+                self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
                 return Ok(true);
             }
             PlatformEvent::PopoverScroll(rows) => {
                 if !self.context_menu_controller.is_active() {
+                    if self.quick_settings_controller.is_open() {
+                        let actions = self.quick_settings_controller.scroll(*rows);
+                        self.apply_quick_settings_actions(
+                            &actions, topbar, dock, popover, preview, settings,
+                        )?;
+                        return Ok(true);
+                    }
                     let actions = self.popover_controller.handle_scroll(*rows);
                     self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
                 }
@@ -621,6 +741,14 @@ impl RuntimeSurfaces {
                     .settings_controller
                     .handle_key(*key)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if actions.contains(&crate::QueuedSettingsAction::ApplyQuickSettings) {
+                    let config = self.settings_controller.apply().map_err(|error| {
+                        windows::core::Error::new(invalid_arg(), error.to_string())
+                    })?;
+                    crate::win32_config::persist_config(&config)?;
+                    self.quick_settings_controller
+                        .set_preferences(config.quick_settings().clone());
+                }
                 if actions.contains(&crate::QueuedSettingsAction::Dismiss) {
                     settings.hide();
                 }
@@ -633,7 +761,29 @@ impl RuntimeSurfaces {
             PlatformEvent::ShellObservationLoaded(_) => {
                 unreachable!("handled by the process observation runtime")
             }
+            PlatformEvent::QuickSettingsRefresh(_) => {
+                let capabilities = crate::win32_quick_settings_capabilities::read_capabilities();
+                self.settings_controller
+                    .set_supported_quick_controls(capabilities.supported_kinds());
+                if self.quick_settings_controller.is_open() {
+                    if let Ok(audio) = crate::win32_audio_panel::read() {
+                        self.quick_settings_controller.replace_audio_panel(audio);
+                    }
+                    self.quick_settings_controller
+                        .replace_capabilities(capabilities);
+                    let work = window_work_area(popover.hwnd)?;
+                    self.place_active_overlay(work, topbar, dock, popover)?;
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                return Ok(true);
+            }
             PlatformEvent::BackgroundAppsLoaded(_) => unreachable!("handled before routing"),
+            PlatformEvent::MediaSessionsChanged(_) | PlatformEvent::MediaTransportCompleted(_) => {
+                unreachable!("handled before routing")
+            }
+            PlatformEvent::NightLightCompleted(_) | PlatformEvent::BrightnessCompleted(_) => {
+                unreachable!("handled before routing")
+            }
             PlatformEvent::TaskbarCreated
             | PlatformEvent::AppBarPositionChanged
             | PlatformEvent::DpiChanged(_)
@@ -913,6 +1063,10 @@ impl RuntimeSurfaces {
             .update_surface(dip_surface(windows.dock));
         let dock_scene = self.dock_controller.scene();
         let popover_scene = self.popover_controller.scene();
+        let quick_settings_scene = self
+            .quick_settings_controller
+            .is_open()
+            .then(|| self.quick_settings_controller.scene());
         let context_menu_scene = self.context_menu_controller.scene();
         let settings_scene = self.settings_controller.scene();
         let targets = canonical_surface_targets(SurfaceEndpoints {
@@ -927,6 +1081,7 @@ impl RuntimeSurfaces {
                 topbar: Some(&topbar_scene),
                 dock: None,
                 popover: None,
+                quick_settings: None,
                 context_menu: None,
                 settings: None,
                 preview: None,
@@ -935,6 +1090,7 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: Some(&dock_scene),
                 popover: None,
+                quick_settings: None,
                 context_menu: None,
                 settings: None,
                 preview: None,
@@ -943,6 +1099,7 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: None,
                 popover: popover_scene.as_ref(),
+                quick_settings: quick_settings_scene.as_ref(),
                 context_menu: context_menu_scene.as_ref(),
                 settings: None,
                 preview: None,
@@ -955,6 +1112,7 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: None,
                 popover: None,
+                quick_settings: None,
                 context_menu: None,
                 settings: Some(&settings_scene),
                 preview: None,
@@ -1143,9 +1301,19 @@ const fn empty_scenes() -> ShellScenes<'static> {
         topbar: None,
         dock: None,
         popover: None,
+        quick_settings: None,
         context_menu: None,
         settings: None,
         preview: None,
+    }
+}
+
+const fn quick_settings_key(key: crate::PopoverKey) -> crate::QuickSettingsKey {
+    match key {
+        crate::PopoverKey::Next => crate::QuickSettingsKey::Next,
+        crate::PopoverKey::Previous => crate::QuickSettingsKey::Previous,
+        crate::PopoverKey::Activate => crate::QuickSettingsKey::Activate,
+        crate::PopoverKey::Escape => crate::QuickSettingsKey::Escape,
     }
 }
 

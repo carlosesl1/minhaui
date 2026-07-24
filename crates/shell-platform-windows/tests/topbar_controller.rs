@@ -27,12 +27,132 @@ fn topbar_click_opens_typed_module_intent_without_rebuilding_resources()
     // Then: a typed popover intent is dispatched and hover-only visual work is bounded.
     assert_eq!(
         actions,
-        vec![QueuedTopbarAction::OpenPopover {
-            popover: Popover::Network,
-            anchor: crate::TopbarOverlayAnchor::Module(TopbarModuleKind::Network),
-        }]
+        vec![
+            QueuedTopbarAction::OpenPopover {
+                popover: Popover::Network,
+                anchor: crate::TopbarOverlayAnchor::Module(TopbarModuleKind::Network),
+            },
+            QueuedTopbarAction::RedrawTopbar
+        ]
     );
     assert_eq!(controller.resource_generation(), 0);
+    Ok(())
+}
+
+#[test]
+fn module_press_requests_redraw_and_exposes_pressed_state() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 900.0, 40.0));
+    let system_menu = module_center(&controller, TopbarModuleKind::SystemMenu)?;
+
+    let actions = controller.handle_pointer(TopbarPointerSample::new(
+        TopbarPointerPhase::Pressed,
+        system_menu,
+    ))?;
+
+    assert!(actions.contains(&QueuedTopbarAction::RedrawTopbar));
+    assert_eq!(
+        controller.scene().pressed_module(),
+        Some(TopbarModuleKind::SystemMenu)
+    );
+    Ok(())
+}
+
+#[test]
+fn module_hover_tracks_pointer_and_clears_on_exit() -> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 900.0, 40.0));
+    let system_menu = module_center(&controller, TopbarModuleKind::SystemMenu)?;
+
+    assert_eq!(
+        controller.handle_pointer(TopbarPointerSample::new(
+            TopbarPointerPhase::Moved,
+            system_menu,
+        ))?,
+        vec![QueuedTopbarAction::RedrawTopbar]
+    );
+    assert_eq!(
+        controller.scene().hovered_module(),
+        Some(TopbarModuleKind::SystemMenu)
+    );
+
+    assert_eq!(
+        controller.handle_pointer(TopbarPointerSample::new(
+            TopbarPointerPhase::Exited,
+            DipPoint::new(-1.0, -1.0),
+        ))?,
+        vec![QueuedTopbarAction::RedrawTopbar]
+    );
+    assert_eq!(controller.scene().hovered_module(), None);
+    Ok(())
+}
+
+#[test]
+fn module_release_clears_pressed_state_and_requests_redraw()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 900.0, 40.0));
+    let system_menu = module_center(&controller, TopbarModuleKind::SystemMenu)?;
+
+    controller.handle_pointer(TopbarPointerSample::new(
+        TopbarPointerPhase::Pressed,
+        system_menu,
+    ))?;
+    let actions = controller.handle_pointer(TopbarPointerSample::new(
+        TopbarPointerPhase::Released,
+        system_menu,
+    ))?;
+
+    assert!(actions.contains(&QueuedTopbarAction::OpenPopover {
+        popover: Popover::SystemMenu,
+        anchor: crate::TopbarOverlayAnchor::Module(TopbarModuleKind::SystemMenu),
+    }));
+    assert!(actions.contains(&QueuedTopbarAction::RedrawTopbar));
+    assert_eq!(controller.scene().pressed_module(), None);
+    Ok(())
+}
+
+#[test]
+fn canceled_module_release_clears_pressed_state_and_requests_redraw()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 900.0, 40.0));
+    let system_menu = module_center(&controller, TopbarModuleKind::SystemMenu)?;
+
+    controller.handle_pointer(TopbarPointerSample::new(
+        TopbarPointerPhase::Pressed,
+        system_menu,
+    ))?;
+    let actions = controller.handle_pointer(TopbarPointerSample::new(
+        TopbarPointerPhase::Released,
+        DipPoint::new(-1.0, -1.0),
+    ))?;
+
+    assert_eq!(actions, vec![QueuedTopbarAction::RedrawTopbar]);
+    assert_eq!(controller.scene().pressed_module(), None);
+    Ok(())
+}
+
+#[test]
+fn active_module_is_reflected_in_scene_and_only_changes_generation_once()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;
+    let initial_generation = controller.visual_generation();
+
+    controller.set_active_module(Some(TopbarModuleKind::SystemMenu));
+    assert_eq!(
+        controller.scene().active_module(),
+        Some(TopbarModuleKind::SystemMenu)
+    );
+    assert_eq!(controller.visual_generation(), initial_generation + 1);
+
+    controller.set_active_module(Some(TopbarModuleKind::SystemMenu));
+    assert_eq!(controller.visual_generation(), initial_generation + 1);
+
+    controller.set_active_module(None);
+    assert_eq!(controller.scene().active_module(), None);
+    assert_eq!(controller.visual_generation(), initial_generation + 2);
     Ok(())
 }
 
@@ -49,10 +169,13 @@ fn background_apps_module_opens_its_typed_popover() -> Result<(), Box<dyn std::e
             TopbarPointerPhase::Released,
             point,
         ))?,
-        vec![QueuedTopbarAction::OpenPopover {
-            popover: Popover::BackgroundApps,
-            anchor: crate::TopbarOverlayAnchor::Module(TopbarModuleKind::BackgroundApps),
-        }]
+        vec![
+            QueuedTopbarAction::OpenPopover {
+                popover: Popover::BackgroundApps,
+                anchor: crate::TopbarOverlayAnchor::Module(TopbarModuleKind::BackgroundApps),
+            },
+            QueuedTopbarAction::RedrawTopbar
+        ]
     );
     Ok(())
 }
@@ -131,7 +254,10 @@ fn search_dispatches_directly_and_active_app_is_informational()
             TopbarPointerPhase::Released,
             search,
         ))?,
-        vec![QueuedTopbarAction::OpenSearch]
+        vec![
+            QueuedTopbarAction::OpenSearch,
+            QueuedTopbarAction::RedrawTopbar
+        ]
     );
     Ok(())
 }

@@ -1,7 +1,6 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use windows::Win32::Media::Audio::waveOutGetVolume;
 use windows::Win32::NetworkManagement::IpHelper::{
     FreeMibTable, GetIfTable2, MIB_IF_TABLE2, MIB_IF_TYPE_LOOPBACK,
 };
@@ -129,16 +128,12 @@ unsafe fn totals_from_table(table: &MIB_IF_TABLE2) -> NetworkTotals {
 }
 
 fn volume_percent() -> u8 {
-    let mut raw = 0_u32;
-    // SAFETY: Category 8 (FFI boundary). Passing no HWAVEOUT queries the preferred
-    // wave output device and writes one u32 volume value.
-    if unsafe { waveOutGetVolume(None, &mut raw) } != 0 {
-        return 0;
-    }
-    let left = raw & 0xffff;
-    let right = (raw >> 16) & 0xffff;
-    let percent = ((left + right) / 2).saturating_mul(100) / 0xffff;
-    u8::try_from(percent).unwrap_or(100)
+    crate::win32_audio_endpoint::read().map_or(
+        0,
+        |state| {
+            if state.muted { 0 } else { state.volume }
+        },
+    )
 }
 
 fn power_snapshot() -> PowerSnapshot {

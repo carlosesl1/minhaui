@@ -1,11 +1,9 @@
 use std::mem::size_of;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows::Win32::Devices::Display::{
     SDC_APPLY, SDC_TOPOLOGY_CLONE, SDC_TOPOLOGY_EXTEND, SDC_TOPOLOGY_EXTERNAL,
     SDC_TOPOLOGY_INTERNAL, SET_DISPLAY_CONFIG_FLAGS, SetDisplayConfig,
 };
-use windows::Win32::Media::Audio::{waveOutGetVolume, waveOutSetVolume};
 use windows::Win32::System::Power::SetSuspendState;
 use windows::Win32::System::Shutdown::LockWorkStation;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -17,8 +15,6 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HRESULT, PCWSTR, Result, w};
 
 use crate::{PopoverAction, ProjectionMode, SessionAction, SystemRoute};
-
-static LAST_NON_ZERO_VOLUME: AtomicU32 = AtomicU32::new(0x6666_6666);
 
 pub(super) fn apply(action: &PopoverAction) -> Result<()> {
     match action {
@@ -41,7 +37,7 @@ pub(super) fn apply(action: &PopoverAction) -> Result<()> {
     }
 }
 
-fn set_projection_mode(mode: ProjectionMode) -> Result<()> {
+pub(super) fn set_projection_mode(mode: ProjectionMode) -> Result<()> {
     // SAFETY: Category 8 (FFI boundary). Topology flags request a documented
     // persisted Windows display configuration; both optional arrays are absent
     // as required for SDC_TOPOLOGY_* calls.
@@ -111,60 +107,13 @@ fn apply_session(action: SessionAction) -> Result<()> {
 }
 
 fn adjust_volume(delta: i16) -> Result<()> {
-    let raw = current_volume()?;
-    let current = channel_percent(raw);
-    let next = u16::try_from((i16::try_from(current).unwrap_or(100) + delta).clamp(0, 100))
-        .unwrap_or_default();
-    set_volume(next)
+    let current = crate::win32_audio_endpoint::read()?.volume;
+    let next = (i16::from(current) + delta).clamp(0, 100) as u8;
+    crate::win32_audio_endpoint::set_volume(next).map(|_| ())
 }
 
 fn toggle_mute() -> Result<()> {
-    let raw = current_volume()?;
-    if raw == 0 {
-        let remembered = LAST_NON_ZERO_VOLUME.load(Ordering::Relaxed);
-        // SAFETY: Category 8 (FFI boundary). No handle selects the preferred
-        // wave output device and the packed channel value is value-only.
-        let result = unsafe { waveOutSetVolume(None, remembered) };
-        return wave_result(result);
-    }
-    LAST_NON_ZERO_VOLUME.store(raw, Ordering::Relaxed);
-    // SAFETY: Category 8 (FFI boundary). See the matching non-zero call above.
-    wave_result(unsafe { waveOutSetVolume(None, 0) })
-}
-
-fn current_volume() -> Result<u32> {
-    let mut raw = 0;
-    // SAFETY: Category 8 (FFI boundary). The out pointer is valid writable
-    // storage for the duration of this synchronous query.
-    let result = unsafe { waveOutGetVolume(None, &mut raw) };
-    wave_result(result).map(|()| raw)
-}
-
-fn set_volume(percent: u16) -> Result<()> {
-    let channel = u32::from(percent.min(100)) * 0xffff / 100;
-    let raw = channel | (channel << 16);
-    if raw != 0 {
-        LAST_NON_ZERO_VOLUME.store(raw, Ordering::Relaxed);
-    }
-    // SAFETY: Category 8 (FFI boundary). The packed channel value is value-only.
-    wave_result(unsafe { waveOutSetVolume(None, raw) })
-}
-
-fn wave_result(code: u32) -> Result<()> {
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(windows::core::Error::new(
-            invalid_arg(),
-            format!("wave output command failed with code {code}"),
-        ))
-    }
-}
-
-fn channel_percent(raw: u32) -> u16 {
-    let left = raw & 0xffff;
-    let right = (raw >> 16) & 0xffff;
-    u16::try_from(((left + right) / 2).saturating_mul(100) / 0xffff).unwrap_or(100)
+    crate::win32_audio_endpoint::toggle_mute().map(|_| ())
 }
 
 fn send_key(key: VIRTUAL_KEY) -> Result<()> {
@@ -257,7 +206,7 @@ const fn invalid_arg() -> windows::core::HRESULT {
 mod tests {
     use crate::{ProjectionMode, SystemRoute};
 
-    use super::{channel_percent, projection_flags};
+    use super::projection_flags;
 
     #[test]
     fn system_routes_are_closed_and_documented() {
@@ -266,13 +215,6 @@ mod tests {
         assert_eq!(SystemRoute::Bluetooth.uri(), "ms-settings:bluetooth");
         assert_eq!(SystemRoute::Focus.uri(), "ms-settings:quiethours");
         assert_eq!(SystemRoute::DateTime.uri(), "ms-settings:dateandtime");
-    }
-
-    #[test]
-    fn packed_wave_volume_conversion_is_bounded() {
-        assert_eq!(channel_percent(0), 0);
-        assert_eq!(channel_percent(0xffff_ffff), 100);
-        assert_eq!(channel_percent(0x7fff_7fff), 49);
     }
 
     #[test]

@@ -266,3 +266,32 @@ fn long_active_app_identity_never_overlaps_search_or_overflow_on_narrow_surfaces
         assert!(search.bounds().x + search.bounds().width <= bounds.x);
     }
 }
+
+#[test]
+fn focused_pressed_and_active_topbar_states_are_independent_and_keep_bounds() {
+    let module = TopbarModuleVisual::new(
+        TopbarModuleKind::SystemMenu,
+        "Menu",
+        "Minha UI",
+        TopbarModuleStatus::Neutral,
+        Some(TopbarIntent::Popover(Popover::SystemMenu)),
+    );
+    let base = TopbarScene::new(TopbarDensity::Compact, vec![module]);
+    let normal = layout_topbar_scene(&base, DipRect::new(0.0, 0.0, 800.0, 32.0));
+    let active = layout_topbar_scene(
+        &base
+            .clone()
+            .with_focused_module(Some(TopbarModuleKind::SystemMenu))
+            .with_pressed_module(Some(TopbarModuleKind::SystemMenu))
+            .with_active_module(Some(TopbarModuleKind::SystemMenu)),
+        DipRect::new(0.0, 0.0, 800.0, 32.0),
+    );
+
+    assert_eq!(
+        normal.visible_items()[0].bounds(),
+        active.visible_items()[0].bounds()
+    );
+    assert!(active.visible_items()[0].focused());
+    assert!(active.visible_items()[0].pressed());
+    assert!(active.visible_items()[0].active());
+}

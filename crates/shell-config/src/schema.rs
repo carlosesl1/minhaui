@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     AdvancedSettings, AppearanceSettings, BehaviorSettings, DockSettings, MAX_CONFIG_BYTES,
-    TopbarSettings,
+    QuickSettingsSettings, TopbarSettings,
 };
 
 const SCHEMA_VERSION: u16 = 1;
@@ -33,6 +33,8 @@ pub struct ShellConfigV1 {
     #[serde(default)]
     topbar: TopbarSettings,
     #[serde(default)]
+    quick_settings: QuickSettingsSettings,
+    #[serde(default)]
     behavior: BehaviorSettings,
     #[serde(default)]
     appearance: AppearanceSettings,
@@ -53,6 +55,7 @@ impl Default for ShellConfigV1 {
             topbar_modules: default_topbar(),
             dock: DockSettings::default(),
             topbar: TopbarSettings::default(),
+            quick_settings: QuickSettingsSettings::default(),
             behavior: BehaviorSettings::default(),
             appearance: AppearanceSettings::default(),
             advanced: AdvancedSettings::default(),
@@ -130,7 +133,7 @@ impl ShellConfigV1 {
         if actual != expected {
             return Err(ConfigError::IncompleteTopbarModules);
         }
-        if !self.dock.validate() || !self.appearance.validate() {
+        if !self.dock.validate() || !self.appearance.validate() || !self.quick_settings.validate() {
             return Err(ConfigError::InvalidSettings);
         }
         Ok(())
@@ -217,6 +220,16 @@ impl ShellConfigV1 {
     #[must_use]
     pub const fn topbar(&self) -> &TopbarSettings {
         &self.topbar
+    }
+    #[must_use]
+    pub const fn quick_settings(&self) -> &QuickSettingsSettings {
+        &self.quick_settings
+    }
+    #[must_use]
+    pub fn with_quick_settings(&self, quick_settings: QuickSettingsSettings) -> Self {
+        let mut config = self.clone();
+        config.quick_settings = quick_settings.normalized();
+        config
     }
     #[must_use]
     pub const fn behavior(&self) -> BehaviorSettings {
@@ -375,6 +388,7 @@ impl ConfigV0 {
             topbar_modules: default_topbar(),
             dock: DockSettings::default(),
             topbar: TopbarSettings::default(),
+            quick_settings: QuickSettingsSettings::default(),
             behavior: BehaviorSettings::default(),
             appearance: AppearanceSettings::default(),
             advanced: AdvancedSettings::default(),

@@ -4,6 +4,7 @@ mod calendar;
 mod events;
 mod ids;
 mod model;
+mod quick_settings;
 mod reducer;
 mod reducer_dock;
 mod state;
@@ -16,6 +17,7 @@ pub use model::{
     PerformancePreset, PinState, Popover, RunningState, TaskbarPolicy, TopbarIntent, TopbarModule,
     TopbarModuleKind,
 };
+pub use quick_settings::{QuickControlKind, QuickControlPlacement};
 pub use reducer::reduce;
 pub use state::{ShellState, StateError};
 
