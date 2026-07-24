@@ -103,7 +103,9 @@ impl RuntimeOrchestrator {
             PlatformEvent::DockDrop { .. }
             | PlatformEvent::SyncWindows
             | PlatformEvent::ShellObservationLoaded(_)
-            | PlatformEvent::BackgroundAppsLoaded(_) => RuntimeAction::None,
+            | PlatformEvent::BackgroundAppsLoaded(_)
+            | PlatformEvent::ExternalMenuPopupStarted { .. }
+            | PlatformEvent::ExternalMenuPopupEnded { .. } => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,
         };

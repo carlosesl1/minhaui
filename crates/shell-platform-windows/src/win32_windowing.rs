@@ -30,6 +30,7 @@ use crate::win32_drop::first_drop_path;
 use crate::win32_event_queue::{
     RoutedPlatformEvent, is_dragging, next_event, queue_event, set_dragging,
 };
+use crate::win32_external_menu_events::EXTERNAL_MENU_WAKE_MESSAGE;
 use crate::win32_hit_test::hit_test;
 use crate::win32_pointer::{client_point, track_mouse_leave};
 pub(super) use crate::win32_work_area::{
@@ -93,6 +94,7 @@ pub(super) unsafe extern "system" fn window_proc(
         || message == MEDIA_SESSION_WAKE_MESSAGE
         || message == NIGHT_LIGHT_WAKE_MESSAGE
         || message == BRIGHTNESS_WAKE_MESSAGE
+        || message == EXTERNAL_MENU_WAKE_MESSAGE
     {
         return LRESULT(0);
     }

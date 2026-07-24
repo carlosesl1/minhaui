@@ -282,7 +282,21 @@ mod tray_record_decoder;
 )]
 mod win32_background_apps;
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "process-owned WinEvent hook registration and callback forwarding are isolated here"
+)]
+mod win32_external_menu_events;
+#[cfg(windows)]
 mod win32_media_sessions;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "validated Win32 tray callback forwarding is isolated and wired incrementally"
+)]
+mod win32_tray_activation;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
@@ -423,6 +437,14 @@ pub(crate) enum PlatformEvent {
     SyncWindows,
     ShellObservationLoaded(win32_shell_observation::ShellObservationLoadResult),
     BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),
+    ExternalMenuPopupStarted {
+        window: NativeWindowId,
+        owner_process_id: u32,
+    },
+    ExternalMenuPopupEnded {
+        window: NativeWindowId,
+        owner_process_id: u32,
+    },
     QaExitRequested,
     CloseRequested,
     Destroyed,

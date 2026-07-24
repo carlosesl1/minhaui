@@ -799,6 +799,8 @@ impl RuntimeSurfaces {
             PlatformEvent::NightLightCompleted(_) | PlatformEvent::BrightnessCompleted(_) => {
                 unreachable!("handled before routing")
             }
+            PlatformEvent::ExternalMenuPopupStarted { .. }
+            | PlatformEvent::ExternalMenuPopupEnded { .. } => {}
             PlatformEvent::TaskbarCreated
             | PlatformEvent::AppBarPositionChanged
             | PlatformEvent::DpiChanged(_)
