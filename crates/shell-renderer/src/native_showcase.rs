@@ -262,7 +262,7 @@ pub(crate) fn draw_showcase(
     let radius = match role {
         ShowcaseRole::Dock => tokens.dock_radius,
         ShowcaseRole::Topbar => 0.0,
-        ShowcaseRole::Popover => tokens.popover_radius,
+        ShowcaseRole::Popover | ShowcaseRole::AppMenu => tokens.popover_radius,
         ShowcaseRole::Preview => tokens.popover_radius,
         ShowcaseRole::Settings => tokens.popover_radius,
     };
@@ -353,7 +353,7 @@ pub(crate) fn draw_showcase(
                 },
             );
         }
-    } else if role != ShowcaseRole::Popover {
+    } else if !matches!(role, ShowcaseRole::Popover | ShowcaseRole::AppMenu) {
         fill_round(
             context,
             rect(0.5, 0.5, width - 0.5, height - 0.5, radius),
@@ -401,7 +401,7 @@ pub(crate) fn draw_showcase(
                 &primary,
             );
         }
-    } else if role == ShowcaseRole::Popover {
+    } else if matches!(role, ShowcaseRole::Popover | ShowcaseRole::AppMenu) {
         if let Some(scene) = scenes.context_menu {
             let menu_shadows = SHADOW_ALPHA_PROFILE
                 .map(|alpha| create_brush(context, Rgba8::new(0, 0, 0, alpha)))
@@ -433,7 +433,9 @@ pub(crate) fn draw_showcase(
                     separator: &menu_separator,
                 },
             );
-        } else if let Some(scene) = scenes.quick_settings {
+        } else if role == ShowcaseRole::Popover
+            && let Some(scene) = scenes.quick_settings
+        {
             draw_quick_settings(
                 context,
                 icons,
@@ -461,7 +463,9 @@ pub(crate) fn draw_showcase(
                     rim: &panel_rim,
                 },
             );
-        } else if let Some(scene) = scenes.popover {
+        } else if role == ShowcaseRole::Popover
+            && let Some(scene) = scenes.popover
+        {
             let title_format = create_popover_title_format(dwrite)?;
             draw_functional_popover(
                 context,

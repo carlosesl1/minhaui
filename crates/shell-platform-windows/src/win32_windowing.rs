@@ -302,6 +302,46 @@ pub(super) unsafe extern "system" fn window_proc(
             ));
             LRESULT(0)
         }
+        WM_MOUSEMOVE if is_app_menu_window(hwnd) => {
+            track_mouse_leave(hwnd);
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::AppMenuPointerMoved(client_point(hwnd, lparam)),
+            ));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE if is_app_menu_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::AppMenuPointerMoved(DipPoint::new(-1.0, -1.0)),
+            ));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP if is_app_menu_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::AppMenuPointerReleased(client_point(hwnd, lparam)),
+            ));
+            LRESULT(0)
+        }
+        WM_KILLFOCUS if is_app_menu_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::AppMenuDismissed,
+            ));
+            LRESULT(0)
+        }
+        WM_ACTIVATE if is_app_menu_window(hwnd) => {
+            if wparam.0 & 0xffff == WA_INACTIVE as usize {
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::AppMenuDismissed,
+                ));
+            }
+            // SAFETY: Category 8 (FFI boundary). Default activation processing is
+            // retained after observing the nonmodal tool window's state.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         WM_MOUSELEAVE if is_popover_window(hwnd) => {
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
@@ -340,6 +380,15 @@ pub(super) unsafe extern "system" fn window_proc(
                 queue_event(RoutedPlatformEvent::window(
                     hwnd,
                     PlatformEvent::PopoverKey(key),
+                ));
+            }
+            LRESULT(0)
+        }
+        WM_KEYDOWN if is_app_menu_window(hwnd) => {
+            if let Some(key) = popover_key(wparam) {
+                queue_event(RoutedPlatformEvent::window(
+                    hwnd,
+                    PlatformEvent::AppMenuKey(key),
                 ));
             }
             LRESULT(0)
@@ -518,6 +567,13 @@ pub(super) unsafe extern "system" fn window_proc(
             ));
             LRESULT(0)
         }
+        WM_CLOSE if is_app_menu_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::AppMenuDismissed,
+            ));
+            LRESULT(0)
+        }
         WM_CLOSE => {
             queue_event(RoutedPlatformEvent::broadcast(
                 PlatformEvent::CloseRequested,
@@ -562,6 +618,10 @@ fn is_topbar_window(hwnd: HWND) -> bool {
 
 fn is_popover_window(hwnd: HWND) -> bool {
     crate::win32::is_popover_window(hwnd)
+}
+
+fn is_app_menu_window(hwnd: HWND) -> bool {
+    crate::win32::is_app_menu_window(hwnd)
 }
 
 fn is_preview_window(hwnd: HWND) -> bool {

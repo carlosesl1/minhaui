@@ -19,10 +19,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, Result, w};
 
 use crate::win32::{
-    LIVE_WINDOWS, register_dock_window, register_popover_window, register_preview_window,
-    register_settings_window, register_topbar_window, unregister_dock_window,
-    unregister_popover_window, unregister_preview_window, unregister_settings_window,
-    unregister_topbar_window,
+    LIVE_WINDOWS, register_app_menu_window, register_dock_window, register_popover_window,
+    register_preview_window, register_settings_window, register_topbar_window,
+    unregister_app_menu_window, unregister_dock_window, unregister_popover_window,
+    unregister_preview_window, unregister_settings_window, unregister_topbar_window,
 };
 use crate::win32_backdrop::apply_if_supported;
 use crate::win32_windowing::window_proc;
@@ -129,6 +129,7 @@ impl OwnedWindow {
             ShowcaseRole::Topbar => (w!("Minha UI Topbar"), "Minha UI Topbar"),
             ShowcaseRole::Dock => (w!("Minha UI Dock"), "Minha UI Dock"),
             ShowcaseRole::Popover => (w!("Minha UI Popover"), "Minha UI Popover"),
+            ShowcaseRole::AppMenu => (w!("Minha UI App Menu"), "Minha UI App Menu"),
             ShowcaseRole::Preview => (w!("Minha UI Preview"), "Minha UI Preview"),
             ShowcaseRole::Settings => (w!("Minha UI Settings"), "Minha UI Settings"),
         };
@@ -154,7 +155,7 @@ impl OwnedWindow {
         let backdrop_active = apply_if_supported(
             hwnd,
             role,
-            backdrop_enabled && role != ShowcaseRole::Popover,
+            backdrop_enabled && !matches!(role, ShowcaseRole::Popover | ShowcaseRole::AppMenu),
         );
         LIVE_WINDOWS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         match role {
@@ -167,6 +168,7 @@ impl OwnedWindow {
                 unsafe { DragAcceptFiles(hwnd, true) };
             }
             ShowcaseRole::Popover => register_popover_window(hwnd),
+            ShowcaseRole::AppMenu => register_app_menu_window(hwnd),
             ShowcaseRole::Preview => register_preview_window(hwnd),
             ShowcaseRole::Settings => register_settings_window(hwnd),
         }
@@ -180,6 +182,7 @@ impl OwnedWindow {
             ShowcaseRole::Popover => {
                 popover_anchor_rect(topbar_rect(work, dpi, metrics), work, dpi)
             }
+            ShowcaseRole::AppMenu => app_menu_initial_rect(work, dpi),
             ShowcaseRole::Preview => preview_initial_rect(work, dpi),
             ShowcaseRole::Settings => settings_rect(work, dpi),
         };
@@ -223,6 +226,7 @@ impl OwnedWindow {
                 self.popover_anchor_x_dip = placement.anchor_x_dip();
                 placement.rect()
             }
+            ShowcaseRole::AppMenu => app_menu_initial_rect(work, self.dpi),
             ShowcaseRole::Preview => preview_initial_rect(work, self.dpi),
             ShowcaseRole::Settings => settings_rect(work, self.dpi),
         };
@@ -301,6 +305,28 @@ impl OwnedWindow {
         self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
         self.popover_height_dip = height_dip.max(1.0);
         self.rect = context_menu_anchor_rect(anchor, work, self.dpi, self.popover_height_dip);
+        set_rect(self.hwnd, self.rect)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Task 10B invokes placement when the native background-app coordinator opens the menu"
+    )]
+    pub(super) fn place_app_menu(
+        &mut self,
+        work: PhysicalRect,
+        anchor: PhysicalRect,
+        height_dip: f32,
+    ) -> Result<()> {
+        if self.role != ShowcaseRole::AppMenu {
+            return Ok(());
+        }
+        // SAFETY: Category 8 (FFI boundary). The owned HWND is live while its
+        // effective DPI is queried; only pure work-area placement consumes it.
+        self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
+        self.popover_height_dip = height_dip.max(1.0);
+        self.rect =
+            crate::background_app_menu_rect(anchor, work, self.dpi, self.popover_height_dip);
         set_rect(self.hwnd, self.rect)
     }
 
@@ -463,7 +489,9 @@ fn window_ex_style(role: ShowcaseRole) -> WINDOW_EX_STYLE {
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP
         }
         ShowcaseRole::Dock => WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        ShowcaseRole::Popover => WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+        ShowcaseRole::Popover | ShowcaseRole::AppMenu => {
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP
+        }
         ShowcaseRole::Preview | ShowcaseRole::Settings => WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
     }
 }
@@ -474,6 +502,7 @@ impl Drop for OwnedWindow {
             ShowcaseRole::Topbar => unregister_topbar_window(self.hwnd),
             ShowcaseRole::Dock => unregister_dock_window(self.hwnd),
             ShowcaseRole::Popover => unregister_popover_window(self.hwnd),
+            ShowcaseRole::AppMenu => unregister_app_menu_window(self.hwnd),
             ShowcaseRole::Preview => unregister_preview_window(self.hwnd),
             ShowcaseRole::Settings => unregister_settings_window(self.hwnd),
         }
@@ -526,9 +555,14 @@ const fn role_name(role: ShowcaseRole) -> &'static str {
         ShowcaseRole::Topbar => "topbar",
         ShowcaseRole::Dock => "dock",
         ShowcaseRole::Popover => "popover",
+        ShowcaseRole::AppMenu => "app-menu",
         ShowcaseRole::Preview => "preview",
         ShowcaseRole::Settings => "settings",
     }
+}
+
+fn app_menu_initial_rect(work: PhysicalRect, dpi: Dpi) -> PhysicalRect {
+    crate::background_app_menu_rect(PhysicalRect::new(work.x, work.y, 0, 0), work, dpi, 1.0)
 }
 
 fn preview_initial_rect(work: PhysicalRect, dpi: Dpi) -> PhysicalRect {
@@ -563,7 +597,11 @@ mod tests {
 
     #[test]
     fn custom_alpha_windows_use_no_redirection_bitmap() {
-        for role in [ShowcaseRole::Topbar, ShowcaseRole::Popover] {
+        for role in [
+            ShowcaseRole::Topbar,
+            ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
+        ] {
             let style = window_ex_style(role);
             assert_ne!(style.0 & WS_EX_NOREDIRECTIONBITMAP.0, 0);
         }

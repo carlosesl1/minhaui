@@ -31,7 +31,7 @@ pub(crate) const fn profile_for_role(role: ShowcaseRole) -> Option<LiquidGlassPr
         ShowcaseRole::Dock => Some(LiquidGlassProfile::Dock),
         ShowcaseRole::Popover => Some(LiquidGlassProfile::Panel),
         ShowcaseRole::Topbar => Some(LiquidGlassProfile::ActiveModule),
-        ShowcaseRole::Preview | ShowcaseRole::Settings => None,
+        ShowcaseRole::AppMenu | ShowcaseRole::Preview | ShowcaseRole::Settings => None,
     }
 }
 

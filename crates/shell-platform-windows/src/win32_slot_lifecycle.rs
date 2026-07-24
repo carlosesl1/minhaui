@@ -39,6 +39,12 @@ pub(super) fn create_slot(
         work_area,
         features.backdrop_enabled,
     )?;
+    let app_menu = OwnedWindow::create(
+        class,
+        shell_renderer::native::ShowcaseRole::AppMenu,
+        work_area,
+        features.backdrop_enabled,
+    )?;
     let preview = OwnedWindow::create(
         class,
         shell_renderer::native::ShowcaseRole::Preview,
@@ -79,6 +85,7 @@ pub(super) fn create_slot(
             preview: &preview,
             settings: &settings,
         },
+        &app_menu,
         dock_controller,
         topbar_controller,
         config.clone(),
@@ -91,6 +98,7 @@ pub(super) fn create_slot(
         topbar,
         dock,
         popover,
+        app_menu,
         preview,
         settings,
     })

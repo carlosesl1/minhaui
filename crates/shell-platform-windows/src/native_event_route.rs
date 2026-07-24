@@ -25,6 +25,7 @@ pub struct NativeWindowSlot {
     popover: NativeWindowId,
     settings: NativeWindowId,
     preview: NativeWindowId,
+    app_menu: NativeWindowId,
 }
 
 impl NativeWindowSlot {
@@ -36,6 +37,7 @@ impl NativeWindowSlot {
         popover: NativeWindowId,
         settings: NativeWindowId,
         preview: NativeWindowId,
+        app_menu: NativeWindowId,
     ) -> Self {
         Self {
             monitor,
@@ -44,6 +46,7 @@ impl NativeWindowSlot {
             popover,
             settings,
             preview,
+            app_menu,
         }
     }
 
@@ -53,6 +56,7 @@ impl NativeWindowSlot {
             || self.popover.value() == window.value()
             || self.settings.value() == window.value()
             || self.preview.value() == window.value()
+            || self.app_menu.value() == window.value()
     }
 }
 

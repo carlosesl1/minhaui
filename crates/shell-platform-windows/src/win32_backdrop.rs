@@ -21,6 +21,7 @@ const fn request_for(role: ShowcaseRole, enabled: bool) -> BackdropRequest {
             ShowcaseRole::Topbar
             | ShowcaseRole::Dock
             | ShowcaseRole::Popover
+            | ShowcaseRole::AppMenu
             | ShowcaseRole::Preview,
         ) => BackdropRequest::None,
     }
@@ -78,6 +79,10 @@ mod tests {
         );
         assert_eq!(
             request_for(ShowcaseRole::Popover, true),
+            BackdropRequest::None
+        );
+        assert_eq!(
+            request_for(ShowcaseRole::AppMenu, true),
             BackdropRequest::None
         );
         assert_eq!(

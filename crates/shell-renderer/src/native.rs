@@ -64,6 +64,7 @@ pub enum ShowcaseRole {
     Topbar,
     Dock,
     Popover,
+    AppMenu,
     Preview,
     Settings,
 }

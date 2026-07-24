@@ -24,6 +24,7 @@ pub(super) struct ShellSlot {
     pub(super) topbar: TopbarWindow,
     pub(super) dock: OwnedWindow,
     pub(super) popover: OwnedWindow,
+    pub(super) app_menu: OwnedWindow,
     pub(super) preview: OwnedWindow,
     pub(super) settings: OwnedWindow,
 }
@@ -50,6 +51,7 @@ impl ShellSlot {
             &mut self.topbar,
             &mut self.dock,
             &mut self.popover,
+            &mut self.app_menu,
             &mut self.preview,
             &mut self.settings,
         )
@@ -72,6 +74,7 @@ impl ShellSlot {
         print_window(&self.topbar, self.runtime.device_kind());
         print_window(&self.dock, self.runtime.device_kind());
         print_window(&self.popover, self.runtime.device_kind());
+        print_window(&self.app_menu, self.runtime.device_kind());
         print_window(&self.preview, self.runtime.device_kind());
         print_window(&self.settings, self.runtime.device_kind());
     }
@@ -97,6 +100,7 @@ impl ShellSlot {
             native_window_id(self.popover.hwnd),
             native_window_id(self.settings.hwnd),
             native_window_id(self.preview.hwnd),
+            native_window_id(self.app_menu.hwnd),
         )
     }
 
@@ -129,13 +133,17 @@ impl ShellSlot {
         }
         self.settings.reposition(work_area)?;
         self.preview.reposition(work_area)?;
-        self.runtime.rebuild_native_surfaces(SurfaceWindows {
-            topbar: &self.topbar,
-            dock: &self.dock,
-            popover: &self.popover,
-            preview: &self.preview,
-            settings: &self.settings,
-        })
+        self.app_menu.reposition(work_area)?;
+        self.runtime.rebuild_native_surfaces_with_app_menu(
+            SurfaceWindows {
+                topbar: &self.topbar,
+                dock: &self.dock,
+                popover: &self.popover,
+                preview: &self.preview,
+                settings: &self.settings,
+            },
+            &self.app_menu,
+        )
     }
 }
 

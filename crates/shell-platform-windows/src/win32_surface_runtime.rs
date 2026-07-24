@@ -81,6 +81,7 @@ pub(super) struct SurfaceBuildPlan<'scene> {
     pub(super) topbar: SurfaceFrame<'scene>,
     pub(super) dock: SurfaceFrame<'scene>,
     pub(super) popover: SurfaceFrame<'scene>,
+    pub(super) app_menu: SurfaceFrame<'scene>,
     pub(super) preview: SurfaceFrame<'scene>,
     pub(super) settings: SurfaceFrame<'scene>,
     pub(super) dock_visibility_offset_y: f32,
@@ -218,6 +219,7 @@ struct SurfaceSet<S> {
     topbar: S,
     dock: S,
     popover: S,
+    app_menu: S,
     preview: S,
     settings: S,
 }
@@ -228,6 +230,7 @@ impl<S> SurfaceSet<S> {
             ShowcaseRole::Topbar => &self.topbar,
             ShowcaseRole::Dock => &self.dock,
             ShowcaseRole::Popover => &self.popover,
+            ShowcaseRole::AppMenu => &self.app_menu,
             ShowcaseRole::Preview => &self.preview,
             ShowcaseRole::Settings => &self.settings,
         }
@@ -238,6 +241,7 @@ impl<S> SurfaceSet<S> {
             ShowcaseRole::Topbar => &mut self.topbar,
             ShowcaseRole::Dock => &mut self.dock,
             ShowcaseRole::Popover => &mut self.popover,
+            ShowcaseRole::AppMenu => &mut self.app_menu,
             ShowcaseRole::Preview => &mut self.preview,
             ShowcaseRole::Settings => &mut self.settings,
         }
@@ -409,6 +413,7 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         let topbar = Self::create_surface(&renderer, plan.topbar)?;
         let dock = Self::create_surface(&renderer, plan.dock)?;
         let popover = Self::create_surface(&renderer, plan.popover)?;
+        let app_menu = Self::create_surface(&renderer, plan.app_menu)?;
         let preview = Self::create_surface(&renderer, plan.preview)?;
         let settings = Self::create_surface(&renderer, plan.settings)?;
         A::set_visibility_state(
@@ -424,6 +429,7 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             topbar,
             dock,
             popover,
+            app_menu,
             preview,
             settings,
         };
@@ -435,6 +441,7 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             (plan.topbar, ShowcaseRole::Topbar),
             (plan.dock, ShowcaseRole::Dock),
             (plan.popover, ShowcaseRole::Popover),
+            (plan.app_menu, ShowcaseRole::AppMenu),
             (plan.preview, ShowcaseRole::Preview),
             (plan.settings, ShowcaseRole::Settings),
         ] {
@@ -883,6 +890,7 @@ mod tests {
             topbar: frame(ShowcaseRole::Topbar),
             dock: frame(ShowcaseRole::Dock),
             popover: frame(ShowcaseRole::Popover),
+            app_menu: frame(ShowcaseRole::AppMenu),
             preview: frame(ShowcaseRole::Preview),
             settings: frame(ShowcaseRole::Settings),
             dock_visibility_offset_y: 0.0,
@@ -906,15 +914,17 @@ mod tests {
             ShowcaseRole::Topbar => (1, 11),
             ShowcaseRole::Dock => (2, 12),
             ShowcaseRole::Popover => (3, 13),
-            ShowcaseRole::Preview => (4, 14),
-            ShowcaseRole::Settings => (5, 15),
+            ShowcaseRole::AppMenu => (4, 14),
+            ShowcaseRole::Preview => (5, 15),
+            ShowcaseRole::Settings => (6, 16),
         }
     }
 
-    const ROLES: [ShowcaseRole; 5] = [
+    const ROLES: [ShowcaseRole; 6] = [
         ShowcaseRole::Topbar,
         ShowcaseRole::Dock,
         ShowcaseRole::Popover,
+        ShowcaseRole::AppMenu,
         ShowcaseRole::Preview,
         ShowcaseRole::Settings,
     ];
@@ -1523,6 +1533,7 @@ mod tests {
                 installed.topbar.role,
                 installed.dock.role,
                 installed.popover.role,
+                installed.app_menu.role,
                 installed.preview.role,
                 installed.settings.role,
             ],
@@ -1530,6 +1541,7 @@ mod tests {
                 ShowcaseRole::Topbar,
                 ShowcaseRole::Dock,
                 ShowcaseRole::Popover,
+                ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
                 ShowcaseRole::Settings,
             ]
@@ -1547,6 +1559,7 @@ mod tests {
                 ShowcaseRole::Topbar,
                 ShowcaseRole::Dock,
                 ShowcaseRole::Popover,
+                ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
                 ShowcaseRole::Settings,
             ]
@@ -1561,6 +1574,7 @@ mod tests {
                 ShowcaseRole::Topbar,
                 ShowcaseRole::Dock,
                 ShowcaseRole::Popover,
+                ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
                 ShowcaseRole::Settings,
             ]
@@ -1812,6 +1826,7 @@ mod tests {
             ShowcaseRole::Topbar,
             ShowcaseRole::Dock,
             ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
             ShowcaseRole::Preview,
             ShowcaseRole::Settings,
         ] {
@@ -1848,6 +1863,7 @@ mod tests {
             ShowcaseRole::Topbar,
             ShowcaseRole::Dock,
             ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
             ShowcaseRole::Preview,
             ShowcaseRole::Settings,
         ] {

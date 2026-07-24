@@ -98,6 +98,10 @@ impl RuntimeOrchestrator {
             | PlatformEvent::PopoverPointerMoved(_)
             | PlatformEvent::PopoverContextRequested(_)
             | PlatformEvent::PopoverScroll(_) => RuntimeAction::None,
+            PlatformEvent::AppMenuKey(_)
+            | PlatformEvent::AppMenuPointerMoved(_)
+            | PlatformEvent::AppMenuPointerReleased(_)
+            | PlatformEvent::AppMenuDismissed => RuntimeAction::None,
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. }

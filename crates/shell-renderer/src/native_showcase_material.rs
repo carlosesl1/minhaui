@@ -38,7 +38,7 @@ pub(crate) fn draw_shell_material(
         ShowcaseRole::Dock => draw_dock_material(context, surface, brushes),
         ShowcaseRole::Topbar => draw_topbar_material(context, surface, brushes),
         ShowcaseRole::Popover => draw_panel_material(context, surface, brushes),
-        ShowcaseRole::Preview | ShowcaseRole::Settings => {}
+        ShowcaseRole::AppMenu | ShowcaseRole::Preview | ShowcaseRole::Settings => {}
     }
 }
 

@@ -1,3 +1,5 @@
+#[path = "../tests/background_app_menu.rs"]
+mod background_app_menu;
 #[path = "../tests/dock_context_menu.rs"]
 mod dock_context_menu;
 #[path = "../tests/dock_controller.rs"]

@@ -28,9 +28,10 @@ use crate::win32_timer::TimerGuard;
 use crate::win32_window::OwnedWindow;
 use crate::win32_windowing::{window_monitor_bounds, window_work_area};
 use crate::{
-    DefaultPopoverDataProvider, DockContextMenuController, DockController, DockVisibilityMotion,
-    PlatformEvent, PopoverController, PreviewController, PreviewEffect, PreviewEntranceMotion,
-    PreviewPhase, QuickSettingsController, RuntimeAction, RuntimeOrchestrator, SettingsController,
+    BackgroundAppMenuController, DefaultPopoverDataProvider, DockContextMenuController,
+    DockController, DockVisibilityMotion, PlatformEvent, PopoverController, PreviewController,
+    PreviewEffect, PreviewEntranceMotion, PreviewPhase, QueuedBackgroundAppMenuAction,
+    QuickSettingsController, RuntimeAction, RuntimeOrchestrator, SettingsController,
     TopbarController,
 };
 
@@ -48,6 +49,8 @@ pub(super) struct RuntimeSurfaces {
     pub(super) quick_settings_controller: QuickSettingsController,
     pub(super) media_session_worker: Option<crate::media_session_worker::MediaSessionWorker>,
     pub(super) context_menu_controller: DockContextMenuController,
+    pub(super) background_app_menu_controller: BackgroundAppMenuController,
+    app_menu_endpoint: SurfaceEndpoint,
     pub(super) settings_controller: SettingsController,
     pub(super) popover_provider: DefaultPopoverDataProvider<crate::OfflineWeatherProvider>,
     dock_animation_timer: Option<TimerGuard>,
@@ -97,6 +100,7 @@ impl RuntimeSurfaces {
     pub(super) fn new(
         options: RuntimeOptions,
         windows: SurfaceWindows<'_>,
+        app_menu: &OwnedWindow,
         dock_controller: DockController,
         topbar_controller: TopbarController,
         config: shell_config::ShellConfigV1,
@@ -122,6 +126,8 @@ impl RuntimeSurfaces {
             ),
             media_session_worker: None,
             context_menu_controller: DockContextMenuController::new(),
+            background_app_menu_controller: BackgroundAppMenuController::new(),
+            app_menu_endpoint: surface_endpoint(app_menu),
             settings_controller: SettingsController::new(config),
             popover_provider: DefaultPopoverDataProvider::offline(),
             dock_animation_timer: None,
@@ -157,6 +163,7 @@ impl RuntimeSurfaces {
         topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
         popover: &mut OwnedWindow,
+        app_menu: &mut OwnedWindow,
         preview: &mut OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<bool> {
@@ -257,6 +264,8 @@ impl RuntimeSurfaces {
         };
         match &event {
             PlatformEvent::DismissTransientOverlays => {
+                self.background_app_menu_controller.dismiss();
+                app_menu.hide();
                 self.dismiss_transient_overlays(topbar, dock, popover, preview, settings)?;
                 let effects = self.preview_controller.dismiss(now_ms());
                 self.apply_preview_effects(&effects, topbar, dock, popover, preview, settings)?;
@@ -751,6 +760,35 @@ impl RuntimeSurfaces {
                 }
                 return Ok(true);
             }
+            PlatformEvent::AppMenuKey(key) => {
+                let actions = self.background_app_menu_controller.handle_key(*key);
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuPointerMoved(point) => {
+                let actions = self
+                    .background_app_menu_controller
+                    .handle_pointer_move(*point, crate::win32_dock_render::dip_surface(app_menu));
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuPointerReleased(point) => {
+                let actions = self.background_app_menu_controller.handle_pointer_release(
+                    *point,
+                    crate::win32_dock_render::dip_surface(app_menu),
+                );
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuDismissed => {
+                let actions = self.background_app_menu_controller.dismiss();
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
             PlatformEvent::SettingsKey(key) => {
                 let actions = self
                     .settings_controller
@@ -832,6 +870,8 @@ impl RuntimeSurfaces {
                 );
                 self.snap_dock_visibility(dock, work, config, hidden)?;
                 self.place_active_overlay(work, topbar, dock, popover)?;
+                app_menu.reposition(work)?;
+                self.app_menu_endpoint = surface_endpoint(app_menu);
                 self.rebuild_native_surfaces(SurfaceWindows {
                     topbar,
                     dock,
@@ -851,6 +891,8 @@ impl RuntimeSurfaces {
                 );
                 self.snap_dock_visibility(dock, work, config, hidden)?;
                 popover.refresh_rect()?;
+                app_menu.refresh_rect()?;
+                self.app_menu_endpoint = surface_endpoint(app_menu);
                 preview.refresh_rect()?;
                 settings.refresh_rect()?;
                 self.rebuild_native_surfaces(SurfaceWindows {
@@ -1068,6 +1110,15 @@ impl RuntimeSurfaces {
         Ok(())
     }
 
+    pub(super) fn rebuild_native_surfaces_with_app_menu(
+        &mut self,
+        windows: SurfaceWindows<'_>,
+        app_menu: &OwnedWindow,
+    ) -> Result<()> {
+        self.app_menu_endpoint = surface_endpoint(app_menu);
+        self.rebuild_native_surfaces(windows)
+    }
+
     pub(super) fn rebuild_native_surfaces(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
         let now = now_ms();
         let preview_scene = self.preview_scene.clone();
@@ -1085,11 +1136,13 @@ impl RuntimeSurfaces {
             .is_open()
             .then(|| self.quick_settings_controller.scene());
         let context_menu_scene = self.context_menu_controller.scene();
+        let app_menu_scene = self.background_app_menu_controller.scene();
         let settings_scene = self.settings_controller.scene();
         let targets = canonical_surface_targets(SurfaceEndpoints {
             topbar: surface_endpoint(windows.topbar),
             dock: surface_endpoint(windows.dock),
             popover: surface_endpoint(windows.popover),
+            app_menu: self.app_menu_endpoint,
             preview: surface_endpoint(windows.preview),
             settings: surface_endpoint(windows.settings),
         });
@@ -1120,6 +1173,10 @@ impl RuntimeSurfaces {
                 context_menu: context_menu_scene.as_ref(),
                 settings: None,
                 preview: None,
+            },
+            app_menu: ShellScenes {
+                context_menu: app_menu_scene.as_ref(),
+                ..empty_scenes()
             },
             preview: ShellScenes {
                 preview: preview_scene.as_ref(),
@@ -1168,6 +1225,53 @@ impl RuntimeSurfaces {
             SurfaceUpdate::RebuildAllRequired => self.rebuild_native_surfaces(windows),
         }
     }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "surface recovery needs the complete slot alongside the dedicated menu window"
+    )]
+    fn apply_background_app_menu_actions(
+        &mut self,
+        actions: &[QueuedBackgroundAppMenuAction],
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        popover: &OwnedWindow,
+        app_menu: &OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<bool> {
+        for action in actions {
+            match action {
+                QueuedBackgroundAppMenuAction::Redraw => {
+                    let scene = self.background_app_menu_controller.scene();
+                    let update = self.surface_runtime.redraw(
+                        ShowcaseRole::AppMenu,
+                        ShellScenes {
+                            context_menu: scene.as_ref(),
+                            ..empty_scenes()
+                        },
+                    );
+                    self.complete_surface_update(
+                        update,
+                        SurfaceWindows {
+                            topbar,
+                            dock,
+                            popover,
+                            preview,
+                            settings,
+                        },
+                    )?;
+                }
+                QueuedBackgroundAppMenuAction::Dismiss
+                | QueuedBackgroundAppMenuAction::Execute(_) => {
+                    // Task 10B consumes the typed command after native activation
+                    // lifecycle wiring. Task 10A only closes this nonmodal surface.
+                    app_menu.hide();
+                }
+            }
+        }
+        Ok(true)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1181,6 +1285,7 @@ struct SurfaceEndpoints {
     topbar: SurfaceEndpoint,
     dock: SurfaceEndpoint,
     popover: SurfaceEndpoint,
+    app_menu: SurfaceEndpoint,
     preview: SurfaceEndpoint,
     settings: SurfaceEndpoint,
 }
@@ -1190,6 +1295,7 @@ struct CanonicalSurfaceTargets {
     topbar: SurfaceTarget,
     dock: SurfaceTarget,
     popover: SurfaceTarget,
+    app_menu: SurfaceTarget,
     preview: SurfaceTarget,
     settings: SurfaceTarget,
 }
@@ -1199,6 +1305,7 @@ struct CanonicalSurfaceScenes<'scene> {
     topbar: ShellScenes<'scene>,
     dock: ShellScenes<'scene>,
     popover: ShellScenes<'scene>,
+    app_menu: ShellScenes<'scene>,
     preview: ShellScenes<'scene>,
     settings: ShellScenes<'scene>,
 }
@@ -1267,6 +1374,11 @@ const fn canonical_surface_targets(endpoints: SurfaceEndpoints) -> CanonicalSurf
             role: ShowcaseRole::Popover,
             metrics: endpoints.popover.metrics,
         },
+        app_menu: SurfaceTarget {
+            hwnd: endpoints.app_menu.hwnd,
+            role: ShowcaseRole::AppMenu,
+            metrics: endpoints.app_menu.metrics,
+        },
         preview: SurfaceTarget {
             hwnd: endpoints.preview.hwnd,
             role: ShowcaseRole::Preview,
@@ -1297,6 +1409,10 @@ const fn surface_build_plan<'scene>(
         popover: SurfaceFrame {
             target: targets.popover,
             scenes: scenes.popover,
+        },
+        app_menu: SurfaceFrame {
+            target: targets.app_menu,
+            scenes: scenes.app_menu,
         },
         preview: SurfaceFrame {
             target: targets.preview,
@@ -1369,8 +1485,9 @@ mod tests {
             topbar: endpoint(generation + 1, 101 + generation as u32, 11),
             dock: endpoint(generation + 2, 102 + generation as u32, 12),
             popover: endpoint(generation + 3, 103 + generation as u32, 13),
-            preview: endpoint(generation + 4, 104 + generation as u32, 14),
-            settings: endpoint(generation + 5, 105 + generation as u32, 15),
+            app_menu: endpoint(generation + 4, 104 + generation as u32, 14),
+            preview: endpoint(generation + 5, 105 + generation as u32, 15),
+            settings: endpoint(generation + 6, 106 + generation as u32, 16),
         }
     }
 
@@ -1379,6 +1496,7 @@ mod tests {
             topbar: empty_scenes(),
             dock: empty_scenes(),
             popover: empty_scenes(),
+            app_menu: empty_scenes(),
             preview: ShellScenes {
                 preview,
                 ..empty_scenes()
@@ -1397,7 +1515,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_plan_maps_five_distinct_endpoints_to_their_slots() {
+    fn canonical_plan_maps_six_distinct_endpoints_to_their_slots() {
         let plan = surface_build_plan(
             canonical_surface_targets(endpoints(10)),
             scenes(None),
@@ -1407,6 +1525,7 @@ mod tests {
             plan.topbar.target,
             plan.dock.target,
             plan.popover.target,
+            plan.app_menu.target,
             plan.preview.target,
             plan.settings.target,
         ]
@@ -1417,8 +1536,9 @@ mod tests {
                 (11, ShowcaseRole::Topbar, (111, 11)),
                 (12, ShowcaseRole::Dock, (112, 12)),
                 (13, ShowcaseRole::Popover, (113, 13)),
-                (14, ShowcaseRole::Preview, (114, 14)),
-                (15, ShowcaseRole::Settings, (115, 15)),
+                (14, ShowcaseRole::AppMenu, (114, 14)),
+                (15, ShowcaseRole::Preview, (115, 15)),
+                (16, ShowcaseRole::Settings, (116, 16)),
             ]
         );
         assert_eq!(plan.dock_visibility_opacity, 0.25);
@@ -1440,8 +1560,8 @@ mod tests {
             composition(0.9, 0.8),
         );
 
-        assert_eq!(first.preview.target.hwnd.0 as usize, 104);
-        assert_eq!(second.preview.target.hwnd.0 as usize, 204);
+        assert_eq!(first.preview.target.hwnd.0 as usize, 105);
+        assert_eq!(second.preview.target.hwnd.0 as usize, 205);
         assert_eq!(first.preview.scenes.preview.unwrap().item().value(), 101);
         assert_eq!(second.preview.scenes.preview.unwrap().item().value(), 202);
         assert_eq!(first.dock_visibility_opacity, 0.1);

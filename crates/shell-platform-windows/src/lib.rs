@@ -199,6 +199,11 @@ mod win32_sample_state;
 #[cfg(windows)]
 mod win32_popover_render;
 
+#[allow(
+    dead_code,
+    reason = "Task 10A defines the fallback menu contract; Task 10B wires its native opener"
+)]
+mod background_app_menu;
 mod background_apps;
 #[allow(
     unsafe_code,
@@ -308,6 +313,14 @@ mod window_preview;
 #[cfg(test)]
 mod integration_tests;
 
+#[allow(
+    unused_imports,
+    reason = "Task 10B consumes the typed fallback command after native activation wiring"
+)]
+pub(crate) use background_app_menu::{
+    BackgroundAppMenuCommand, BackgroundAppMenuController, QueuedBackgroundAppMenuAction,
+    background_app_menu_rect,
+};
 pub(crate) use background_apps::BackgroundAppId;
 pub(crate) use dock_context_menu::{
     DockContextMenuController, DockContextMenuItem, QueuedContextMenuAction,
@@ -432,6 +445,10 @@ pub(crate) enum PlatformEvent {
     PopoverPointerMoved(DipPoint),
     PopoverContextRequested(DipPoint),
     PopoverScroll(isize),
+    AppMenuKey(PopoverKey),
+    AppMenuPointerMoved(DipPoint),
+    AppMenuPointerReleased(DipPoint),
+    AppMenuDismissed,
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SyncWindows,
