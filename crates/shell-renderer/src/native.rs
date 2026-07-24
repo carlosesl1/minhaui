@@ -5,7 +5,7 @@ mod resize;
 
 pub use animation::SurfaceVisibilityAnimation;
 
-use windows::Win32::Foundation::{E_INVALIDARG, HWND};
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -36,7 +36,7 @@ use crate::ShowcaseTokens;
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
 use crate::native_liquid_glass::{DockLiquidGlassResources, LiquidGlassMode, liquid_glass_mode};
-use crate::native_present::{present_swap_chain, present_swap_chain_blocking};
+use crate::native_present::{present_swap_chain, present_swap_chain_initial};
 use crate::native_showcase::{ShowcaseStyle, draw_showcase};
 use crate::native_showcase_resources::{DockInsetBitmap, create_dock_inset_bitmap};
 use crate::{
@@ -324,14 +324,8 @@ impl CompositionRenderer {
             dock_inset,
             dock_liquid_glass,
         };
-        match surface.present_blocking()? {
-            PresentOutcome::Presented | PresentOutcome::FrameSkipped => Ok(surface),
-            PresentOutcome::DeviceLost(kind) => Err(windows::core::Error::new(
-                device_loss_hresult(kind),
-                format!("recoverable device loss during initial present: {kind:?}"),
-            )),
-            PresentOutcome::Failed(code) => Err(windows::core::Error::from_hresult(code)),
-        }
+        validate_initial_present_outcome(surface.present_initial()?)?;
+        Ok(surface)
     }
 
     pub fn redraw_surface(
@@ -413,6 +407,21 @@ impl CompositionRenderer {
     }
 }
 
+fn validate_initial_present_outcome(outcome: PresentOutcome) -> Result<()> {
+    match outcome {
+        PresentOutcome::Presented => Ok(()),
+        PresentOutcome::FrameSkipped => Err(windows::core::Error::new(
+            E_FAIL,
+            "initial immediate present unexpectedly skipped its frame",
+        )),
+        PresentOutcome::DeviceLost(kind) => Err(windows::core::Error::new(
+            device_loss_hresult(kind),
+            format!("recoverable device loss during initial present: {kind:?}"),
+        )),
+        PresentOutcome::Failed(code) => Err(windows::core::Error::from_hresult(code)),
+    }
+}
+
 impl WindowSurface {
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
@@ -428,8 +437,8 @@ impl WindowSurface {
         present_swap_chain(&self.swap_chain, &self.device)
     }
 
-    fn present_blocking(&self) -> Result<PresentOutcome> {
-        present_swap_chain_blocking(&self.swap_chain, &self.device)
+    fn present_initial(&self) -> Result<PresentOutcome> {
+        present_swap_chain_initial(&self.swap_chain, &self.device)
     }
 
     pub fn set_opacity(&self, opacity: f32) -> Result<()> {
@@ -481,7 +490,10 @@ impl WindowSurface {
 mod tests {
     use crate::Dpi;
 
-    use super::{BackBufferCache, SurfaceMetrics, WindowSurface};
+    use super::{
+        BackBufferCache, PresentOutcome, SurfaceMetrics, WindowSurface,
+        validate_initial_present_outcome,
+    };
 
     #[test]
     fn back_buffer_cache_reuses_each_slot_and_clears_before_resize() {
@@ -537,5 +549,13 @@ mod tests {
         let accessor: fn(&WindowSurface) -> SurfaceMetrics = WindowSurface::metrics;
 
         let _ = accessor;
+    }
+
+    #[test]
+    fn initial_frame_backpressure_never_installs_a_blank_surface() {
+        let error = validate_initial_present_outcome(PresentOutcome::FrameSkipped)
+            .expect_err("a skipped first frame must reject the surface");
+
+        assert_eq!(error.code(), windows::Win32::Foundation::E_FAIL);
     }
 }

@@ -73,6 +73,10 @@ mod win32_slots;
 mod win32_slot_lifecycle;
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the owned observation worker initializes COM and posts wake messages here"
+)]
 mod win32_shell_observation;
 
 #[cfg(windows)]
@@ -151,7 +155,7 @@ mod win32_popover_render;
 mod background_apps;
 #[allow(
     unsafe_code,
-    reason = "the one-shot worker only uses PostMessageW to wake the owner window"
+    reason = "the owned catalog worker only uses PostMessageW to wake the owner window"
 )]
 mod background_apps_worker;
 mod dock_context_menu;
@@ -165,6 +169,7 @@ mod dock_types;
 mod dock_visibility_motion;
 mod dock_visuals;
 mod dock_window_sync;
+mod latest_request_worker;
 mod native_event_route;
 mod popover_adapters;
 mod popover_controller;
@@ -282,6 +287,7 @@ pub(crate) enum PlatformEvent {
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SyncWindows,
+    ShellObservationLoaded(win32_shell_observation::ShellObservationLoadResult),
     BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),
     QaExitRequested,
     CloseRequested,

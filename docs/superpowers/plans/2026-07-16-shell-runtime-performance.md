@@ -15,8 +15,9 @@ timers, rendering, and launch configuration.
 - State owner: the process runtime owns discovery/status cache and its Poll
   Budget; each Shell Slot continues to own windows, controllers, and timers.
 - Dependencies: none.
-- UI thread: one bounded discovery/status capture per process and interval;
-  background concurrency is intentionally deferred.
+- UI thread: somente agenda capturas e aplica snapshots; um worker process-wide
+  executa no máximo uma descoberta/status por vez e coalesce solicitações
+  pendentes para a mais recente.
 - Diagnostics: dock redraw timing remains opt-in and asynchronous, now split
   into scene construction and native present stages.
 - Tests: pure cadence policies, process-level polling deduplication, launch
@@ -29,6 +30,7 @@ timers, rendering, and launch configuration.
 ## Delivery
 
 - [x] Centralize window discovery and topbar status.
+- [x] Move recurring discovery and status capture off the UI thread.
 - [x] Separate safe mode from explicit WARP selection.
 - [x] Make the dock edge probe cadence adaptive.
 - [x] Measure dock redraw stages when diagnostics are enabled.

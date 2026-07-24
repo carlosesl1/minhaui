@@ -84,7 +84,12 @@ evitando descoberta e leitura de status duplicadas por monitor.
 
 Module interno que possui os Adapters de descoberta de janelas, identidade e
 status da topbar. Aplica um único Poll Budget por processo e distribui a Shell
-Observation atual aos Shell Slots. Não possui controllers, janelas nativas ou
+Observation atual aos Shell Slots. A thread da UI apenas agenda capturas e
+aplica resultados imutáveis; um worker process-wide, com uma única captura
+ativa e somente a solicitação pendente mais recente, possui o trabalho
+potencialmente lento. Cada solicitação recebe uma geração, resultados anteriores
+à geração mais recente são descartados e o wake usa a fila da thread da UI, sem
+depender do lifetime de um HWND. Não possui controllers, janelas nativas ou
 estado visual.
 
 ## Dock Edge Probe

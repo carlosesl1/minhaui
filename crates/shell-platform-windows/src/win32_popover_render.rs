@@ -83,7 +83,7 @@ impl RuntimeSurfaces {
                     )?;
                     popover.show_activating();
                     if let Some(generation) = background_generation {
-                        crate::background_apps_worker::request_background_apps(
+                        self.background_apps_worker.request(
                             generation,
                             crate::win32_event_queue::native_window_id(topbar.hwnd),
                         );

@@ -35,6 +35,7 @@ const EDGE_REVEAL_GRACE: Duration = Duration::from_millis(450);
 
 pub(super) struct RuntimeSurfaces {
     pub(super) reduced_motion: bool,
+    pub(super) background_apps_worker: crate::background_apps_worker::BackgroundAppsWorker,
     pub(super) surface_runtime: Win32NativeSurfaceRuntime,
     pub(super) fullscreen_suppressed: bool,
     orchestration: RuntimeOrchestrator,
@@ -97,6 +98,7 @@ impl RuntimeSurfaces {
     ) -> Result<Self> {
         let mut runtime = Self {
             reduced_motion: options.reduced_motion,
+            background_apps_worker: crate::background_apps_worker::BackgroundAppsWorker::new()?,
             surface_runtime: Win32NativeSurfaceRuntime::new(NativeSurfaceOptions {
                 force_warp: options.force_warp,
                 solid_material: options.solid_material,
@@ -627,6 +629,9 @@ impl RuntimeSurfaces {
             }
             PlatformEvent::SyncWindows => {
                 return Ok(true);
+            }
+            PlatformEvent::ShellObservationLoaded(_) => {
+                unreachable!("handled by the process observation runtime")
             }
             PlatformEvent::BackgroundAppsLoaded(_) => unreachable!("handled before routing"),
             PlatformEvent::TaskbarCreated

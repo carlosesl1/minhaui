@@ -120,17 +120,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         liquid_glass,
     };
     let shell_config = crate::win32_config::load_config();
-    let mut observation_runtime = ShellObservationRuntime::new(1_000);
-    let initial_observation = observation_runtime
-        .refresh_if_changed(crate::win32_owner::now_ms())?
-        .then(|| observation_runtime.current())
-        .flatten()
-        .ok_or_else(|| {
-            windows::core::Error::new(
-                invalid_arg(),
-                "initial shell observation was unexpectedly deferred",
-            )
-        })?;
+    let mut observation_runtime =
+        ShellObservationRuntime::new(1_000, crate::win32_owner::now_ms())?;
+    let initial_observation = observation_runtime.current();
     let mut slots = create_slots(
         &class,
         &monitors,
@@ -177,6 +169,7 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             event,
         )
     });
+    drop(observation_runtime);
     drop(slots);
     drop(timer);
     drop(class);

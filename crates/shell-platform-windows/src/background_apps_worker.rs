@@ -2,12 +2,13 @@ use crate::background_apps::BackgroundAppEntry;
 use crate::win32_background_apps::{BackgroundAppsError, capture_background_apps};
 
 #[cfg(windows)]
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, WPARAM};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
+use crate::latest_request_worker::LatestRequestWorker;
 #[cfg(windows)]
-use crate::win32_event_queue::{RoutedPlatformEvent, queue_event};
+use crate::win32_event_queue::{RoutedPlatformEvent, queue_event_with_wake};
 #[cfg(windows)]
 use crate::{NativeWindowId, PlatformEvent};
 
@@ -65,42 +66,85 @@ pub(crate) fn load_request(
     BackgroundAppsLoadResult::new(generation, source.capture())
 }
 
-#[cfg(windows)]
-pub(super) fn request_background_apps(generation: u64, wake_window: NativeWindowId) {
-    std::thread::spawn(move || {
-        let result = load_request(&NativeBackgroundAppsSource, generation);
-        queue_event(RoutedPlatformEvent::window_id(
+#[derive(Clone, Copy)]
+struct BackgroundAppsRequest {
+    generation: u64,
+    wake_window: NativeWindowId,
+}
+
+pub(crate) struct BackgroundAppsWorker {
+    worker: LatestRequestWorker<BackgroundAppsRequest>,
+}
+
+impl BackgroundAppsWorker {
+    fn with_source<S, F>(source: S, mut deliver: F) -> std::io::Result<Self>
+    where
+        S: BackgroundAppsSource + Send + 'static,
+        F: FnMut(BackgroundAppsLoadResult, NativeWindowId) + Send + 'static,
+    {
+        let worker = LatestRequestWorker::spawn(
+            "background-apps",
+            move |request: BackgroundAppsRequest| {
+                deliver(
+                    load_request(&source, request.generation),
+                    request.wake_window,
+                );
+            },
+        )?;
+        Ok(Self { worker })
+    }
+
+    pub(crate) fn request(&self, generation: u64, wake_window: NativeWindowId) {
+        self.worker.submit(BackgroundAppsRequest {
+            generation,
             wake_window,
-            PlatformEvent::BackgroundAppsLoaded(result),
-        ));
-        wake_owner_window(wake_window);
-    });
+        });
+    }
 }
 
 #[cfg(windows)]
-fn wake_owner_window(window: NativeWindowId) {
+impl BackgroundAppsWorker {
+    pub(super) fn new() -> windows::core::Result<Self> {
+        Self::with_source(NativeBackgroundAppsSource, |result, wake_window| {
+            let event = RoutedPlatformEvent::window_id(
+                wake_window,
+                PlatformEvent::BackgroundAppsLoaded(result),
+            );
+            let _ = queue_event_with_wake(event, || wake_owner_window(wake_window));
+        })
+        .map_err(|error| windows::core::Error::new(E_FAIL, error.to_string()))
+    }
+}
+
+#[cfg(windows)]
+fn wake_owner_window(window: NativeWindowId) -> bool {
     let hwnd = HWND(window.value() as *mut core::ffi::c_void);
     // SAFETY: Category 8 (FFI boundary). The HWND is the copied owner-window
     // identity supplied by the UI thread. Posting is asynchronous and carries
     // no borrowed pointer or process data.
-    let _ = unsafe {
+    unsafe {
         PostMessageW(
             Some(hwnd),
             BACKGROUND_APPS_WAKE_MESSAGE,
             WPARAM(0),
             LPARAM(0),
         )
-    };
+        .is_ok()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    use std::time::Duration;
+
     use crate::background_apps::{
         BackgroundAppEntry, NotificationRegistration, RunningProcess, build_background_apps,
     };
     use crate::win32_background_apps::BackgroundAppsError;
 
-    use super::{BackgroundAppsSource, load_request, request_background_apps};
+    use super::{BackgroundAppsSource, BackgroundAppsWorker, load_request};
     use crate::NativeWindowId;
 
     struct FixedBackgroundAppsSource {
@@ -130,9 +174,91 @@ mod tests {
         assert_eq!(snapshot.unwrap().len(), 1);
     }
 
+    struct BlockingBackgroundAppsSource {
+        captures: Arc<AtomicUsize>,
+        first_started: mpsc::Sender<()>,
+        release_first: Arc<(Mutex<bool>, Condvar)>,
+        capture_active: Arc<AtomicBool>,
+        concurrent_capture: Arc<AtomicBool>,
+    }
+
+    impl BackgroundAppsSource for BlockingBackgroundAppsSource {
+        fn capture(&self) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
+            if self.capture_active.swap(true, Ordering::AcqRel) {
+                self.concurrent_capture.store(true, Ordering::Release);
+            }
+            let capture = self.captures.fetch_add(1, Ordering::AcqRel);
+            if capture == 0 {
+                let _ = self.first_started.send(());
+                let (released, wake) = &*self.release_first;
+                let mut released = released
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                while !*released {
+                    released = wake
+                        .wait(released)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }
+            self.capture_active.store(false, Ordering::Release);
+            Ok(Vec::new())
+        }
+    }
+
     #[test]
-    fn native_worker_has_a_one_shot_entrypoint() {
-        let request: fn(u64, NativeWindowId) = request_background_apps;
-        let _ = request;
+    fn worker_serializes_scans_and_coalesces_reopens_to_the_latest_generation() {
+        let captures = Arc::new(AtomicUsize::new(0));
+        let capture_active = Arc::new(AtomicBool::new(false));
+        let concurrent_capture = Arc::new(AtomicBool::new(false));
+        let release_first = Arc::new((Mutex::new(false), Condvar::new()));
+        let (first_started_tx, first_started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let source = BlockingBackgroundAppsSource {
+            captures: Arc::clone(&captures),
+            first_started: first_started_tx,
+            release_first: Arc::clone(&release_first),
+            capture_active: Arc::clone(&capture_active),
+            concurrent_capture: Arc::clone(&concurrent_capture),
+        };
+        let worker = BackgroundAppsWorker::with_source(source, move |result, _wake_window| {
+            let _ = result_tx.send(result.generation());
+        })
+        .expect("worker should start");
+        let wake_window = NativeWindowId::new(7);
+
+        worker.request(1, wake_window);
+        first_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first capture should start");
+        worker.request(2, wake_window);
+        worker.request(3, wake_window);
+        {
+            let (released, wake) = &*release_first;
+            *released
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            wake.notify_all();
+        }
+
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first result should arrive"),
+            1
+        );
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("coalesced result should arrive"),
+            3
+        );
+        assert_eq!(captures.load(Ordering::Acquire), 2);
+        assert!(!concurrent_capture.load(Ordering::Acquire));
+        drop(worker);
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_millis(10)),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+            "dropping the owner must join the worker and release its sink"
+        );
     }
 }

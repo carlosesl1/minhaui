@@ -94,6 +94,7 @@ impl RuntimeOrchestrator {
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. }
             | PlatformEvent::SyncWindows
+            | PlatformEvent::ShellObservationLoaded(_)
             | PlatformEvent::BackgroundAppsLoaded(_) => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,

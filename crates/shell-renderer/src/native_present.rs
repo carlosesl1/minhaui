@@ -58,14 +58,24 @@ pub(crate) fn present_swap_chain(
     swap_chain: &IDXGISwapChain1,
     device: &ID3D11Device,
 ) -> Result<PresentOutcome> {
-    present_swap_chain_with(swap_chain, device, 0, DXGI_PRESENT_DO_NOT_WAIT)
+    let (sync_interval, flags) = redraw_present_parameters();
+    present_swap_chain_with(swap_chain, device, sync_interval, flags)
 }
 
-pub(crate) fn present_swap_chain_blocking(
+pub(crate) fn present_swap_chain_initial(
     swap_chain: &IDXGISwapChain1,
     device: &ID3D11Device,
 ) -> Result<PresentOutcome> {
-    present_swap_chain_with(swap_chain, device, 1, DXGI_PRESENT(0))
+    let (sync_interval, flags) = initial_present_parameters();
+    present_swap_chain_with(swap_chain, device, sync_interval, flags)
+}
+
+const fn redraw_present_parameters() -> (u32, DXGI_PRESENT) {
+    (0, DXGI_PRESENT_DO_NOT_WAIT)
+}
+
+const fn initial_present_parameters() -> (u32, DXGI_PRESENT) {
+    (0, DXGI_PRESENT(0))
 }
 
 fn present_swap_chain_with(
@@ -89,5 +99,28 @@ fn present_swap_chain_with(
     match outcome {
         PresentOutcome::Failed(error) => Err(windows::core::Error::from_hresult(error)),
         value => Ok(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windows::Win32::Graphics::Dxgi::{DXGI_PRESENT, DXGI_PRESENT_DO_NOT_WAIT};
+
+    use super::{initial_present_parameters, redraw_present_parameters};
+
+    #[test]
+    fn redraw_presentation_policy_is_non_blocking() {
+        let (sync_interval, flags) = redraw_present_parameters();
+
+        assert_eq!(sync_interval, 0);
+        assert_eq!(flags, DXGI_PRESENT_DO_NOT_WAIT);
+    }
+
+    #[test]
+    fn initial_presentation_skips_vsync_but_guarantees_the_first_frame() {
+        let (sync_interval, flags) = initial_present_parameters();
+
+        assert_eq!(sync_interval, 0);
+        assert_eq!(flags, DXGI_PRESENT(0));
     }
 }

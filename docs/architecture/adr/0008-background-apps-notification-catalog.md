@@ -28,12 +28,16 @@ uma versão futura do Windows remova o contrato interno utilizado.
 - Um Adapter privado de `shell-platform-windows` lê somente
   `HKCU\Control Panel\NotifyIconSettings` e enumera processos com ToolHelp. O
   registro é um contrato interno do Explorer e não é tratado como API pública.
-- A captura ocorre somente ao abrir o popover, em uma thread descartável. O
-  resultado volta pela fila nativa existente e um `PostMessageW` sem payload
-  apenas acorda o loop da UI.
+- A captura ocorre somente ao abrir o popover, em um worker pertencente ao
+  `Shell Slot`. Cada worker executa no máximo uma captura por vez e conserva
+  somente a solicitação pendente mais recente; reaberturas intermediárias são
+  coalescidas sem criar novas threads.
+- O worker é encerrado e aguardado antes dos HWNDs do `Shell Slot` serem
+  destruídos. O resultado volta pela fila nativa existente e um `PostMessageW`
+  sem payload apenas acorda o loop da UI; se o wake falhar, o resultado é
+  removido da fila em vez de permanecer órfão.
 - A geração do carregamento invalida resultados atrasados após reabertura ou
-  fechamento. Não existe timer, worker persistente ou segunda descoberta de
-  janelas.
+  fechamento. Não existe timer nem segunda descoberta de janelas.
 - A abertura de uma linha primeiro reutiliza a última descoberta centralizada
   de janelas. Sem janela elegível, o Adapter revalida o caminho do mesmo
   processo ativo antes de executar o arquivo.
@@ -51,11 +55,16 @@ uma versão futura do Windows remova o contrato interno utilizado.
 - Custo zero de polling quando o menu está fechado.
 - Trabalho de registro, processos e ícones não bloqueia a thread da UI.
 - O Adapter, a concorrência e os recursos nativos permanecem privados e locais.
+- A concorrência fica limitada pelo número de `Shell Slots`, com uma captura
+  ativa e uma solicitação coalescida por slot.
 - A remoção futura do contrato interno degrada para estado indisponível.
 
 ### Custos e riscos
 
 - `NotifyIconSettings` pode mudar entre versões do Windows.
+- Cada `Shell Slot` mantém uma thread ociosa enquanto existe, em troca de
+  propriedade explícita, encerramento determinístico e ausência de tempestade
+  de threads durante reaberturas.
 - O catálogo representa registros ativos por executável, não callbacks ou menus
   privados de cada ícone.
 - Aplicativos sem registro reconhecível ou sem processo ativo não aparecem.

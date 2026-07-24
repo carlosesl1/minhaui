@@ -6,7 +6,9 @@ use windows::core::Result;
 use crate::win32_appbar::TopbarWindow;
 use crate::win32_event_queue::{RoutedPlatformEvent, native_window_id};
 use crate::win32_owner::{RuntimeSurfaces, ShellObservationWindows, SurfaceWindows};
-use crate::win32_shell_observation::{ShellObservation, ShellObservationRuntime};
+use crate::win32_shell_observation::{
+    ShellObservation, ShellObservationLoadResult, ShellObservationRuntime, ShellObservationUpdate,
+};
 use crate::win32_slot_lifecycle::{create_slot, reconcile_slots};
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{OwnedWindow, WindowClass, print_window};
@@ -160,14 +162,16 @@ pub(super) fn dispatch_event(
     event: RoutedPlatformEvent,
 ) -> Result<bool> {
     if matches!(event.event(), PlatformEvent::SyncWindows) {
-        return sync_shell_observation(observation_runtime, slots);
+        observation_runtime.request_refresh(crate::win32_owner::now_ms());
+        return Ok(true);
     }
-    let observation = observation_runtime.current().ok_or_else(|| {
-        windows::core::Error::new(
-            windows::core::HRESULT(0x8000_4005_u32 as i32),
-            "shell observation missing",
-        )
-    })?;
+    if matches!(event.event(), PlatformEvent::ShellObservationLoaded(_)) {
+        let PlatformEvent::ShellObservationLoaded(result) = event.into_event() else {
+            unreachable!("matched shell observation event");
+        };
+        return apply_shell_observation_result(observation_runtime, slots, result);
+    }
+    let observation = observation_runtime.current();
     match event.target() {
         NativeEventTarget::Broadcast => handle_broadcast_event(
             class,
@@ -215,19 +219,26 @@ pub(super) fn handle_broadcast_event(
     }
 }
 
-fn sync_shell_observation(
+fn apply_shell_observation_result(
     runtime: &mut ShellObservationRuntime,
     slots: &mut [ShellSlot],
+    result: ShellObservationLoadResult,
 ) -> Result<bool> {
-    if !runtime.refresh_if_changed(crate::win32_owner::now_ms())? {
-        return Ok(true);
+    match runtime.complete(result) {
+        ShellObservationUpdate::Unchanged | ShellObservationUpdate::Stale => return Ok(true),
+        ShellObservationUpdate::Failed(code) => {
+            let code = format!("0x{:08X}", code.0 as u32);
+            crate::diagnostics::record(
+                crate::diagnostics::DiagnosticModule::AppLifecycle,
+                crate::diagnostics::LogLevel::Error,
+                "shell.observation.failed",
+                &[("hresult", &code)],
+            );
+            return Ok(true);
+        }
+        ShellObservationUpdate::Changed => {}
     }
-    let observation = runtime.current().ok_or_else(|| {
-        windows::core::Error::new(
-            windows::core::HRESULT(0x8000_4005_u32 as i32),
-            "shell observation missing after refresh",
-        )
-    })?;
+    let observation = runtime.current();
     for slot in slots {
         if !slot.apply_observation(observation)? {
             return Ok(false);
