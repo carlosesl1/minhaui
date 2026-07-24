@@ -1,6 +1,6 @@
 # Background Apps Balanced List and Native Menu Design
 
-- Status: Design approved; written-spec review pending
+- Status: Approved for implementation
 - Date: 2026-07-24
 - Classification: L — cross-process Windows tray discovery, native callback forwarding, and popover lifecycle changes
 - Supersedes: the visual-polish and exact-callback non-goals in
