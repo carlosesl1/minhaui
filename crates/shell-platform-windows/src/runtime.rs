@@ -83,6 +83,7 @@ impl RuntimeOrchestrator {
             | PlatformEvent::DockEdgeProbe
             | PlatformEvent::DockAnimationFrame
             | PlatformEvent::PreviewTimer
+            | PlatformEvent::ExternalMenuTimer
             | PlatformEvent::PreviewPointerMoved(_)
             | PlatformEvent::PreviewPointerPressed(_)
             | PlatformEvent::PreviewPointerReleased(_)

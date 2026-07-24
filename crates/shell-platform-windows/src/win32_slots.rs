@@ -213,6 +213,11 @@ pub(super) fn handle_broadcast_event(
                 slot.reregister_topbar()?;
             }
             reconcile_slots(class, slots, features, config, observation)?;
+            for slot in slots.iter_mut() {
+                if !slot.handle_event(PlatformEvent::TaskbarCreated)? {
+                    return Ok(false);
+                }
+            }
             Ok(true)
         }
         PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => Ok(false),

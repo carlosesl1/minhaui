@@ -37,6 +37,7 @@ pub(super) const DOCK_ANIMATION_TIMER_ID: usize = 0x4D57;
 pub(super) const PREVIEW_TIMER_ID: usize = 0x4D58;
 pub(super) const DRAG_ESCAPE_TIMER_ID: usize = 0x4D59;
 pub(super) const DOCK_EDGE_PROBE_TIMER_ID: usize = 0x4D5A;
+pub(super) const EXTERNAL_MENU_TIMER_ID: usize = 0x4D5B;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
 pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);

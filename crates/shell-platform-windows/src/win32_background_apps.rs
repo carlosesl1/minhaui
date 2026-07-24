@@ -84,6 +84,36 @@ pub(super) fn activate_background_app(
     }
 }
 
+pub(super) fn open_background_app_location(
+    entry: &BackgroundAppEntry,
+) -> Result<(), BackgroundAppsError> {
+    let current_path = process_image_path(entry.process_id())
+        .filter(|path| path.eq_ignore_ascii_case(entry.executable()))
+        .ok_or(BackgroundAppsError::Activation)?;
+    let mut parameters = String::from("/select,\"");
+    parameters.push_str(&current_path);
+    parameters.push('"');
+    let parameters = parameters.encode_utf16().chain([0]).collect::<Vec<_>>();
+    // SAFETY: Category 8 (FFI boundary). Both strings are null-terminated values
+    // derived from the revalidated live process path and remain valid for this
+    // synchronous shell request.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            w!("explorer.exe"),
+            PCWSTR(parameters.as_ptr()),
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    if result.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err(BackgroundAppsError::Activation)
+    }
+}
+
 pub(super) fn capture_background_apps(
     generation: u64,
 ) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {

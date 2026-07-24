@@ -79,6 +79,25 @@ pub(crate) fn activate_native_tray_context_menu(
     executable: &str,
     point: TrayScreenPoint,
 ) -> Result<TrayActivationResult, NativeTrayActivationError> {
+    let _owner_process_id = validate_native_tray_identity(ops, identity, current_generation)?;
+
+    let request = TrayActivationRequest::new(
+        executable,
+        identity.owner_window(),
+        identity.icon_id(),
+        identity.callback_message(),
+        identity.version(),
+        point,
+    );
+    let mut sink = NativeTraySink { ops };
+    Ok(coordinator.begin(request, &mut sink))
+}
+
+pub(crate) fn validate_native_tray_identity(
+    ops: &dyn NativeTrayOps,
+    identity: NativeTrayIdentity,
+    current_generation: u64,
+) -> Result<u32, NativeTrayActivationError> {
     if !identity.is_current(current_generation) {
         return Err(NativeTrayActivationError::StaleGeneration);
     }
@@ -95,17 +114,7 @@ pub(crate) fn activate_native_tray_context_menu(
     if !ops.allow_foreground(owner_process_id) {
         return Err(NativeTrayActivationError::ForegroundPermissionDenied);
     }
-
-    let request = TrayActivationRequest::new(
-        executable,
-        owner_window,
-        identity.icon_id(),
-        identity.callback_message(),
-        identity.version(),
-        point,
-    );
-    let mut sink = NativeTraySink { ops };
-    Ok(coordinator.begin(request, &mut sink))
+    Ok(owner_process_id)
 }
 
 struct NativeTraySink<'a> {

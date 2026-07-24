@@ -58,6 +58,10 @@ impl RuntimeSurfaces {
                         TopbarOverlayAnchor::Overflow => None,
                     };
                     self.topbar_controller.set_active_module(active_module);
+                    self.external_menu_coordinator.popover_replaced();
+                    self.cancel_pending_tray_activation();
+                    self.release_external_menu_handles();
+                    self.popover_controller.clear_external_active();
                     self.popover_controller.dismiss();
                     self.quick_settings_controller.dismiss();
                     if matches!(*kind, Popover::QuickSettings | Popover::Volume) {
@@ -383,6 +387,7 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         dock: &OwnedWindow,
         popover: &OwnedWindow,
+        app_menu: &mut OwnedWindow,
         preview: &OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<()> {
@@ -437,6 +442,13 @@ impl RuntimeSurfaces {
                             &[("code", error.code())],
                         ),
                     }
+                }
+                QueuedPopoverAction::TypedIntent(PopoverAction::OpenBackgroundAppContextMenu(
+                    id,
+                )) => {
+                    self.open_background_app_context_menu(
+                        *id, topbar, dock, popover, app_menu, preview, settings,
+                    )?;
                 }
                 QueuedPopoverAction::TypedIntent(action) => {
                     let hides_popover = matches!(
@@ -741,7 +753,7 @@ impl RuntimeSurfaces {
         self.complete_surface_update(update, windows)
     }
 
-    fn clear_active_topbar_module(&mut self) -> bool {
+    pub(super) fn clear_active_topbar_module(&mut self) -> bool {
         let visual_generation = self.topbar_controller.visual_generation();
         self.active_topbar_anchor = None;
         self.topbar_controller.set_active_module(None);

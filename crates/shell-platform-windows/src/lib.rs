@@ -416,6 +416,7 @@ pub(crate) enum PlatformEvent {
     DockEdgeProbe,
     DockAnimationFrame,
     PreviewTimer,
+    ExternalMenuTimer,
     PreviewPointerMoved(DipPoint),
     PreviewPointerPressed(DipPoint),
     PreviewPointerReleased(DipPoint),

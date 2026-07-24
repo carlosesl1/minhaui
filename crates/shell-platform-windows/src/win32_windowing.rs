@@ -22,8 +22,9 @@ use crate::brightness_worker::BRIGHTNESS_WAKE_MESSAGE;
 use crate::media_session_worker::MEDIA_SESSION_WAKE_MESSAGE;
 use crate::night_light_worker::NIGHT_LIGHT_WAKE_MESSAGE;
 use crate::win32::{
-    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID, LIVE_WINDOWS,
-    PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED, TIMER_ID,
+    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID,
+    EXTERNAL_MENU_TIMER_ID, LIVE_WINDOWS, PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED,
+    TIMER_ID,
 };
 use crate::win32_appbar::{is_position_notification, notify_activation, notify_window_position};
 use crate::win32_drop::first_drop_path;
@@ -551,6 +552,13 @@ pub(super) unsafe extern "system" fn window_proc(
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::PreviewTimer,
+            ));
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == EXTERNAL_MENU_TIMER_ID => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::ExternalMenuTimer,
             ));
             LRESULT(0)
         }

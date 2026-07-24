@@ -3,7 +3,8 @@ use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use windows::core::Result;
 
 use crate::win32::{
-    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, PREVIEW_TIMER_ID, SYNC_TIMER_ID, TIMER_ID,
+    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, EXTERNAL_MENU_TIMER_ID, PREVIEW_TIMER_ID,
+    SYNC_TIMER_ID, TIMER_ID,
 };
 
 const DOCK_ANIMATION_INTERVAL_MS: u32 = 16;
@@ -32,6 +33,10 @@ impl TimerGuard {
 
     pub(super) fn start_preview(hwnd: HWND) -> Result<Self> {
         Self::start_id(hwnd, PREVIEW_TIMER_ID, 16)
+    }
+
+    pub(super) fn start_external_menu(hwnd: HWND) -> Result<Self> {
+        Self::start_id(hwnd, EXTERNAL_MENU_TIMER_ID, 1_000)
     }
 
     fn start_id(hwnd: HWND, id: usize, milliseconds: u32) -> Result<Self> {
