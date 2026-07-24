@@ -23,7 +23,7 @@ use crate::win32_sample_state::density_for_width;
 use crate::win32_shell_observation::ShellObservation;
 use crate::win32_surface_runtime::{
     NativeSurfaceOptions, SurfaceBuildPlan, SurfaceFrame, SurfaceTarget, SurfaceUpdate,
-    Win32NativeSurfaceRuntime, runtime_device_kind,
+    Win32NativeSurfaceRuntime, present_app_menu_frame, runtime_device_kind,
 };
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::OwnedWindow;
@@ -1286,11 +1286,23 @@ impl RuntimeSurfaces {
         });
         let work = window_work_area(popover.hwnd)?;
         app_menu.place_app_menu(work, self.background_app_anchor(popover, point), height)?;
-        let update = self.surface_runtime.redraw(
-            ShowcaseRole::AppMenu,
-            ShellScenes {
-                context_menu: scene.as_ref(),
-                ..empty_scenes()
+        self.app_menu_endpoint = surface_endpoint(app_menu);
+        let update = present_app_menu_frame(
+            &mut self.surface_runtime,
+            SurfaceFrame {
+                target: SurfaceTarget {
+                    hwnd: app_menu.hwnd,
+                    role: ShowcaseRole::AppMenu,
+                    metrics: SurfaceMetrics::new(
+                        app_menu.rect.width.max(1) as u32,
+                        app_menu.rect.height.max(1) as u32,
+                        app_menu.dpi(),
+                    ),
+                },
+                scenes: ShellScenes {
+                    context_menu: scene.as_ref(),
+                    ..empty_scenes()
+                },
             },
         );
         self.complete_surface_update(

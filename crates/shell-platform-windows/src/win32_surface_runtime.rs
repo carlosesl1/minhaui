@@ -493,6 +493,14 @@ pub(super) fn present_frame<A: SurfaceAdapter>(
     }
 }
 
+pub(super) fn present_app_menu_frame<A: SurfaceAdapter>(
+    runtime: &mut NativeSurfaceRuntime<A>,
+    frame: SurfaceFrame<'_>,
+) -> windows::core::Result<SurfaceUpdate> {
+    debug_assert_eq!(frame.target.role, ShowcaseRole::AppMenu);
+    present_frame(runtime, frame, SurfaceSizeChange::Resize)
+}
+
 fn runtime_not_ready() -> windows::core::Error {
     windows::core::Error::new(E_UNEXPECTED, "native surface runtime is not ready")
 }
@@ -518,7 +526,8 @@ mod tests {
     use super::{
         NativeSurfaceOptions, NativeSurfaceRuntime, SurfaceAdapter, SurfaceBuildPlan, SurfaceFrame,
         SurfaceRenderDecision, SurfaceSizeChange, SurfaceTarget, SurfaceUpdate,
-        normalize_present_result, present_frame, runtime_device_kind, surface_render_decision,
+        normalize_present_result, present_app_menu_frame, present_frame, runtime_device_kind,
+        surface_render_decision,
     };
 
     #[test]
@@ -1072,6 +1081,38 @@ mod tests {
                 Event::Redrawn(1, ShowcaseRole::Dock, ShowcaseRole::Dock),
                 Event::MetricsRead(1, ShowcaseRole::Dock),
                 Event::Resized(1, ShowcaseRole::Dock, ShowcaseRole::Dock),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_menu_open_resizes_surface_before_present() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        let mut initial_plan = plan();
+        initial_plan.app_menu.target.metrics = SurfaceMetrics::new(300, 1, Dpi::from_raw(144));
+        runtime.build(initial_plan).unwrap();
+        recording().events.clear();
+        let mut menu = frame(ShowcaseRole::AppMenu);
+        menu.target.metrics = SurfaceMetrics::new(300, 224, Dpi::from_raw(144));
+
+        assert_eq!(
+            present_app_menu_frame(&mut runtime, menu).unwrap(),
+            SurfaceUpdate::Presented
+        );
+        assert_eq!(
+            runtime.metrics(ShowcaseRole::AppMenu),
+            Some(menu.target.metrics)
+        );
+        assert_eq!(
+            events(),
+            [
+                Event::MetricsRead(1, ShowcaseRole::AppMenu),
+                Event::Resized(1, ShowcaseRole::AppMenu, ShowcaseRole::AppMenu),
+                Event::MetricsRead(1, ShowcaseRole::AppMenu),
             ]
         );
     }
