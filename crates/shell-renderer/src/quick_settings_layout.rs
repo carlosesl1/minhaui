@@ -506,7 +506,7 @@ pub fn layout_quick_settings(scene: &QuickSettingsScene, surface: DipRect) -> Qu
 
         y += AUDIO_SECTION_LABEL_HEIGHT;
         let mut audio_outputs = Vec::new();
-        for output in audio.outputs().iter().take(3) {
+        for output in audio.outputs() {
             audio_outputs.push(QuickSettingsLaidOutAudioOutput {
                 id: output.id(),
                 bounds: DipRect::new(content.x, y, content.width, AUDIO_OUTPUT_HEIGHT),

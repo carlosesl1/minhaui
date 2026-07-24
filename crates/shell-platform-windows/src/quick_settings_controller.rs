@@ -357,7 +357,6 @@ impl QuickSettingsController {
             .audio
             .outputs()
             .iter()
-            .take(3)
             .map(|output| {
                 QuickSettingsAudioOutput::new(
                     QuickSettingsAudioOutputId::new(output.id().value()),
@@ -830,7 +829,7 @@ impl QuickSettingsController {
                         entry.id().value(),
                     ))
                 }))
-                .chain(self.audio.outputs().iter().take(3).map(|entry| {
+                .chain(self.audio.outputs().iter().map(|entry| {
                     QuickSettingsFocus::AudioOutput(QuickSettingsAudioOutputId::new(
                         entry.id().value(),
                     ))

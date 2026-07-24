@@ -50,6 +50,43 @@ fn detailed_audio_panel_keeps_master_apps_outputs_and_settings_in_one_flow() {
     ));
 }
 
+#[test]
+fn detailed_audio_panel_lays_out_every_available_output() {
+    let outputs = (0..5)
+        .map(|index| {
+            QuickSettingsAudioOutput::new(
+                QuickSettingsAudioOutputId::new(index + 1),
+                &format!("Output {}", index + 1),
+                if index == 0 {
+                    "Current output"
+                } else {
+                    "Available output"
+                },
+                index == 0,
+            )
+        })
+        .collect();
+    let panel = QuickSettingsAudioPanel::new(
+        QuickSettingsSlider::new(QuickControlKind::Volume, "Volume", 42, true),
+        Vec::new(),
+        outputs,
+        false,
+    )
+    .with_standalone(true);
+    let scene = QuickSettingsScene::new(Vec::new()).with_audio_panel(Some(panel));
+    let (_, height) = quick_settings_surface_size(&scene, 900.0);
+    let layout =
+        layout_quick_settings(&scene, DipRect::new(0.0, 0.0, QUICK_SETTINGS_WIDTH, height));
+
+    assert_eq!(layout.audio_outputs().len(), 5);
+    assert_eq!(
+        layout.audio_outputs()[4].id(),
+        QuickSettingsAudioOutputId::new(5)
+    );
+    let settings = layout.audio_settings_bounds().expect("sound settings");
+    assert!(settings.y + settings.height <= height);
+}
+
 fn tile(kind: QuickControlKind) -> QuickSettingsTile {
     QuickSettingsTile::new(kind, "Control", "Off", "x", false, true)
 }

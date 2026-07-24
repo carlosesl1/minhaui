@@ -1,12 +1,14 @@
 use shell_config::QuickSettingsSettings;
 use shell_core::QuickControlKind;
-use shell_renderer::{DipPoint, DipRect, layout_quick_settings};
+use shell_renderer::{
+    DipPoint, DipRect, QuickSettingsAudioOutputId, QuickSettingsFocus, layout_quick_settings,
+};
 
 use crate::brightness_coordinator::BrightnessApplyResult;
 use crate::{
     AudioOutputId, AudioOutputSnapshot, AudioPanelSnapshot, AudioSessionId, AudioSessionSnapshot,
     DoNotDisturbMode, QueuedQuickSettingsAction, QuickControlAvailability, QuickControlCapability,
-    QuickSettingsCapabilities, QuickSettingsController, QuickSettingsIntent,
+    QuickSettingsCapabilities, QuickSettingsController, QuickSettingsIntent, QuickSettingsKey,
 };
 
 #[test]
@@ -92,6 +94,55 @@ fn audio_topbar_module_opens_the_detailed_panel_as_a_root_surface() {
     assert_eq!(
         scene.audio_panel().unwrap().sessions()[0].label(),
         "Vivaldi"
+    );
+}
+
+#[test]
+fn audio_topbar_module_preserves_every_available_output() {
+    let capabilities = QuickSettingsCapabilities::new(vec![QuickControlCapability::new(
+        QuickControlKind::Volume,
+        QuickControlAvailability::Available { active: false },
+        "Sound",
+        "Speakers",
+        Some(56),
+    )]);
+    let outputs = (0..5)
+        .map(|index| {
+            AudioOutputSnapshot::new(
+                AudioOutputId::new(index + 1),
+                &format!("Output {}", index + 1),
+                if index == 0 {
+                    "Current output"
+                } else {
+                    "Available output"
+                },
+                index == 0,
+            )
+        })
+        .collect();
+    let mut controller = QuickSettingsController::new(
+        QuickSettingsSettings::default(),
+        QuickSettingsCapabilities::default(),
+    );
+
+    controller.open_audio(
+        capabilities,
+        AudioPanelSnapshot::new(Vec::new(), outputs, false),
+    );
+
+    let scene = controller.scene();
+    let audio = scene.audio_panel().expect("audio panel");
+    assert_eq!(audio.outputs().len(), 5);
+    assert_eq!(audio.outputs()[4].label(), "Output 5");
+
+    for _ in 0..5 {
+        controller.handle_key(QuickSettingsKey::Next);
+    }
+    assert_eq!(
+        controller.scene().focused(),
+        Some(QuickSettingsFocus::AudioOutput(
+            QuickSettingsAudioOutputId::new(5)
+        ))
     );
 }
 
