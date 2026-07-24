@@ -885,6 +885,9 @@ impl RuntimeSurfaces {
                 window,
                 owner_process_id,
             } => {
+                if window.value() == 0 {
+                    return Ok(true);
+                }
                 let Some(activation) = self.external_menu_coordinator.activation() else {
                     return Ok(true);
                 };
@@ -895,7 +898,7 @@ impl RuntimeSurfaces {
                     generation,
                     Instant::now(),
                 );
-                if effects.is_empty() || window.value() == 0 {
+                if effects.is_empty() {
                     return Ok(true);
                 }
                 return self.apply_external_menu_effects(
