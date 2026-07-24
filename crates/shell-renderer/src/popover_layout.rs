@@ -10,6 +10,11 @@ const SYSTEM_ROW_HEIGHT: f32 = 40.0;
 const SYSTEM_SECTION_GAP: f32 = 12.0;
 const SYSTEM_BODY_TOP: f32 = 60.0;
 const SYSTEM_BOTTOM_PADDING: f32 = 8.0;
+const APPS_WIDTH: f32 = 288.0;
+const APPS_BODY_TOP: f32 = 60.0;
+const APPS_ROW_HEIGHT: f32 = 40.0;
+const APPS_VISIBLE_ROWS: usize = 8;
+const APPS_BOTTOM_PADDING: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PopoverSurfaceSize {
@@ -110,8 +115,11 @@ impl PopoverLaidOutRow {
 pub struct PopoverLayout {
     rows: Vec<PopoverLaidOutRow>,
     title_bounds: Option<DipRect>,
+    status_bounds: Option<DipRect>,
     separators: Vec<PopoverSeparator>,
     notch: Option<PopoverNotch>,
+    icon_bounds: Vec<(usize, DipRect)>,
+    label_bounds: Vec<(usize, DipRect)>,
 }
 
 impl PopoverLayout {
@@ -126,6 +134,11 @@ impl PopoverLayout {
     }
 
     #[must_use]
+    pub const fn status_bounds(&self) -> Option<DipRect> {
+        self.status_bounds
+    }
+
+    #[must_use]
     pub fn separators(&self) -> &[PopoverSeparator] {
         &self.separators
     }
@@ -133,6 +146,22 @@ impl PopoverLayout {
     #[must_use]
     pub const fn notch(&self) -> Option<PopoverNotch> {
         self.notch
+    }
+
+    #[must_use]
+    pub fn icon_bounds(&self, index: usize) -> Option<DipRect> {
+        self.icon_bounds
+            .iter()
+            .find(|(row_index, _)| *row_index == index)
+            .map(|(_, bounds)| *bounds)
+    }
+
+    #[must_use]
+    pub fn label_bounds(&self, index: usize) -> Option<DipRect> {
+        self.label_bounds
+            .iter()
+            .find(|(row_index, _)| *row_index == index)
+            .map(|(_, bounds)| *bounds)
     }
 
     #[must_use]
@@ -156,6 +185,7 @@ pub fn layout_popover_scene(scene: &PopoverScene, surface: DipRect) -> PopoverLa
     match scene.layout_style() {
         PopoverLayoutStyle::Compact => layout_compact_popover_scene(scene, surface),
         PopoverLayoutStyle::SystemPanel => layout_system_panel_scene(scene, surface),
+        PopoverLayoutStyle::BalancedApps => layout_balanced_apps_scene(scene, surface),
     }
 }
 
@@ -176,8 +206,11 @@ fn layout_compact_popover_scene(scene: &PopoverScene, surface: DipRect) -> Popov
     PopoverLayout {
         rows,
         title_bounds: None,
+        status_bounds: None,
         separators: Vec::new(),
         notch: None,
+        icon_bounds: Vec::new(),
+        label_bounds: Vec::new(),
     }
 }
 
@@ -221,11 +254,77 @@ fn layout_system_panel_scene(scene: &PopoverScene, surface: DipRect) -> PopoverL
             surface.width - 32.0,
             SYSTEM_TITLE_HEIGHT,
         )),
+        status_bounds: None,
         separators,
         notch: Some(PopoverNotch {
             bounds: DipRect::new(tip_x - 8.0, surface.y, 16.0, 8.0),
             tip_x,
         }),
+        icon_bounds: Vec::new(),
+        label_bounds: Vec::new(),
+    }
+}
+
+fn layout_balanced_apps_scene(scene: &PopoverScene, surface: DipRect) -> PopoverLayout {
+    let mut rows = Vec::new();
+    let mut icon_bounds = Vec::new();
+    let mut label_bounds = Vec::new();
+    let mut y = surface.y + APPS_BODY_TOP;
+    let tip_x = (surface.x + scene.anchor_x().unwrap_or(surface.width / 2.0))
+        .clamp(surface.x + 16.0, surface.x + surface.width - 16.0);
+    let row_width = (surface.width - 32.0).max(0.0);
+
+    for (index, row) in scene
+        .rows()
+        .iter()
+        .enumerate()
+        .skip(scene.scroll_offset())
+        .take(APPS_VISIBLE_ROWS)
+    {
+        if y + APPS_ROW_HEIGHT > surface.y + surface.height - APPS_BOTTOM_PADDING {
+            break;
+        }
+        let bounds = DipRect::new(surface.x + 16.0, y, row_width, APPS_ROW_HEIGHT);
+        let icon = DipRect::new(bounds.x + 2.0, bounds.y + 6.0, 28.0, 28.0);
+        let label = DipRect::new(
+            icon.x + icon.width + 10.0,
+            bounds.y,
+            (bounds.x + bounds.width - (icon.x + icon.width + 10.0)).max(0.0),
+            bounds.height,
+        );
+        rows.push(PopoverLaidOutRow {
+            index,
+            bounds,
+            focused: row.enabled() && scene.focused() == Some(index),
+        });
+        icon_bounds.push((index, icon));
+        label_bounds.push((index, label));
+        y += APPS_ROW_HEIGHT;
+    }
+
+    let status_bounds = rows.is_empty().then_some(DipRect::new(
+        surface.x + 16.0,
+        surface.y + APPS_BODY_TOP,
+        row_width,
+        APPS_ROW_HEIGHT,
+    ));
+
+    PopoverLayout {
+        rows,
+        title_bounds: Some(DipRect::new(
+            surface.x + 16.0,
+            surface.y + SYSTEM_TITLE_Y,
+            surface.width - 32.0,
+            SYSTEM_TITLE_HEIGHT,
+        )),
+        status_bounds,
+        separators: Vec::new(),
+        notch: Some(PopoverNotch {
+            bounds: DipRect::new(tip_x - 8.0, surface.y, 16.0, 8.0),
+            tip_x,
+        }),
+        icon_bounds,
+        label_bounds,
     }
 }
 
@@ -250,6 +349,12 @@ pub fn popover_surface_size(scene: &PopoverScene) -> PopoverSurfaceSize {
                     + SYSTEM_BOTTOM_PADDING,
             )
         }
+        PopoverLayoutStyle::BalancedApps => PopoverSurfaceSize::new(
+            APPS_WIDTH,
+            APPS_BODY_TOP
+                + scene.rows().len().clamp(1, APPS_VISIBLE_ROWS) as f32 * APPS_ROW_HEIGHT
+                + APPS_BOTTOM_PADDING,
+        ),
     }
 }
 

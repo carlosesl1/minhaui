@@ -13,6 +13,7 @@ pub enum PopoverContentState {
 pub enum PopoverLayoutStyle {
     Compact,
     SystemPanel,
+    BalancedApps,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +99,7 @@ pub struct PopoverScene {
     status_text: String,
     layout_style: PopoverLayoutStyle,
     anchor_x: Option<f32>,
+    header_detail: Option<String>,
 }
 
 impl PopoverScene {
@@ -119,6 +121,7 @@ impl PopoverScene {
             status_text: default_status_text(state).to_owned(),
             layout_style: PopoverLayoutStyle::Compact,
             anchor_x: None,
+            header_detail: None,
         }
     }
 
@@ -137,6 +140,12 @@ impl PopoverScene {
     #[must_use]
     pub const fn with_layout_style(mut self, style: PopoverLayoutStyle) -> Self {
         self.layout_style = style;
+        self
+    }
+
+    #[must_use]
+    pub fn with_header_detail(mut self, detail: &str) -> Self {
+        self.header_detail = Some(detail.to_owned());
         self
     }
 
@@ -189,6 +198,11 @@ impl PopoverScene {
     #[must_use]
     pub const fn anchor_x(&self) -> Option<f32> {
         self.anchor_x
+    }
+
+    #[must_use]
+    pub fn header_detail(&self) -> Option<&str> {
+        self.header_detail.as_deref()
     }
 }
 

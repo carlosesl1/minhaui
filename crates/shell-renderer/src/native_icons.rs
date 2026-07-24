@@ -50,25 +50,39 @@ impl NativeIconCache {
     }
 
     pub(crate) fn draw(&mut self, source: &str, destination: D2D_RECT_F) -> bool {
-        let reload = match self.bitmaps.get(source) {
-            Some(CachedIcon::Bitmap(_)) => false,
-            Some(CachedIcon::Missing(attempted_at)) => attempted_at.elapsed() >= MISSING_ICON_RETRY,
-            None => true,
-        };
-        if reload {
-            let icon = self
-                .load(source)
-                .map_or_else(|_| CachedIcon::Missing(Instant::now()), CachedIcon::Bitmap);
-            self.bitmaps.insert(source.to_owned(), icon);
-        }
-        let Some(CachedIcon::Bitmap(bitmap)) = self.bitmaps.get(source) else {
+        let Some(bitmap) = self.bitmap_for(source) else {
             return false;
         };
         // SAFETY: Category 8 (FFI boundary). The cached bitmap belongs to this
         // device context and the finite destination is live for the draw call.
         unsafe {
             self.context.DrawBitmap(
-                bitmap,
+                &bitmap,
+                Some(&destination),
+                1.0,
+                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+                None,
+                None,
+            )
+        };
+        true
+    }
+
+    pub(crate) fn draw_contained(&mut self, source: &str, optical_bounds: D2D_RECT_F) -> bool {
+        let Some(bitmap) = self.bitmap_for(source) else {
+            return false;
+        };
+        // SAFETY: The cached bitmap belongs to this device context and the
+        // returned size is read synchronously before the draw call.
+        let size = unsafe { bitmap.GetSize() };
+        let Some(destination) = aspect_fit_rect(size.width, size.height, optical_bounds) else {
+            return false;
+        };
+        // SAFETY: The cached bitmap belongs to this device context and the
+        // finite destination is contained within the requested optical box.
+        unsafe {
+            self.context.DrawBitmap(
+                &bitmap,
                 Some(&destination),
                 1.0,
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
@@ -116,6 +130,24 @@ impl NativeIconCache {
     pub(crate) fn retain_encoded(&mut self, active_generations: &[u64]) {
         self.encoded_bitmaps
             .retain(|generation, _| active_generations.contains(generation));
+    }
+
+    fn bitmap_for(&mut self, source: &str) -> Option<ID2D1Bitmap1> {
+        let reload = match self.bitmaps.get(source) {
+            Some(CachedIcon::Bitmap(_)) => false,
+            Some(CachedIcon::Missing(attempted_at)) => attempted_at.elapsed() >= MISSING_ICON_RETRY,
+            None => true,
+        };
+        if reload {
+            let icon = self
+                .load(source)
+                .map_or_else(|_| CachedIcon::Missing(Instant::now()), CachedIcon::Bitmap);
+            self.bitmaps.insert(source.to_owned(), icon);
+        }
+        match self.bitmaps.get(source) {
+            Some(CachedIcon::Bitmap(bitmap)) => Some(bitmap.clone()),
+            Some(CachedIcon::Missing(_)) | None => None,
+        }
     }
 
     fn load(&self, source: &str) -> Result<ID2D1Bitmap1> {
@@ -197,6 +229,38 @@ impl NativeIconCache {
     }
 }
 
+#[must_use]
+fn aspect_fit_rect(
+    source_width: f32,
+    source_height: f32,
+    destination: D2D_RECT_F,
+) -> Option<D2D_RECT_F> {
+    let destination_width = destination.right - destination.left;
+    let destination_height = destination.bottom - destination.top;
+    if !source_width.is_finite()
+        || !source_height.is_finite()
+        || source_width <= 0.0
+        || source_height <= 0.0
+        || !destination.left.is_finite()
+        || !destination.top.is_finite()
+        || !destination_width.is_finite()
+        || !destination_height.is_finite()
+        || destination_width <= 0.0
+        || destination_height <= 0.0
+    {
+        return None;
+    }
+    let scale = (destination_width / source_width).min(destination_height / source_height);
+    let width = source_width * scale;
+    let height = source_height * scale;
+    Some(D2D_RECT_F {
+        left: destination.left + (destination_width - width) / 2.0,
+        top: destination.top + (destination_height - height) / 2.0,
+        right: destination.left + (destination_width + width) / 2.0,
+        bottom: destination.top + (destination_height + height) / 2.0,
+    })
+}
+
 struct ShellBitmapHandle(HBITMAP);
 
 impl ShellBitmapHandle {
@@ -251,5 +315,69 @@ impl Drop for IconHandle {
         // SAFETY: Category 8 (FFI boundary). SHGetFileInfoW transferred ownership
         // of this icon handle and it is destroyed exactly once by the guard.
         let _ = unsafe { DestroyIcon(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+
+    use super::aspect_fit_rect;
+
+    const OPTICAL_BOX: D2D_RECT_F = D2D_RECT_F {
+        left: 0.0,
+        top: 0.0,
+        right: 28.0,
+        bottom: 28.0,
+    };
+
+    #[test]
+    fn aspect_fit_keeps_square_source_centered_in_optical_box() {
+        assert_eq!(aspect_fit_rect(64.0, 64.0, OPTICAL_BOX), Some(OPTICAL_BOX));
+    }
+
+    #[test]
+    fn aspect_fit_letterboxes_landscape_source() {
+        assert_eq!(
+            aspect_fit_rect(200.0, 100.0, OPTICAL_BOX),
+            Some(D2D_RECT_F {
+                left: 0.0,
+                top: 7.0,
+                right: 28.0,
+                bottom: 21.0,
+            })
+        );
+    }
+
+    #[test]
+    fn aspect_fit_pillarboxes_portrait_source() {
+        assert_eq!(
+            aspect_fit_rect(100.0, 200.0, OPTICAL_BOX),
+            Some(D2D_RECT_F {
+                left: 7.0,
+                top: 0.0,
+                right: 21.0,
+                bottom: 28.0,
+            })
+        );
+    }
+
+    #[test]
+    fn aspect_fit_rejects_invalid_source_or_destination_dimensions() {
+        assert_eq!(aspect_fit_rect(0.0, 64.0, OPTICAL_BOX), None);
+        assert_eq!(aspect_fit_rect(f32::NAN, 64.0, OPTICAL_BOX), None);
+        assert_eq!(
+            aspect_fit_rect(
+                64.0,
+                64.0,
+                D2D_RECT_F {
+                    left: 28.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 28.0,
+                }
+            ),
+            None
+        );
     }
 }

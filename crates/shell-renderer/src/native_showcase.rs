@@ -1,6 +1,9 @@
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
-use windows::Win32::Graphics::DirectWrite::{DWRITE_TEXT_ALIGNMENT_CENTER, IDWriteFactory};
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    IDWriteFactory, IDWriteTextFormat,
+};
 use windows::core::Result;
 
 use crate::native::{ShellScenes, ShowcaseRole};
@@ -236,6 +239,14 @@ pub(crate) fn draw_showcase(
     let error = create_brush(context, tokens.error)?;
     let text_scale = scenes.topbar.map_or(1.0, TopbarScene::text_scale);
     let text_format = create_text_format(dwrite, role, text_scale)?;
+    let balanced_label_format = if scenes
+        .popover
+        .is_some_and(|scene| scene.layout_style() == PopoverLayoutStyle::BalancedApps)
+    {
+        Some(create_balanced_apps_label_format(dwrite)?)
+    } else {
+        None
+    };
     let detail_format = create_detail_format(dwrite, role, text_scale)?;
     let quick_label_format = create_quick_settings_label_format(dwrite)?;
     let quick_detail_format = create_quick_settings_detail_format(dwrite)?;
@@ -308,6 +319,9 @@ pub(crate) fn draw_showcase(
                 match popover.layout_style() {
                     PopoverLayoutStyle::Compact => DipRect::new(0.0, 0.0, width, height),
                     PopoverLayoutStyle::SystemPanel => {
+                        DipRect::new(0.0, 8.0, width, (height - 8.0).max(1.0))
+                    }
+                    PopoverLayoutStyle::BalancedApps => {
                         DipRect::new(0.0, 8.0, width, (height - 8.0).max(1.0))
                     }
                 }
@@ -454,6 +468,7 @@ pub(crate) fn draw_showcase(
                 icons,
                 PopoverFormats {
                     label: &text_format,
+                    balanced_label: balanced_label_format.as_ref().unwrap_or(&text_format),
                     detail: &detail_format,
                     icon: &icon_format,
                     title: &title_format,
@@ -556,4 +571,20 @@ pub(crate) fn draw_showcase(
     // SAFETY: Category 8 (FFI boundary). This pairs BeginDraw and propagates
     // D2DERR_RECREATE_TARGET to device-resource recovery.
     unsafe { context.EndDraw(None, None) }
+}
+
+fn create_balanced_apps_label_format(dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+    let format = create_text_format(dwrite, ShowcaseRole::Popover, 1.0)?;
+    let trimming = DWRITE_TRIMMING {
+        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+        delimiter: 0,
+        delimiterCount: 0,
+    };
+    // SAFETY: The dedicated format and ellipsis object remain live through the
+    // synchronous DirectWrite setter call.
+    let ellipsis = unsafe { dwrite.CreateEllipsisTrimmingSign(&format) }?;
+    // SAFETY: The trimming descriptor and ellipsis sign are valid for the live
+    // dedicated BalancedApps label format.
+    unsafe { format.SetTrimming(&trimming, &ellipsis) }?;
+    Ok(format)
 }

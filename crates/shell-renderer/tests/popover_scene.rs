@@ -30,6 +30,32 @@ fn system_panel_scene() -> PopoverScene {
     .with_anchor_x(62.0)
 }
 
+fn balanced_apps_scene() -> PopoverScene {
+    let rows = (0..12)
+        .map(|index| {
+            PopoverRow::new(
+                if index == 0 {
+                    "A very long background application label that should trim"
+                } else {
+                    "Background app"
+                },
+                "",
+                true,
+            )
+            .with_icon_source(Some(format!("shell:appsfolder\\App{index:02}")))
+        })
+        .collect();
+    PopoverScene::new(
+        Popover::BackgroundApps,
+        "Background apps",
+        PopoverContentState::Ready,
+        rows,
+        Some(0),
+    )
+    .with_layout_style(PopoverLayoutStyle::BalancedApps)
+    .with_header_detail("12")
+}
+
 fn rect_stays_inside(inner: DipRect, outer: DipRect) -> bool {
     inner.x >= outer.x
         && inner.y >= outer.y
@@ -111,6 +137,67 @@ fn system_panel_notch_and_rows_stay_inside_the_surface() {
             .iter()
             .all(|row| rect_stays_inside(row.bounds(), surface))
     );
+}
+
+#[test]
+fn balanced_apps_uses_fixed_header_and_visible_row_budget() {
+    let scene = balanced_apps_scene();
+    let size = popover_surface_size(&scene);
+    let layout = layout_popover_scene(&scene, DipRect::new(0.0, 0.0, size.width(), size.height()));
+
+    assert_eq!(size, PopoverSurfaceSize::new(288.0, 388.0));
+    assert_eq!(scene.header_detail(), Some("12"));
+    assert_eq!(layout.rows().len(), 8);
+    assert!(layout.rows().iter().all(|row| row.bounds().height == 40.0));
+    assert_eq!(
+        layout.rows()[0].bounds(),
+        DipRect::new(16.0, 60.0, 256.0, 40.0)
+    );
+    assert_eq!(
+        layout.icon_bounds(0),
+        Some(DipRect::new(18.0, 66.0, 28.0, 28.0))
+    );
+}
+
+#[test]
+fn balanced_apps_long_label_uses_all_remaining_row_width() {
+    let scene = balanced_apps_scene();
+    let size = popover_surface_size(&scene);
+    let layout = layout_popover_scene(&scene, DipRect::new(0.0, 0.0, size.width(), size.height()));
+
+    assert_eq!(
+        layout.label_bounds(0),
+        Some(DipRect::new(56.0, 60.0, 216.0, 40.0))
+    );
+}
+
+#[test]
+fn balanced_apps_rowless_states_reserve_a_visible_status_row() {
+    for state in [
+        PopoverContentState::Loading,
+        PopoverContentState::Empty,
+        PopoverContentState::Error,
+        PopoverContentState::Offline,
+    ] {
+        let scene = PopoverScene::new(
+            Popover::BackgroundApps,
+            "Background apps",
+            state,
+            Vec::new(),
+            None,
+        )
+        .with_layout_style(PopoverLayoutStyle::BalancedApps);
+        let size = popover_surface_size(&scene);
+        let layout =
+            layout_popover_scene(&scene, DipRect::new(0.0, 0.0, size.width(), size.height()));
+
+        assert_eq!(size, PopoverSurfaceSize::new(288.0, 108.0));
+        assert!(layout.rows().is_empty());
+        assert_eq!(
+            layout.status_bounds(),
+            Some(DipRect::new(16.0, 60.0, 256.0, 40.0))
+        );
+    }
 }
 
 #[test]
