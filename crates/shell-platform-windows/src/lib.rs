@@ -261,6 +261,11 @@ mod topbar_controller;
 mod topbar_types;
 #[allow(
     dead_code,
+    reason = "pure tray activation coordination is consumed by the native adapter incrementally"
+)]
+mod tray_activation;
+#[allow(
+    dead_code,
     reason = "bounded Explorer tray decoding is consumed by the native source incrementally"
 )]
 mod tray_record_decoder;
@@ -332,6 +337,16 @@ pub(crate) use topbar_controller::TopbarController;
 pub(crate) use topbar_types::{
     NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor,
     TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot, foreground_app_label,
+};
+#[allow(
+    unused_imports,
+    reason = "tray activation seam is consumed by native adapter incrementally"
+)]
+pub(crate) use tray_activation::{
+    TrayActivationCoordinator, TrayActivationEffect, TrayActivationId, TrayActivationRequest,
+    TrayActivationResult, TrayActivationStatus, TrayActivationStrategy, TrayCallbackSink,
+    TrayMessage, TrayScreenPoint, WM_CONTEXTMENU, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    normalize_executable_identity,
 };
 #[cfg(windows)]
 pub use win32::{ShowcaseRunConfig, run_showcase};
