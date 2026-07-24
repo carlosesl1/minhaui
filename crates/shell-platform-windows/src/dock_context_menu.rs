@@ -109,6 +109,7 @@ impl DockContextMenuController {
             PopoverKey::Next => active.focus_delta(1),
             PopoverKey::Previous => active.focus_delta(-1),
             PopoverKey::Activate => active.activate(),
+            PopoverKey::ContextMenu => Vec::new(),
             PopoverKey::Escape => Vec::new(),
         };
         if actions

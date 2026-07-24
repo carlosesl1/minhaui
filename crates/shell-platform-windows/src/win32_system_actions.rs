@@ -33,7 +33,8 @@ pub(super) fn apply(action: &PopoverAction) -> Result<()> {
         | PopoverAction::CalendarPrevious
         | PopoverAction::CalendarToday
         | PopoverAction::CalendarNext
-        | PopoverAction::OpenBackgroundApp(_) => Ok(()),
+        | PopoverAction::OpenBackgroundApp(_)
+        | PopoverAction::OpenBackgroundAppContextMenu(_) => Ok(()),
     }
 }
 

@@ -39,6 +39,164 @@ fn background_app_activation_emits_stable_id() {
     );
 }
 
+#[test]
+fn background_app_context_activation_is_typed_and_keeps_focus() {
+    let mut controller = PopoverController::new();
+    let generation = controller.begin_loading(Popover::BackgroundApps);
+    assert!(controller.complete_background_apps(generation, Ok(background_app_items(2))));
+    let surface = DipRect::new(0.0, 0.0, 288.0, 148.0);
+
+    assert_eq!(
+        controller.handle_pointer_context_pressed(DipPoint::new(24.0, 80.0), surface),
+        vec![QueuedPopoverAction::Redraw]
+    );
+    assert_eq!(
+        controller.scene().expect("background apps scene").focused(),
+        Some(0)
+    );
+    assert_eq!(
+        controller.handle_pointer_context(DipPoint::new(24.0, 80.0), surface),
+        vec![QueuedPopoverAction::TypedIntent(
+            PopoverAction::OpenBackgroundAppContextMenu(BackgroundAppId::new(0))
+        )]
+    );
+    assert_eq!(
+        controller.scene().expect("background apps scene").focused(),
+        Some(0)
+    );
+
+    assert_eq!(
+        controller.handle_key(PopoverKey::ContextMenu),
+        vec![QueuedPopoverAction::TypedIntent(
+            PopoverAction::OpenBackgroundAppContextMenu(BackgroundAppId::new(0))
+        )]
+    );
+    assert_eq!(
+        controller.scene().expect("background apps scene").focused(),
+        Some(0)
+    );
+
+    assert!(
+        controller
+            .handle_pointer_context_pressed(DipPoint::new(24.0, 200.0), surface)
+            .is_empty()
+    );
+    assert!(
+        controller
+            .handle_pointer_context(DipPoint::new(24.0, 200.0), surface)
+            .is_empty()
+    );
+    assert_eq!(
+        controller.scene().expect("background apps scene").focused(),
+        Some(0)
+    );
+
+    assert_eq!(
+        controller.handle_pointer(DipPoint::new(24.0, 120.0), surface),
+        vec![QueuedPopoverAction::TypedIntent(
+            PopoverAction::OpenBackgroundApp(BackgroundAppId::new(1))
+        )]
+    );
+    let scene = controller.scene().expect("background apps scene");
+    assert_eq!(scene.focused(), Some(1));
+    assert_eq!(scene.layout_style(), PopoverLayoutStyle::BalancedApps);
+    assert_eq!(scene.header_detail(), Some("2"));
+}
+
+#[test]
+fn context_menu_key_is_ignored_for_other_popovers() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = DefaultPopoverDataProvider::offline();
+    let mut controller = PopoverController::new();
+    controller.open(Popover::Power, &provider)?;
+
+    assert!(controller.handle_key(PopoverKey::ContextMenu).is_empty());
+    let focused = controller.scene().expect("power scene").focused();
+    assert!(
+        controller
+            .handle_pointer_context_pressed(
+                DipPoint::new(24.0, 120.0),
+                DipRect::new(0.0, 0.0, 288.0, 372.0),
+            )
+            .is_empty()
+    );
+    assert_eq!(controller.scene().expect("power scene").focused(), focused);
+    assert!(
+        controller
+            .handle_pointer_context(
+                DipPoint::new(24.0, 80.0),
+                DipRect::new(0.0, 0.0, 288.0, 372.0),
+            )
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn focus_scrolling_uses_eight_apps_rows_and_seventeen_compact_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut apps = PopoverController::new();
+    let generation = apps.begin_loading(Popover::BackgroundApps);
+    assert!(apps.complete_background_apps(generation, Ok(background_app_items(20))));
+    for _ in 0..8 {
+        apps.handle_key(PopoverKey::Next);
+    }
+    let apps_scene = apps.scene().expect("background apps scene");
+    assert_eq!(apps_scene.focused(), Some(8));
+    assert_eq!(apps_scene.scroll_offset(), 1);
+    let apps_size = popover_surface_size(&apps_scene);
+    let apps_layout = layout_popover_scene(
+        &apps_scene,
+        DipRect::new(0.0, 0.0, apps_size.width(), apps_size.height()),
+    );
+    assert_eq!(apps_layout.rows().len(), 8);
+    assert_eq!(
+        apps_layout.rows().first().expect("first app row").index(),
+        1
+    );
+    assert_eq!(apps_layout.rows().last().expect("last app row").index(), 8);
+    assert_eq!(
+        apps_layout.rows().first().expect("first app row").bounds(),
+        DipRect::new(16.0, 60.0, 256.0, 40.0)
+    );
+
+    let mut compact = PopoverController::new();
+    compact.open(Popover::Network, &TwentyRowsProvider)?;
+    for _ in 0..17 {
+        compact.handle_key(PopoverKey::Next);
+    }
+    let compact_scene = compact.scene().expect("compact scene");
+    assert_eq!(compact_scene.layout_style(), PopoverLayoutStyle::Compact);
+    assert_eq!(compact_scene.focused(), Some(17));
+    assert_eq!(compact_scene.scroll_offset(), 1);
+    let compact_layout = layout_popover_scene(&compact_scene, DipRect::new(0.0, 0.0, 244.0, 420.0));
+    assert_eq!(compact_layout.rows().len(), 17);
+    assert_eq!(
+        compact_layout
+            .rows()
+            .first()
+            .expect("first compact row")
+            .index(),
+        1
+    );
+    assert_eq!(
+        compact_layout
+            .rows()
+            .last()
+            .expect("last compact row")
+            .index(),
+        17
+    );
+    assert_eq!(
+        compact_layout
+            .rows()
+            .first()
+            .expect("first compact row")
+            .bounds(),
+        DipRect::new(12.0, 5.0, 220.0, 24.0)
+    );
+    Ok(())
+}
+
 fn background_app_items(count: usize) -> Vec<PopoverItem> {
     (0..count)
         .map(|index| {
@@ -53,6 +211,26 @@ fn background_app_items(count: usize) -> Vec<PopoverItem> {
             .with_icon_source(Some(format!(r"C:\Apps\app{index:02}.exe")))
         })
         .collect()
+}
+
+struct TwentyRowsProvider;
+
+impl PopoverDataProvider for TwentyRowsProvider {
+    fn load(
+        &self,
+        kind: Popover,
+        _snapshot: &crate::TopbarSnapshot,
+        _calendar_offset: i16,
+    ) -> Result<PopoverPayload, PopoverDataError> {
+        Ok(PopoverPayload::new(
+            kind,
+            PopoverLoadState::Ready(
+                (0..20)
+                    .map(|index| PopoverItem::new(&format!("Row {index:02}"), "", true, None))
+                    .collect(),
+            ),
+        ))
+    }
 }
 use shell_core::{CalendarDate, Popover};
 use shell_renderer::{

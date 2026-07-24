@@ -93,8 +93,10 @@ impl RuntimeOrchestrator {
             PlatformEvent::TopbarPointer(_) | PlatformEvent::TopbarKey(_) => RuntimeAction::None,
             PlatformEvent::PopoverKey(_) => RuntimeAction::None,
             PlatformEvent::PopoverPointerPressed(_)
+            | PlatformEvent::PopoverContextPressed(_)
             | PlatformEvent::PopoverPointer(_)
             | PlatformEvent::PopoverPointerMoved(_)
+            | PlatformEvent::PopoverContextRequested(_)
             | PlatformEvent::PopoverScroll(_) => RuntimeAction::None,
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,

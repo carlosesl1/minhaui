@@ -9,6 +9,7 @@ pub enum PopoverKey {
     Next,
     Previous,
     Activate,
+    ContextMenu,
     Escape,
 }
 
@@ -30,6 +31,7 @@ pub enum PopoverAction {
     CalendarNext,
     ConfirmSession(SessionAction),
     OpenBackgroundApp(BackgroundAppId),
+    OpenBackgroundAppContextMenu(BackgroundAppId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

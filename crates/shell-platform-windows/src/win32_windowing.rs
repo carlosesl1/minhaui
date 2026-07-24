@@ -4,8 +4,8 @@ use shell_renderer::{DipPoint, PhysicalRect};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
-    VK_SPACE, VK_TAB, VK_UP,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_DOWN, VK_ESCAPE, VK_F10, VK_LEFT,
+    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PostQuitMessage,
@@ -239,6 +239,20 @@ pub(super) unsafe extern "system" fn window_proc(
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::PopoverPointer(client_point(hwnd, lparam)),
+            ));
+            LRESULT(0)
+        }
+        WM_RBUTTONDOWN if is_popover_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::PopoverContextPressed(client_point(hwnd, lparam)),
+            ));
+            LRESULT(0)
+        }
+        WM_RBUTTONUP if is_popover_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::PopoverContextRequested(client_point(hwnd, lparam)),
             ));
             LRESULT(0)
         }
@@ -604,11 +618,19 @@ fn popover_key(wparam: WPARAM) -> Option<PopoverKey> {
         Some(PopoverKey::Previous)
     } else if code == VK_RETURN.0 || code == VK_SPACE.0 {
         Some(PopoverKey::Activate)
+    } else if code == VK_APPS.0 || (code == VK_F10.0 && shift_pressed()) {
+        Some(PopoverKey::ContextMenu)
     } else if code == VK_ESCAPE.0 {
         Some(PopoverKey::Escape)
     } else {
         None
     }
+}
+
+fn shift_pressed() -> bool {
+    // SAFETY: Category 8 (FFI boundary). GetAsyncKeyState only reads the
+    // process-global keyboard state and does not dereference application memory.
+    unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 }
 }
 
 fn dock_key(wparam: WPARAM) -> Option<DockKey> {

@@ -20,7 +20,15 @@ pub struct PopoverController {
     load_generation: u64,
 }
 
-const MAX_VISIBLE_ROWS: usize = 17;
+const COMPACT_MAX_VISIBLE_ROWS: usize = 17;
+const BACKGROUND_APPS_MAX_VISIBLE_ROWS: usize = 8;
+
+const fn max_visible_rows(kind: Popover) -> usize {
+    match kind {
+        Popover::BackgroundApps => BACKGROUND_APPS_MAX_VISIBLE_ROWS,
+        _ => COMPACT_MAX_VISIBLE_ROWS,
+    }
+}
 
 impl Default for PopoverController {
     fn default() -> Self {
@@ -138,6 +146,7 @@ impl PopoverController {
                 self.apply_internal_actions(&actions);
                 actions
             }
+            PopoverKey::ContextMenu => active.context_activate(),
             PopoverKey::Escape => self.dismiss(),
         }
     }
@@ -146,7 +155,10 @@ impl PopoverController {
         let Some(active) = &mut self.active else {
             return Vec::new();
         };
-        let maximum = active.items.len().saturating_sub(MAX_VISIBLE_ROWS);
+        let maximum = active
+            .items
+            .len()
+            .saturating_sub(max_visible_rows(active.kind));
         active.scroll_offset = active
             .scroll_offset
             .saturating_add_signed(rows)
@@ -176,6 +188,56 @@ impl PopoverController {
         let actions = active.activate();
         self.apply_internal_actions(&actions);
         actions
+    }
+
+    pub fn handle_pointer_context(
+        &mut self,
+        point: DipPoint,
+        surface: DipRect,
+    ) -> Vec<QueuedPopoverAction> {
+        let Some(active) = &mut self.active else {
+            return Vec::new();
+        };
+        if active.kind != Popover::BackgroundApps {
+            return Vec::new();
+        }
+        let scene = active.scene();
+        let Some(index) = layout_popover_scene(&scene, surface).hit_test(point) else {
+            return Vec::new();
+        };
+        if !active.items[index].enabled() {
+            return Vec::new();
+        }
+        if active.focused != Some(index) {
+            active.pending_confirmation = None;
+        }
+        active.focused = Some(index);
+        active.context_activate()
+    }
+
+    pub fn handle_pointer_context_pressed(
+        &mut self,
+        point: DipPoint,
+        surface: DipRect,
+    ) -> Vec<QueuedPopoverAction> {
+        let Some(active) = &mut self.active else {
+            return Vec::new();
+        };
+        if active.kind != Popover::BackgroundApps {
+            return Vec::new();
+        }
+        let scene = active.scene();
+        let Some(index) = layout_popover_scene(&scene, surface).hit_test(point) else {
+            return Vec::new();
+        };
+        if !active.items[index].enabled() {
+            return Vec::new();
+        }
+        if active.focused != Some(index) {
+            active.pending_confirmation = None;
+        }
+        active.focused = Some(index);
+        vec![QueuedPopoverAction::Redraw]
     }
 
     pub fn handle_pointer_move(
@@ -297,10 +359,11 @@ impl ActivePopover {
             self.pending_confirmation = None;
         }
         self.focused = Some(next);
+        let max_visible_rows = max_visible_rows(self.kind);
         if next < self.scroll_offset {
             self.scroll_offset = next;
-        } else if next >= self.scroll_offset + MAX_VISIBLE_ROWS {
-            self.scroll_offset = next + 1 - MAX_VISIBLE_ROWS;
+        } else if next >= self.scroll_offset + max_visible_rows {
+            self.scroll_offset = next + 1 - max_visible_rows;
         }
         vec![QueuedPopoverAction::Redraw]
     }
@@ -329,6 +392,21 @@ impl ActivePopover {
         }
     }
 
+    fn context_activate(&self) -> Vec<QueuedPopoverAction> {
+        if self.kind != Popover::BackgroundApps {
+            return Vec::new();
+        }
+        let Some(index) = self.focused else {
+            return Vec::new();
+        };
+        match self.items[index].action() {
+            Some(PopoverAction::OpenBackgroundApp(id)) => vec![QueuedPopoverAction::TypedIntent(
+                PopoverAction::OpenBackgroundAppContextMenu(*id),
+            )],
+            _ => Vec::new(),
+        }
+    }
+
     fn scene(&self) -> PopoverScene {
         let rows = self
             .items
@@ -351,15 +429,20 @@ impl ActivePopover {
                 row
             })
             .collect();
-        let layout_style = if self.kind == Popover::SystemMenu {
-            PopoverLayoutStyle::SystemPanel
-        } else {
-            PopoverLayoutStyle::Compact
+        let layout_style = match self.kind {
+            Popover::SystemMenu => PopoverLayoutStyle::SystemPanel,
+            Popover::BackgroundApps => PopoverLayoutStyle::BalancedApps,
+            _ => PopoverLayoutStyle::Compact,
         };
-        PopoverScene::new(self.kind, title(self.kind), self.state, rows, self.focused)
-            .with_scroll_offset(self.scroll_offset)
-            .with_status_text(&self.status_text)
-            .with_layout_style(layout_style)
+        let mut scene =
+            PopoverScene::new(self.kind, title(self.kind), self.state, rows, self.focused)
+                .with_scroll_offset(self.scroll_offset)
+                .with_status_text(&self.status_text)
+                .with_layout_style(layout_style);
+        if self.kind == Popover::BackgroundApps {
+            scene = scene.with_header_detail(&self.items.len().to_string());
+        }
+        scene
     }
 }
 

@@ -648,12 +648,12 @@ impl RuntimeSurfaces {
                     );
                 }
                 if self.quick_settings_controller.is_open() {
-                    let actions = self
-                        .quick_settings_controller
-                        .handle_key(quick_settings_key(*key));
-                    self.apply_quick_settings_actions(
-                        &actions, topbar, dock, popover, preview, settings,
-                    )?;
+                    if let Some(key) = quick_settings_key(*key) {
+                        let actions = self.quick_settings_controller.handle_key(key);
+                        self.apply_quick_settings_actions(
+                            &actions, topbar, dock, popover, preview, settings,
+                        )?;
+                    }
                     return Ok(true);
                 }
                 let actions = self.popover_controller.handle_key(*key);
@@ -669,6 +669,14 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     )?;
                 }
+                return Ok(true);
+            }
+            PlatformEvent::PopoverContextPressed(point) => {
+                let actions = self.popover_controller.handle_pointer_context_pressed(
+                    *point,
+                    crate::win32_dock_render::dip_surface(popover),
+                );
+                self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
                 return Ok(true);
             }
             PlatformEvent::PopoverPointer(point) => {
@@ -719,6 +727,13 @@ impl RuntimeSurfaces {
                 let actions = self
                     .popover_controller
                     .handle_pointer_move(*point, crate::win32_dock_render::dip_surface(popover));
+                self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
+                return Ok(true);
+            }
+            PlatformEvent::PopoverContextRequested(point) => {
+                let actions = self
+                    .popover_controller
+                    .handle_pointer_context(*point, crate::win32_dock_render::dip_surface(popover));
                 self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
                 return Ok(true);
             }
@@ -1308,12 +1323,13 @@ const fn empty_scenes() -> ShellScenes<'static> {
     }
 }
 
-const fn quick_settings_key(key: crate::PopoverKey) -> crate::QuickSettingsKey {
+const fn quick_settings_key(key: crate::PopoverKey) -> Option<crate::QuickSettingsKey> {
     match key {
-        crate::PopoverKey::Next => crate::QuickSettingsKey::Next,
-        crate::PopoverKey::Previous => crate::QuickSettingsKey::Previous,
-        crate::PopoverKey::Activate => crate::QuickSettingsKey::Activate,
-        crate::PopoverKey::Escape => crate::QuickSettingsKey::Escape,
+        crate::PopoverKey::Next => Some(crate::QuickSettingsKey::Next),
+        crate::PopoverKey::Previous => Some(crate::QuickSettingsKey::Previous),
+        crate::PopoverKey::Activate => Some(crate::QuickSettingsKey::Activate),
+        crate::PopoverKey::ContextMenu => None,
+        crate::PopoverKey::Escape => Some(crate::QuickSettingsKey::Escape),
     }
 }
 
