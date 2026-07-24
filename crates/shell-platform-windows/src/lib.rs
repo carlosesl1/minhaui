@@ -232,6 +232,7 @@ mod media_session_types;
 )]
 mod media_session_worker;
 mod native_event_route;
+mod native_tray;
 mod night_light_coordinator;
 #[cfg(windows)]
 #[allow(

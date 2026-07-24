@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::native_tray::{NativeTrayIdentity, NativeTrayKey, NativeTraySelector};
+
 pub(crate) const MAX_NOTIFICATION_REGISTRATIONS: usize = 256;
 pub(crate) const MAX_BACKGROUND_APPS: usize = 32;
 const MAX_LABEL_CHARS: usize = 160;
@@ -57,20 +59,68 @@ pub(crate) struct BackgroundAppEntry {
     label: String,
     executable: String,
     icon_source: String,
+    origin: BackgroundAppOrigin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BackgroundAppOrigin {
+    #[allow(
+        dead_code,
+        reason = "native tray origin is consumed by the Windows tray adapter incrementally"
+    )]
+    Native(NativeTrayIdentity),
+    RegistryFallback,
 }
 
 impl BackgroundAppEntry {
     fn from_match(registration: &NotificationRegistration, process: &RunningProcess) -> Self {
-        Self {
-            id: BackgroundAppId::new(fnv1a(normalized_path(&process.executable).as_bytes())),
-            process_id: process.process_id,
-            label: safe_label(
+        Self::registry_fallback(
+            process.process_id,
+            safe_label(
                 &registration.tooltip,
                 &process.executable,
                 &process.description,
             ),
-            executable: process.executable.clone(),
-            icon_source: process.executable.clone(),
+            process.executable.clone(),
+            process.executable.clone(),
+        )
+    }
+
+    pub(crate) fn registry_fallback(
+        process_id: u32,
+        label: impl Into<String>,
+        executable: impl Into<String>,
+        icon_source: impl Into<String>,
+    ) -> Self {
+        let executable = executable.into();
+        Self {
+            id: BackgroundAppId::new(fnv1a(normalized_path(&executable).as_bytes())),
+            process_id,
+            label: label.into(),
+            executable,
+            icon_source: icon_source.into(),
+            origin: BackgroundAppOrigin::RegistryFallback,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "native tray constructor is consumed by the adapter incrementally"
+    )]
+    pub(crate) fn native(
+        identity: NativeTrayIdentity,
+        label: impl Into<String>,
+        executable: impl Into<String>,
+        icon_source: impl Into<String>,
+    ) -> Self {
+        let executable = executable.into();
+        Self {
+            id: BackgroundAppId::new(native_stable_id(identity)),
+            process_id: identity.owner_process_id(),
+            label: label.into(),
+            executable,
+            icon_source: icon_source.into(),
+            origin: BackgroundAppOrigin::Native(identity),
         }
     }
 
@@ -92,6 +142,14 @@ impl BackgroundAppEntry {
 
     pub(crate) fn icon_source(&self) -> &str {
         &self.icon_source
+    }
+
+    #[allow(
+        dead_code,
+        reason = "native tray origin accessor is consumed by the adapter incrementally"
+    )]
+    pub(crate) fn origin(&self) -> &BackgroundAppOrigin {
+        &self.origin
     }
 }
 
@@ -115,14 +173,62 @@ pub(crate) fn build_background_apps(
         })
         .collect::<Vec<_>>();
 
-    result.sort_by(|left, right| {
+    sort_and_bound(&mut result);
+    result
+}
+
+/// Combines native tray observations with the registry/process fallback.
+/// Native entries win by normalized executable path, while distinct native
+/// identities from one executable remain visible.
+#[allow(
+    dead_code,
+    reason = "native tray merge is consumed by the Windows tray adapter incrementally"
+)]
+pub(crate) fn merge_background_apps(
+    native: impl AsRef<[BackgroundAppEntry]>,
+    fallback: impl AsRef<[BackgroundAppEntry]>,
+) -> Vec<BackgroundAppEntry> {
+    let native = native.as_ref();
+    let fallback = fallback.as_ref();
+    let mut result = Vec::with_capacity(native.len().saturating_add(fallback.len()));
+    let mut native_paths = HashSet::new();
+    let mut native_identities = HashSet::<NativeTrayKey>::new();
+
+    for entry in native {
+        let identity = match entry.origin() {
+            BackgroundAppOrigin::Native(identity) => identity,
+            BackgroundAppOrigin::RegistryFallback => continue,
+        };
+        if native_identities.insert(identity.logical_key()) {
+            native_paths.insert(normalized_path(entry.executable()));
+            result.push(entry.clone());
+        }
+    }
+
+    let mut fallback_paths = HashSet::new();
+    for entry in fallback {
+        if !matches!(entry.origin(), BackgroundAppOrigin::RegistryFallback) {
+            continue;
+        }
+        let path = normalized_path(entry.executable());
+        if native_paths.contains(&path) || !fallback_paths.insert(path) {
+            continue;
+        }
+        result.push(entry.clone());
+    }
+
+    sort_and_bound(&mut result);
+    result
+}
+
+fn sort_and_bound(entries: &mut Vec<BackgroundAppEntry>) {
+    entries.sort_by(|left, right| {
         left.label
             .to_ascii_lowercase()
             .cmp(&right.label.to_ascii_lowercase())
             .then_with(|| left.id.value().cmp(&right.id.value()))
     });
-    result.truncate(MAX_BACKGROUND_APPS);
-    result
+    entries.truncate(MAX_BACKGROUND_APPS);
 }
 
 pub(crate) fn safe_label(tooltip: &str, executable: &str, description: &str) -> String {
@@ -165,12 +271,52 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+#[allow(
+    dead_code,
+    reason = "native tray stable IDs are consumed by the Windows tray adapter incrementally"
+)]
+fn native_stable_id(identity: NativeTrayIdentity) -> u64 {
+    let key = identity.logical_key();
+    let mut bytes = Vec::with_capacity(1 + 8 + 16);
+    bytes.extend_from_slice(&key.owner_window().value().to_le_bytes());
+    match key.selector() {
+        NativeTraySelector::Guid(guid) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&guid);
+        }
+        NativeTraySelector::IconId(icon_id) => {
+            bytes.push(0);
+            bytes.extend_from_slice(&icon_id.to_le_bytes());
+        }
+    }
+    fnv1a(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_BACKGROUND_APPS, NotificationRegistration, RunningProcess, build_background_apps,
-        safe_label,
+        BackgroundAppEntry, BackgroundAppOrigin, MAX_BACKGROUND_APPS, NotificationRegistration,
+        RunningProcess, build_background_apps, merge_background_apps, safe_label,
     };
+    use crate::native_event_route::NativeWindowId;
+    use crate::native_tray::NativeTrayIdentity;
+
+    fn native(window: isize, icon: u32, executable: &str, label: &str) -> BackgroundAppEntry {
+        native_with_identity(
+            NativeTrayIdentity::new(NativeWindowId::new(window), 42, icon, 0x8001, 4, None, 1)
+                .expect("valid identity"),
+            executable,
+            label,
+        )
+    }
+
+    fn native_with_identity(
+        identity: NativeTrayIdentity,
+        executable: &str,
+        label: &str,
+    ) -> BackgroundAppEntry {
+        BackgroundAppEntry::native(identity, label, executable, executable)
+    }
 
     #[test]
     fn catalog_keeps_only_live_registered_executables() {
@@ -242,5 +388,132 @@ mod tests {
         assert_eq!(catalog.len(), MAX_BACKGROUND_APPS);
         assert_eq!(catalog.first().map(|entry| entry.label()), Some("App 00"));
         assert_eq!(catalog.last().map(|entry| entry.label()), Some("App 31"));
+    }
+
+    #[test]
+    fn native_entries_win_over_fallback_for_the_same_normalized_executable() {
+        let native = vec![native(7, 1, r"C:\Apps\Discord.exe", "Discord native")];
+        let fallback = vec![BackgroundAppEntry::registry_fallback(
+            42,
+            "Discord fallback",
+            r"c:/apps/discord.exe",
+            r"c:/apps/discord.exe",
+        )];
+
+        let merged = merge_background_apps(&native, &fallback);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].label(), "Discord native");
+        assert!(matches!(merged[0].origin(), BackgroundAppOrigin::Native(_)));
+    }
+
+    #[test]
+    fn native_icons_from_one_executable_remain_distinct() {
+        let native = vec![
+            native(7, 1, r"C:\Apps\Chat.exe", "Chat one"),
+            native(7, 2, r"C:\Apps\Chat.exe", "Chat two"),
+            native(8, 1, r"C:\Apps\Chat.exe", "Chat three"),
+        ];
+
+        let merged = merge_background_apps(&native, &[]);
+
+        assert_eq!(merged.len(), 3);
+        assert_ne!(merged[0].id(), merged[1].id());
+        assert_ne!(merged[1].id(), merged[2].id());
+    }
+
+    #[test]
+    fn exact_duplicate_native_identity_is_emitted_once() {
+        let entry = native(7, 1, r"C:\Apps\Chat.exe", "Chat");
+        let merged = merge_background_apps(&[entry.clone(), entry], &[]);
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn guid_precedence_deduplicates_metadata_changes_and_keeps_id_stable() {
+        let guid = Some([0x11; 16]);
+        let first = native_with_identity(
+            NativeTrayIdentity::new(NativeWindowId::new(7), 42, 1, 0x8001, 1, guid, 10)
+                .expect("valid identity"),
+            r"C:\Apps\Chat.exe",
+            "Chat first",
+        );
+        let updated = native_with_identity(
+            NativeTrayIdentity::new(NativeWindowId::new(7), 99, 999, 0x9001, 2, guid, 11)
+                .expect("valid identity"),
+            r"C:\Apps\Chat.exe",
+            "Chat updated",
+        );
+
+        assert_eq!(first.id(), updated.id());
+        let merged = merge_background_apps(&[first, updated], &[]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].label(), "Chat first");
+    }
+
+    #[test]
+    fn distinct_guids_remain_distinct_native_icons() {
+        let first = native_with_identity(
+            NativeTrayIdentity::new(
+                NativeWindowId::new(7),
+                42,
+                1,
+                0x8001,
+                1,
+                Some([0x11; 16]),
+                1,
+            )
+            .expect("valid identity"),
+            r"C:\Apps\Chat.exe",
+            "Chat one",
+        );
+        let second = native_with_identity(
+            NativeTrayIdentity::new(
+                NativeWindowId::new(7),
+                42,
+                1,
+                0x8001,
+                1,
+                Some([0x22; 16]),
+                1,
+            )
+            .expect("valid identity"),
+            r"C:\Apps\Chat.exe",
+            "Chat two",
+        );
+
+        assert_ne!(first.id(), second.id());
+        assert_eq!(merge_background_apps(&[first, second], &[]).len(), 2);
+    }
+
+    #[test]
+    fn merge_is_sorted_and_bounded() {
+        let native_entries = (0..20)
+            .map(|index| {
+                native(
+                    index + 1,
+                    index as u32,
+                    &format!(r"C:\Native\n{index}.exe"),
+                    &format!("Native {index:02}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let fallback_entries = (0..20)
+            .map(|index| {
+                BackgroundAppEntry::registry_fallback(
+                    index + 1,
+                    format!("Fallback {index:02}"),
+                    format!(r"C:\Fallback\f{index}.exe"),
+                    format!(r"C:\Fallback\f{index}.exe"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let merged = merge_background_apps(&native_entries, &fallback_entries);
+
+        assert_eq!(merged.len(), MAX_BACKGROUND_APPS);
+        assert!(merged.windows(2).all(|pair| {
+            pair[0].label().to_ascii_lowercase() <= pair[1].label().to_ascii_lowercase()
+        }));
     }
 }
