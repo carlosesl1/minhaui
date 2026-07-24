@@ -51,6 +51,35 @@ fn detailed_audio_panel_keeps_master_apps_outputs_and_settings_in_one_flow() {
 }
 
 #[test]
+fn audio_session_identity_and_slider_share_a_balanced_card_geometry() {
+    let panel = QuickSettingsAudioPanel::new(
+        QuickSettingsSlider::new(QuickControlKind::Volume, "Volume", 42, true),
+        vec![QuickSettingsAudioSession::new(
+            QuickSettingsAudioSessionId::new(7),
+            "Vivaldi",
+            "Playing audio",
+            68,
+            false,
+        )],
+        Vec::new(),
+        false,
+    );
+    let scene = QuickSettingsScene::new(Vec::new()).with_audio_panel(Some(panel));
+    let (_, height) = quick_settings_surface_size(&scene, 620.0);
+    let layout =
+        layout_quick_settings(&scene, DipRect::new(0.0, 0.0, QUICK_SETTINGS_WIDTH, height));
+
+    let session = layout.audio_sessions()[0];
+    assert_eq!(session.bounds().height, 68.0);
+    assert_eq!(session.track().x - session.bounds().x, 52.0);
+    assert_eq!(session.track().y - session.bounds().y, 40.0);
+    assert_eq!(
+        session.bounds().x + session.bounds().width - (session.track().x + session.track().width),
+        8.0
+    );
+}
+
+#[test]
 fn detailed_audio_panel_lays_out_every_available_output() {
     let outputs = (0..5)
         .map(|index| {

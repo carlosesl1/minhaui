@@ -20,7 +20,7 @@ const FOOTER_HEIGHT: f32 = 36.0;
 const SUBMENU_HEADER_HEIGHT: f32 = 48.0;
 const SUBMENU_CHOICE_HEIGHT: f32 = 58.0;
 const AUDIO_SECTION_LABEL_HEIGHT: f32 = 24.0;
-const AUDIO_SESSION_HEIGHT: f32 = 58.0;
+const AUDIO_SESSION_HEIGHT: f32 = 68.0;
 const AUDIO_OUTPUT_HEIGHT: f32 = 50.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -491,9 +491,9 @@ pub fn layout_quick_settings(scene: &QuickSettingsScene, surface: DipRect) -> Qu
                     id: session.id(),
                     bounds,
                     track: DipRect::new(
-                        bounds.x + 34.0,
-                        bounds.y + 32.0,
-                        bounds.width - 34.0,
+                        bounds.x + 52.0,
+                        bounds.y + 40.0,
+                        bounds.width - 60.0,
                         20.0,
                     ),
                 });

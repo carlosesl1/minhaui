@@ -543,21 +543,32 @@ fn draw_audio_panel(
         else {
             continue;
         };
+        let bounds = laid_out.bounds();
         let hit = matches!(scene.hovered(), Some(QuickSettingsHit::AudioSessionSlider { id, .. }) if id == session.id());
-        if hit {
-            fill_round(
-                context,
-                rect(
-                    laid_out.bounds().x - 6.0,
-                    laid_out.bounds().y - 2.0,
-                    laid_out.bounds().x + laid_out.bounds().width + 6.0,
-                    laid_out.bounds().y + laid_out.bounds().height + 2.0,
-                    10.0,
-                ),
-                brushes.hover,
-            );
-        }
-        let icon_bounds = DipRect::new(laid_out.bounds().x, laid_out.bounds().y + 1.0, 24.0, 24.0);
+        fill_round(
+            context,
+            rect(
+                bounds.x,
+                bounds.y,
+                bounds.x + bounds.width,
+                bounds.y + bounds.height,
+                12.0,
+            ),
+            if hit { brushes.hover } else { brushes.tile },
+        );
+        let icon_well = DipRect::new(bounds.x + 8.0, bounds.y + 8.0, 36.0, 36.0);
+        fill_round(
+            context,
+            rect(
+                icon_well.x,
+                icon_well.y,
+                icon_well.x + icon_well.width,
+                icon_well.y + icon_well.height,
+                10.0,
+            ),
+            brushes.pressed,
+        );
+        let icon_bounds = DipRect::new(icon_well.x + 4.0, icon_well.y + 4.0, 28.0, 28.0);
         let drew_icon = session.icon_source().is_some_and(|source| {
             icons.draw(
                 source,
@@ -566,32 +577,21 @@ fn draw_audio_panel(
                     icon_bounds.y,
                     icon_bounds.x + icon_bounds.width,
                     icon_bounds.y + icon_bounds.height,
-                    6.0,
+                    7.0,
                 )
                 .rect,
             )
         });
         if !drew_icon {
-            fill_round(
-                context,
-                rect(
-                    icon_bounds.x,
-                    icon_bounds.y,
-                    icon_bounds.x + icon_bounds.width,
-                    icon_bounds.y + icon_bounds.height,
-                    7.0,
-                ),
-                brushes.pressed,
-            );
             draw_text(
                 context,
                 "\u{E71D}",
                 formats.icon,
                 text_rect(
-                    icon_bounds.x,
-                    icon_bounds.y,
-                    icon_bounds.x + icon_bounds.width,
-                    icon_bounds.y + icon_bounds.height,
+                    icon_well.x,
+                    icon_well.y,
+                    icon_well.x + icon_well.width,
+                    icon_well.y + icon_well.height,
                 ),
                 brushes.primary,
             );
@@ -601,10 +601,10 @@ fn draw_audio_panel(
             session.label(),
             formats.label,
             text_rect(
-                laid_out.bounds().x + 32.0,
-                laid_out.bounds().y,
-                laid_out.bounds().x + laid_out.bounds().width * 0.62,
-                laid_out.bounds().y + 24.0,
+                bounds.x + 52.0,
+                bounds.y + 7.0,
+                bounds.x + bounds.width * 0.62,
+                bounds.y + 29.0,
             ),
             brushes.primary,
         );
@@ -613,10 +613,10 @@ fn draw_audio_panel(
             session.detail(),
             formats.detail,
             text_rect(
-                laid_out.bounds().x + laid_out.bounds().width * 0.58,
-                laid_out.bounds().y,
-                laid_out.bounds().x + laid_out.bounds().width,
-                laid_out.bounds().y + 24.0,
+                bounds.x + bounds.width * 0.62,
+                bounds.y + 7.0,
+                bounds.x + bounds.width - 8.0,
+                bounds.y + 29.0,
             ),
             brushes.secondary,
         );
