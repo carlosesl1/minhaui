@@ -76,10 +76,14 @@ uma versão futura do Windows remova o contrato interno utilizado.
 Rejeitada porque o overflow fechado não é enumerado de forma confiável e a
 estrutura visual do Explorer não é um contrato estável.
 
+Superseded in part by ADR-0009.
+
 ### Ler barras de ferramentas e enviar callbacks privados
 
 Rejeitada por depender de estruturas internas, memória de outro processo e
 mensagens sem contrato público.
+
+Superseded in part by ADR-0009.
 
 ### Enumerar todos os processos continuamente
 
