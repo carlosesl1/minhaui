@@ -6,7 +6,7 @@ use shell_renderer::native::{
     DeviceKind, ShellScenes, ShowcaseRole, SurfaceMetrics, SurfaceVisibilityAnimation,
 };
 use shell_renderer::{
-    DipPoint, PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene,
+    DipPoint, Dpi, PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene,
     context_menu_height_for_entries, layout_popover_scene, physical_from_dip, popover_surface_size,
 };
 use windows::core::Result;
@@ -111,6 +111,24 @@ pub(super) struct RuntimeOptions {
     pub(super) liquid_glass: bool,
 }
 
+fn focused_background_app_anchor(
+    scene: &shell_renderer::PopoverScene,
+    surface: shell_renderer::DipRect,
+    origin: PhysicalRect,
+    dpi: Dpi,
+) -> Option<PhysicalRect> {
+    let focused = scene.focused()?;
+    let layout = layout_popover_scene(scene, surface);
+    let row = layout.rows().iter().find(|row| row.index() == focused)?;
+    let bounds = row.bounds();
+    Some(PhysicalRect::new(
+        origin.x + physical_from_dip(bounds.x + bounds.width, dpi),
+        origin.y + physical_from_dip(bounds.y + bounds.height / 2.0, dpi),
+        1,
+        1,
+    ))
+}
+
 impl RuntimeSurfaces {
     pub(super) fn new(
         options: RuntimeOptions,
@@ -207,7 +225,7 @@ impl RuntimeSurfaces {
                     let generation_effects =
                         self.external_menu_coordinator.set_generation(generation);
                     if !generation_effects.is_empty() {
-                        self.release_external_menu_handles();
+                        self.cleanup_external_menu_state();
                     }
                     self.background_apps = catalog;
                     if let Some(anchor) = self.active_topbar_anchor {
@@ -289,9 +307,7 @@ impl RuntimeSurfaces {
         };
         if matches!(event, PlatformEvent::TaskbarCreated) {
             self.external_menu_coordinator.explorer_restart();
-            self.cancel_pending_tray_activation();
-            self.release_external_menu_handles();
-            self.popover_controller.clear_external_active();
+            self.cleanup_external_menu_state();
             self.background_apps.clear();
             if self.popover_controller.active_kind() == Some(shell_core::Popover::BackgroundApps) {
                 let generation = self
@@ -312,9 +328,7 @@ impl RuntimeSurfaces {
                 if self.background_app_menu_controller.is_active() {
                     return Ok(true);
                 }
-                self.external_menu_coordinator.escape();
-                self.cancel_pending_tray_activation();
-                self.release_external_menu_handles();
+                self.cleanup_external_menu_state();
                 self.background_app_menu_controller.dismiss();
                 app_menu.hide();
                 self.dismiss_transient_overlays(topbar, dock, popover, preview, settings)?;
@@ -826,7 +840,43 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::ExternalMenuTimer => {
-                let effects = self.external_menu_coordinator.tick(Instant::now());
+                let now = Instant::now();
+                let generation = self.popover_controller.load_generation();
+                if self.external_menu_coordinator.phase() == crate::ExternalMenuPhase::Armed
+                    && let (Some(activation), Some(owner_pid)) = (
+                        self.external_menu_coordinator.activation(),
+                        self.external_menu_coordinator.owner_pid(),
+                    )
+                    && let Some(foreground) =
+                        crate::win32_external_menu_events::foreground_window_owner()
+                    && foreground.window.value() != 0
+                    && foreground.process_id == owner_pid
+                {
+                    let effects = self.external_menu_coordinator.foreground_window_observed(
+                        foreground.process_id,
+                        activation,
+                        generation,
+                        now,
+                    );
+                    if !effects.is_empty() {
+                        return self.apply_external_menu_effects(
+                            &effects, topbar, dock, popover, app_menu, preview, settings,
+                        );
+                    }
+                }
+                if self.external_menu_coordinator.phase() == crate::ExternalMenuPhase::Observed
+                    && let Some(owner_pid) = self.external_menu_coordinator.owner_pid()
+                    && crate::win32_external_menu_events::foreground_window_owner()
+                        .is_none_or(|foreground| foreground.process_id != owner_pid)
+                {
+                    let effects = self.external_menu_coordinator.owner_exit(owner_pid);
+                    if !effects.is_empty() {
+                        return self.apply_external_menu_effects(
+                            &effects, topbar, dock, popover, app_menu, preview, settings,
+                        );
+                    }
+                }
+                let effects = self.external_menu_coordinator.tick(now);
                 return self.apply_external_menu_effects(
                     &effects, topbar, dock, popover, app_menu, preview, settings,
                 );
@@ -1157,6 +1207,18 @@ impl RuntimeSurfaces {
     pub(super) fn release_external_menu_handles(&mut self) {
         self.external_menu_timer = None;
         self.external_menu_hook = None;
+        self.background_app_context_point = None;
+    }
+
+    /// Releases every shell-side resource associated with one external-menu
+    /// hand-off. Queued timer or popup events become harmless once the
+    /// coordinator returns to `Idle` and the exact pending activation is
+    /// cancelled.
+    pub(super) fn cleanup_external_menu_state(&mut self) -> bool {
+        let _ = self.external_menu_coordinator.escape();
+        self.cancel_pending_tray_activation();
+        self.release_external_menu_handles();
+        !self.popover_controller.clear_external_active().is_empty()
     }
 
     pub(super) fn cancel_pending_tray_activation(&mut self) {
@@ -1179,20 +1241,14 @@ impl RuntimeSurfaces {
             );
         }
         if let Some(scene) = self.popover_controller.scene()
-            && let Some(focused) = scene.focused()
-            && let Some(row) =
-                layout_popover_scene(&scene, crate::win32_dock_render::dip_surface(popover))
-                    .rows()
-                    .iter()
-                    .find(|row| row.index() == focused)
+            && let Some(anchor) = focused_background_app_anchor(
+                &scene,
+                crate::win32_dock_render::dip_surface(popover),
+                popover.rect,
+                popover.dpi(),
+            )
         {
-            let bounds = row.bounds();
-            return PhysicalRect::new(
-                popover.rect.x + physical_from_dip(bounds.x + bounds.width, popover.dpi()),
-                popover.rect.y + physical_from_dip(bounds.y + bounds.height / 2.0, popover.dpi()),
-                1,
-                1,
-            );
+            return anchor;
         }
         PhysicalRect::new(popover.rect.x, popover.rect.y, 1, 1)
     }
@@ -1278,25 +1334,14 @@ impl RuntimeSurfaces {
                     redraw |= !self.popover_controller.restore_focus(*app).is_empty();
                 }
                 ExternalMenuEffect::Release => {
-                    redraw |= !self.popover_controller.clear_external_active().is_empty();
-                    self.release_external_menu_handles();
+                    redraw |= self.cleanup_external_menu_state();
                 }
             }
         }
         if let Some(app) = timed_out {
-            let point = self
-                .background_app_context_point
-                .unwrap_or_else(|| DipPoint::new(0.0, 0.0));
+            let point = self.background_app_context_point.take();
             self.show_shell_owned_background_menu(
-                app,
-                true,
-                Some(point),
-                popover,
-                app_menu,
-                topbar,
-                dock,
-                preview,
-                settings,
+                app, true, point, popover, app_menu, topbar, dock, preview, settings,
             )?;
         }
         if redraw {
@@ -1319,10 +1364,7 @@ impl RuntimeSurfaces {
         preview: &OwnedWindow,
         settings: &OwnedWindow,
     ) -> Result<()> {
-        let point = self
-            .background_app_context_point
-            .take()
-            .unwrap_or_else(|| DipPoint::new(0.0, 0.0));
+        let point = self.background_app_context_point.take();
         let generation = self.popover_controller.load_generation();
         let Some(entry) = self.background_apps.iter().find(|entry| entry.id() == app) else {
             return Ok(());
@@ -1331,15 +1373,7 @@ impl RuntimeSurfaces {
             crate::background_apps::BackgroundAppOrigin::Native(identity) => *identity,
             crate::background_apps::BackgroundAppOrigin::RegistryFallback => {
                 return self.show_shell_owned_background_menu(
-                    app,
-                    false,
-                    Some(point),
-                    popover,
-                    app_menu,
-                    topbar,
-                    dock,
-                    preview,
-                    settings,
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
                 );
             }
         };
@@ -1352,42 +1386,24 @@ impl RuntimeSurfaces {
             Ok(hook) => hook,
             Err(_) => {
                 return self.show_shell_owned_background_menu(
-                    app,
-                    false,
-                    Some(point),
-                    popover,
-                    app_menu,
-                    topbar,
-                    dock,
-                    preview,
-                    settings,
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
                 );
             }
         };
+        let anchor = self.background_app_anchor(popover, point);
         let result = crate::win32_tray_activation::activate_native_tray_context_menu(
             &mut self.tray_activation_coordinator,
             &ops,
             identity,
             generation,
             entry.executable(),
-            TrayScreenPoint::new(
-                popover.rect.x + physical_from_dip(point.x.max(0.0), popover.dpi()),
-                popover.rect.y + physical_from_dip(point.y.max(0.0), popover.dpi()),
-            ),
+            TrayScreenPoint::new(anchor.x, anchor.y),
         );
         let result = match result {
             Ok(result) => result,
             Err(_) => {
                 return self.show_shell_owned_background_menu(
-                    app,
-                    false,
-                    Some(point),
-                    popover,
-                    app_menu,
-                    topbar,
-                    dock,
-                    preview,
-                    settings,
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
                 );
             }
         };
@@ -1396,35 +1412,18 @@ impl RuntimeSurfaces {
         }
         let Some(activation) = result.id() else {
             return self.show_shell_owned_background_menu(
-                app,
-                false,
-                Some(point),
-                popover,
-                app_menu,
-                topbar,
-                dock,
-                preview,
-                settings,
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
             );
         };
         if result.status() != TrayActivationStatus::Posted {
             let _ = self.tray_activation_coordinator.cancel(activation);
             return self.show_shell_owned_background_menu(
-                app,
-                false,
-                Some(point),
-                popover,
-                app_menu,
-                topbar,
-                dock,
-                preview,
-                settings,
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
             );
         }
         let generation_effects = self.external_menu_coordinator.set_generation(generation);
         if !generation_effects.is_empty() {
-            self.cancel_pending_tray_activation();
-            self.release_external_menu_handles();
+            self.cleanup_external_menu_state();
         }
         self.external_menu_hook = Some(hook);
         let arm_effects = self.external_menu_coordinator.arm(
@@ -1435,38 +1434,19 @@ impl RuntimeSurfaces {
             Instant::now(),
         );
         if arm_effects.is_empty() {
-            let _ = self.tray_activation_coordinator.cancel(activation);
-            self.release_external_menu_handles();
+            self.cleanup_external_menu_state();
             return self.show_shell_owned_background_menu(
-                app,
-                false,
-                Some(point),
-                popover,
-                app_menu,
-                topbar,
-                dock,
-                preview,
-                settings,
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
             );
         }
+        self.background_app_context_point = point;
         self.popover_controller.mark_external_active(app);
         self.external_menu_timer = match TimerGuard::start_external_menu(topbar.hwnd) {
             Ok(timer) => Some(timer),
             Err(_) => {
-                self.external_menu_coordinator.escape();
-                self.popover_controller.clear_external_active();
-                self.cancel_pending_tray_activation();
-                self.release_external_menu_handles();
+                self.cleanup_external_menu_state();
                 return self.show_shell_owned_background_menu(
-                    app,
-                    false,
-                    Some(point),
-                    popover,
-                    app_menu,
-                    topbar,
-                    dock,
-                    preview,
-                    settings,
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
                 );
             }
         };
@@ -1735,9 +1715,7 @@ impl RuntimeSurfaces {
                     &self.latest_observed_windows,
                 ) {
                     Ok(()) => {
-                        self.external_menu_coordinator.escape();
-                        self.cancel_pending_tray_activation();
-                        self.release_external_menu_handles();
+                        self.cleanup_external_menu_state();
                         self.popover_controller.dismiss();
                         app_menu.hide();
                         popover.hide();
@@ -1964,14 +1942,18 @@ pub(super) fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use shell_core::DockItemId;
+    use shell_core::{DockItemId, Popover};
     use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
-    use shell_renderer::{Dpi, PhysicalRect, WindowPreviewScene};
+    use shell_renderer::{
+        Dpi, PhysicalRect, PopoverContentState, PopoverLayoutStyle, PopoverRow, PopoverScene,
+        WindowPreviewScene,
+    };
     use windows::Win32::Foundation::HWND;
 
     use super::{
         CanonicalSurfaceScenes, SurfaceCompositionState, SurfaceEndpoint, SurfaceEndpoints,
-        canonical_surface_targets, empty_scenes, surface_build_plan, surface_composition_state,
+        canonical_surface_targets, empty_scenes, focused_background_app_anchor, surface_build_plan,
+        surface_composition_state,
     };
     use crate::{DockVisibilityMotion, PreviewEntranceMotion, PreviewMotionSpec};
 
@@ -2101,5 +2083,30 @@ mod tests {
         assert_eq!(animation.target_opacity, 0.0);
         assert!((animation.duration_seconds - 0.09).abs() < f32::EPSILON);
         assert_eq!(snapshot.preview_opacity, preview_motion.opacity_at(200));
+    }
+
+    #[test]
+    fn keyboard_context_anchor_uses_the_focused_apps_row() {
+        let scene = PopoverScene::new(
+            Popover::BackgroundApps,
+            "Apps",
+            PopoverContentState::Ready,
+            vec![
+                PopoverRow::new("First", "", true),
+                PopoverRow::new("Focused", "", true),
+            ],
+            Some(1),
+        )
+        .with_layout_style(PopoverLayoutStyle::BalancedApps);
+
+        let anchor = focused_background_app_anchor(
+            &scene,
+            shell_renderer::DipRect::new(0.0, 0.0, 288.0, 148.0),
+            PhysicalRect::new(100, 50, 288, 148),
+            Dpi::from_raw(96),
+        )
+        .expect("focused row anchor");
+
+        assert_eq!(anchor, PhysicalRect::new(372, 170, 1, 1));
     }
 }

@@ -183,6 +183,22 @@ impl ExternalMenuCoordinator {
         self.observe_popup(owner_pid, activation, generation, now)
     }
 
+    /// Observes an app-owned foreground window for this exact activation.
+    ///
+    /// Some applications render a custom top-level menu without emitting the
+    /// standard accessibility popup events. The runtime only calls this from
+    /// the active one-second observation timer after revalidating the
+    /// foreground window's owner PID.
+    pub(crate) fn foreground_window_observed(
+        &mut self,
+        owner_pid: u32,
+        activation: TrayActivationId,
+        generation: u64,
+        now: Instant,
+    ) -> Vec<ExternalMenuEffect> {
+        self.observe_popup(owner_pid, activation, generation, now)
+    }
+
     fn observe_popup(
         &mut self,
         owner_pid: u32,
@@ -430,6 +446,28 @@ mod tests {
             coordinator.popup_start(OWNER, id(2), GENERATION, at(base, 1)),
             vec![
                 ExternalMenuEffect::ActivationObserved { activation: id(2) },
+                ExternalMenuEffect::Redraw,
+            ]
+        );
+        assert_eq!(coordinator.phase(), ExternalMenuPhase::Observed);
+    }
+
+    #[test]
+    fn matching_foreground_window_observes_only_the_armed_generation() {
+        let base = Instant::now();
+        let mut coordinator = ExternalMenuCoordinator::new();
+        coordinator.set_generation(GENERATION);
+        coordinator.arm(APP, id(21), OWNER, GENERATION, at(base, 0));
+
+        assert!(
+            coordinator
+                .foreground_window_observed(OWNER + 1, id(21), GENERATION, at(base, 1))
+                .is_empty()
+        );
+        assert_eq!(
+            coordinator.foreground_window_observed(OWNER, id(21), GENERATION, at(base, 1)),
+            vec![
+                ExternalMenuEffect::ActivationObserved { activation: id(21) },
                 ExternalMenuEffect::Redraw,
             ]
         );

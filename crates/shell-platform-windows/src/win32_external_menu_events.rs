@@ -4,14 +4,44 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_SYSTEM_MENUPOPUPEND, EVENT_SYSTEM_MENUPOPUPSTART, GetWindowThreadProcessId, PostMessageW,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
+    EVENT_SYSTEM_MENUPOPUPEND, EVENT_SYSTEM_MENUPOPUPSTART, GetForegroundWindow,
+    GetWindowThreadProcessId, IsWindow, PostMessageW, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_APP,
 };
 
 use crate::win32_event_queue::{RoutedPlatformEvent, queue_event_with_wake};
 use crate::{NativeWindowId, PlatformEvent};
 
 pub(super) const EXTERNAL_MENU_WAKE_MESSAGE: u32 = WM_APP + 0x66;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ForegroundWindowOwner {
+    pub(super) window: NativeWindowId,
+    pub(super) process_id: u32,
+}
+
+/// Returns the live foreground window and its current owner PID.
+///
+/// Runtime callers invoke this only while an external-menu hold is active;
+/// it is deliberately not a background polling source.
+pub(super) fn foreground_window_owner() -> Option<ForegroundWindowOwner> {
+    // SAFETY: Category 8 (FFI boundary). The call returns a process-owned HWND
+    // value; no application memory is dereferenced.
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return None;
+    }
+    // SAFETY: Category 8 (FFI boundary). IsWindow validates the scalar HWND
+    // before the owner PID query below.
+    if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
+        return None;
+    }
+    let process_id = window_owner_process_id(hwnd)?;
+    Some(ForegroundWindowOwner {
+        window: NativeWindowId::new(hwnd.0 as isize),
+        process_id,
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExternalMenuEventKind {

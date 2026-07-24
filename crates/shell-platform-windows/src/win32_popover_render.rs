@@ -38,6 +38,7 @@ impl RuntimeSurfaces {
                     anchor,
                 } => {
                     self.dismiss_context_menu(topbar, dock, popover, preview, settings)?;
+                    self.cleanup_external_menu_state();
                     popover.hide();
                     popover.set_backdrop_enabled(false);
                     if (matches!(*kind, Popover::QuickSettings | Popover::Volume)
@@ -58,10 +59,6 @@ impl RuntimeSurfaces {
                         TopbarOverlayAnchor::Overflow => None,
                     };
                     self.topbar_controller.set_active_module(active_module);
-                    self.external_menu_coordinator.popover_replaced();
-                    self.cancel_pending_tray_activation();
-                    self.release_external_menu_handles();
-                    self.popover_controller.clear_external_active();
                     self.popover_controller.dismiss();
                     self.quick_settings_controller.dismiss();
                     if matches!(*kind, Popover::QuickSettings | Popover::Volume) {
@@ -153,6 +150,7 @@ impl RuntimeSurfaces {
                     }
                 }
                 QueuedTopbarAction::OpenSearch => {
+                    self.cleanup_external_menu_state();
                     self.clear_active_topbar_module();
                     self.popover_controller.dismiss();
                     self.quick_settings_controller.dismiss();
@@ -179,6 +177,7 @@ impl RuntimeSurfaces {
         preview: &OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<()> {
+        self.cleanup_external_menu_state();
         let active_changed = self.clear_active_topbar_module();
         self.dismiss_context_menu(topbar, dock, popover, preview, settings)?;
         popover.hide();
@@ -233,6 +232,7 @@ impl RuntimeSurfaces {
         preview: &OwnedWindow,
         settings: &OwnedWindow,
     ) -> Result<()> {
+        self.cleanup_external_menu_state();
         let had_topbar_invoker = self.active_topbar_anchor.is_some();
         let active_changed = self.clear_active_topbar_module();
         self.popover_controller.dismiss();
@@ -397,6 +397,7 @@ impl RuntimeSurfaces {
                     self.redraw_popover(topbar, dock, popover, preview, settings)?;
                 }
                 QueuedPopoverAction::TypedIntent(PopoverAction::OpenSettings) => {
+                    self.cleanup_external_menu_state();
                     let work = crate::win32_windowing::window_work_area(settings.hwnd)?;
                     let active_changed = self.clear_active_topbar_module();
                     self.popover_controller.dismiss();
@@ -428,6 +429,7 @@ impl RuntimeSurfaces {
                         &self.latest_observed_windows,
                     ) {
                         Ok(()) => {
+                            self.cleanup_external_menu_state();
                             let active_changed = self.clear_active_topbar_module();
                             self.popover_controller.dismiss();
                             popover.hide();
@@ -461,6 +463,7 @@ impl RuntimeSurfaces {
                     let succeeded = result.is_ok();
                     record_system_action("popover.system_action", result);
                     if hides_popover && succeeded {
+                        self.cleanup_external_menu_state();
                         let active_changed = self.clear_active_topbar_module();
                         self.popover_controller.dismiss();
                         popover.hide();
@@ -481,6 +484,7 @@ impl RuntimeSurfaces {
                 }
                 QueuedPopoverAction::Dismiss => {
                     let had_topbar_invoker = self.active_topbar_anchor.is_some();
+                    self.cleanup_external_menu_state();
                     let active_changed = self.clear_active_topbar_module();
                     popover.hide();
                     if active_changed {
