@@ -259,6 +259,11 @@ mod runtime;
 mod settings_controller;
 mod topbar_controller;
 mod topbar_types;
+#[allow(
+    dead_code,
+    reason = "bounded Explorer tray decoding is consumed by the native source incrementally"
+)]
+mod tray_record_decoder;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
