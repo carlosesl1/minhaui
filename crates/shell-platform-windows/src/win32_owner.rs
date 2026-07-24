@@ -748,11 +748,14 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::PopoverContextPressed(point) => {
-                self.background_app_context_point = Some(*point);
+                self.background_app_context_point = None;
                 let actions = self.popover_controller.handle_pointer_context_pressed(
                     *point,
                     crate::win32_dock_render::dip_surface(popover),
                 );
+                if !actions.is_empty() {
+                    self.background_app_context_point = Some(*point);
+                }
                 self.apply_popover_actions(
                     &actions, topbar, dock, popover, app_menu, preview, settings,
                 )?;
@@ -814,10 +817,13 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::PopoverContextRequested(point) => {
-                self.background_app_context_point = Some(*point);
+                self.background_app_context_point = None;
                 let actions = self
                     .popover_controller
                     .handle_pointer_context(*point, crate::win32_dock_render::dip_surface(popover));
+                if !actions.is_empty() {
+                    self.background_app_context_point = Some(*point);
+                }
                 self.apply_popover_actions(
                     &actions, topbar, dock, popover, app_menu, preview, settings,
                 )?;
@@ -1326,7 +1332,7 @@ impl RuntimeSurfaces {
                         .tray_activation_coordinator
                         .mark_observed_success(*activation);
                     if let Some(timer) = self.external_menu_timer.as_mut() {
-                        timer.rearm(30_000)?;
+                        timer.rearm(1_000)?;
                     }
                 }
                 ExternalMenuEffect::ActivationTimedOut { app, activation } => {
