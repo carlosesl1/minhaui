@@ -29,9 +29,9 @@ pub(crate) enum ExternalMenuEffect {
     SuppressDismissOnce,
     /// The native popup was observed for this exact activation token.
     ActivationObserved { activation: TrayActivationId },
-    /// No popup was observed in time.  Task 7 owns the compatibility decision
-    /// for this token; this effect only carries the typed fallback signal.
-    ActivationTimedOut {
+    /// No popup was observed in time. The owner records this protocol as
+    /// incompatible and attempts the next native protocol for the same click.
+    RetryNativeActivation {
         app: BackgroundAppId,
         activation: TrayActivationId,
     },
@@ -281,7 +281,7 @@ impl ExternalMenuCoordinator {
             {
                 self.state = State::Idle;
                 vec![
-                    ExternalMenuEffect::ActivationTimedOut {
+                    ExternalMenuEffect::RetryNativeActivation {
                         app: hold.app,
                         activation: hold.activation,
                     },
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(
             coordinator.tick(at(base, 1)),
             vec![
-                ExternalMenuEffect::ActivationTimedOut {
+                ExternalMenuEffect::RetryNativeActivation {
                     app: APP,
                     activation: id(5),
                 },

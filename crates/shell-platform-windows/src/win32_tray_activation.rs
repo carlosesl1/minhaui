@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(result.status(), TrayActivationStatus::PostFailed);
         assert!(result.id().is_some());
         assert_eq!(result.delivered_count(), 0);
-        assert_eq!(result.expected_count(), 1);
+        assert_eq!(result.expected_count(), 2);
         assert!(!result.is_pending());
         assert_eq!(coordinator.pending_id(), None);
         assert_eq!(ops.calls.borrow().len(), 4);
@@ -369,8 +369,8 @@ mod tests {
 
         assert_eq!(result.status(), TrayActivationStatus::Posted);
         assert!(result.id().is_some());
-        assert_eq!(result.delivered_count(), 1);
-        assert_eq!(result.expected_count(), 1);
+        assert_eq!(result.delivered_count(), 2);
+        assert_eq!(result.expected_count(), 2);
         assert!(result.is_pending());
         assert_eq!(
             ops.calls.borrow().as_slice(),
@@ -380,7 +380,11 @@ mod tests {
                 NativeCall::AllowForeground(OWNER_PROCESS_ID),
                 NativeCall::PostMessage(
                     OWNER_WINDOW,
-                    TrayMessage::modern_context_with_callback(0x8061, 7, (10, 20)),
+                    TrayMessage::modern_pointer_with_callback(0x8061, 7, (10, 20), WM_RBUTTONDOWN,),
+                ),
+                NativeCall::PostMessage(
+                    OWNER_WINDOW,
+                    TrayMessage::modern_pointer_with_callback(0x8061, 7, (10, 20), WM_RBUTTONUP,),
                 ),
             ]
         );

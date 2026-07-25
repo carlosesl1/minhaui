@@ -81,11 +81,24 @@ impl TrayMessage {
     where
         P: Into<TrayScreenPoint>,
     {
+        Self::modern_pointer_with_callback(callback_message, icon_id, point, WM_CONTEXTMENU)
+    }
+
+    #[must_use]
+    pub(crate) fn modern_pointer_with_callback<P>(
+        callback_message: u32,
+        icon_id: u32,
+        point: P,
+        event: u32,
+    ) -> Self
+    where
+        P: Into<TrayScreenPoint>,
+    {
         let point = point.into();
         let x = pack_signed_word(point.x());
         let y = pack_signed_word(point.y());
         let wparam = (x as usize) | ((y as usize) << 16);
-        let lparam = pack_context_lparam(icon_id);
+        let lparam = pack_modern_lparam(icon_id, event);
         Self {
             message: callback_message,
             wparam,
@@ -492,8 +505,8 @@ fn pack_signed_word(value: i32) -> u16 {
     value as i16 as u16
 }
 
-const fn pack_context_lparam(icon_id: u32) -> isize {
-    let packed = ((icon_id as u16 as u32) << 16) | WM_CONTEXTMENU;
+const fn pack_modern_lparam(icon_id: u32, event: u32) -> isize {
+    let packed = ((icon_id as u16 as u32) << 16) | (event as u16 as u32);
     packed as isize
 }
 
@@ -502,11 +515,20 @@ fn strategy_messages(
     request: &TrayActivationRequest,
 ) -> Vec<TrayMessage> {
     match strategy {
-        TrayActivationStrategy::VersionAware => vec![TrayMessage::modern_context_with_callback(
-            request.callback_message,
-            request.icon_id,
-            request.point,
-        )],
+        TrayActivationStrategy::VersionAware => vec![
+            TrayMessage::modern_pointer_with_callback(
+                request.callback_message,
+                request.icon_id,
+                request.point,
+                WM_RBUTTONDOWN,
+            ),
+            TrayMessage::modern_pointer_with_callback(
+                request.callback_message,
+                request.icon_id,
+                request.point,
+                WM_RBUTTONUP,
+            ),
+        ],
         TrayActivationStrategy::Legacy => vec![
             TrayMessage::legacy_with_callback(
                 request.callback_message,
@@ -540,7 +562,7 @@ fn strategy_messages(
 }
 
 fn strategy_order(version: u32) -> [TrayActivationStrategy; 3] {
-    if version >= 4 {
+    if version == 0 || version >= 4 {
         [
             TrayActivationStrategy::VersionAware,
             TrayActivationStrategy::Legacy,
@@ -652,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn one_begin_posts_only_the_initial_modern_strategy() {
+    fn modern_strategy_posts_the_version_four_right_click_sequence() {
         let mut coordinator = TrayActivationCoordinator::new();
         let mut sink = RecordingSink {
             accept: true,
@@ -665,15 +687,43 @@ mod tests {
             Some(TrayActivationStrategy::VersionAware)
         );
         assert!(result.id().is_some());
-        assert_eq!(sink.posted.len(), 1);
+        assert_eq!(sink.posted.len(), 2);
         assert_eq!(
-            sink.posted[0].1,
-            TrayMessage::modern_context_with_callback(
-                0x8001,
-                0x1234,
-                TrayScreenPoint::new(-32769, 32768)
-            )
+            sink.posted
+                .iter()
+                .map(|(_, message)| *message)
+                .collect::<Vec<_>>(),
+            vec![
+                TrayMessage::modern_pointer_with_callback(
+                    0x8001,
+                    0x1234,
+                    TrayScreenPoint::new(-32769, 32768),
+                    WM_RBUTTONDOWN,
+                ),
+                TrayMessage::modern_pointer_with_callback(
+                    0x8001,
+                    0x1234,
+                    TrayScreenPoint::new(-32769, 32768),
+                    WM_RBUTTONUP,
+                ),
+            ]
         );
+    }
+
+    #[test]
+    fn unknown_version_starts_modern_then_retries_legacy_after_timeout() {
+        let mut coordinator = TrayActivationCoordinator::new();
+        let mut sink = RecordingSink {
+            accept: true,
+            ..RecordingSink::default()
+        };
+
+        let first = coordinator.begin(request("unknown.exe", 0), &mut sink);
+        assert_eq!(first.strategy(), Some(TrayActivationStrategy::VersionAware));
+        coordinator.mark_timeout(first.id().expect("initial activation id"));
+
+        let retry = coordinator.begin(request("unknown.exe", 0), &mut sink);
+        assert_eq!(retry.strategy(), Some(TrayActivationStrategy::Legacy));
     }
 
     #[test]
@@ -756,7 +806,7 @@ mod tests {
         let first_id = first.id().expect("first activation id");
         let duplicate = coordinator.begin(request("other.exe", 4), &mut sink);
         assert_eq!(duplicate.status(), TrayActivationStatus::Pending);
-        assert_eq!(sink.posted.len(), 1);
+        assert_eq!(sink.posted.len(), 2);
         assert!(matches!(
             coordinator.cancel(first_id),
             TrayActivationEffect::Cancelled {

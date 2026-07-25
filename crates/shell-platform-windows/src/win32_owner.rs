@@ -1334,7 +1334,8 @@ impl RuntimeSurfaces {
         settings: &OwnedWindow,
     ) -> Result<bool> {
         let mut redraw = false;
-        let mut timed_out = None;
+        let retry_point = self.background_app_context_point;
+        let mut retry_native = None;
         for effect in effects {
             match effect {
                 ExternalMenuEffect::Redraw => redraw = true,
@@ -1347,9 +1348,9 @@ impl RuntimeSurfaces {
                         timer.rearm(1_000)?;
                     }
                 }
-                ExternalMenuEffect::ActivationTimedOut { app, activation } => {
+                ExternalMenuEffect::RetryNativeActivation { app, activation } => {
                     let _ = self.tray_activation_coordinator.mark_timeout(*activation);
-                    timed_out = Some(*app);
+                    retry_native = Some(*app);
                 }
                 ExternalMenuEffect::RestoreFocus(app) => {
                     redraw |= !self.popover_controller.restore_focus(*app).is_empty();
@@ -1359,10 +1360,10 @@ impl RuntimeSurfaces {
                 }
             }
         }
-        if let Some(app) = timed_out {
-            let point = self.background_app_context_point.take();
-            self.show_shell_owned_background_menu(
-                app, true, point, popover, app_menu, topbar, dock, preview, settings,
+        if let Some(app) = retry_native {
+            self.background_app_context_point = retry_point;
+            self.open_background_app_context_menu(
+                app, topbar, dock, popover, app_menu, preview, settings,
             )?;
         }
         if redraw {
