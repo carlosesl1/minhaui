@@ -1,9 +1,22 @@
 use core::ffi::c_void;
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, GetWindowThreadProcessId, IsWindow, PostMessageW,
+use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+    TreeScope_Descendants, UIA_InvokePatternId,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AllowSetForegroundWindow, FindWindowW, GetCursorPos, GetWindowThreadProcessId, IsWindow,
+    PostMessageW, SetCursorPos,
+};
+use windows::core::{Error, Result as WindowsResult, w};
 
 use crate::native_tray::NativeTrayIdentity;
 use crate::{
@@ -30,6 +43,30 @@ pub(crate) enum NativeTrayActivationError {
     OwnerProcessMismatch,
     #[error("tray owner cannot be permitted to take foreground")]
     ForegroundPermissionDenied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ShellAppTargetKind {
+    NotificationIcon,
+    TaskbarButton,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellAppTarget {
+    name: String,
+    kind: ShellAppTargetKind,
+    point: TrayScreenPoint,
+}
+
+impl ShellAppTarget {
+    #[cfg(test)]
+    fn test(name: &str, kind: ShellAppTargetKind, point: (i32, i32)) -> Self {
+        Self {
+            name: name.to_owned(),
+            kind,
+            point: point.into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -117,6 +154,284 @@ pub(crate) fn validate_native_tray_identity(
     Ok(owner_process_id)
 }
 
+pub(crate) fn activate_windows_shell_app_context_menu(
+    label: &str,
+    executable: &str,
+) -> WindowsResult<bool> {
+    // SAFETY: The UI thread initializes COM before constructing RuntimeSurfaces.
+    // UI Automation is used only to read Explorer-owned element metadata.
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }?;
+    // SAFETY: Looks up a system-owned top-level window by a static class name.
+    let shell_window = unsafe { FindWindowW(w!("Shell_TrayWnd"), None) }?;
+
+    let taskbar_targets =
+        collect_shell_targets(&automation, shell_window, ShellAppTargetKind::TaskbarButton)?;
+    if let Some(target) = select_shell_app_target(&taskbar_targets, label, executable) {
+        return right_click_shell_target(target.point).map(|()| true);
+    }
+
+    // SAFETY: Looks up a system-owned top-level window by a static class name.
+    let overflow_window =
+        match unsafe { FindWindowW(w!("TopLevelWindowForOverflowXamlIsland"), None) } {
+            Ok(window) => window,
+            Err(_) => {
+                if !open_notification_overflow(&automation, shell_window)? {
+                    return Ok(false);
+                }
+                let mut found = None;
+                for _ in 0..20 {
+                    // SAFETY: Looks up a system-owned top-level window by a static class name.
+                    let window =
+                        unsafe { FindWindowW(w!("TopLevelWindowForOverflowXamlIsland"), None) };
+                    if let Ok(window) = window {
+                        found = Some(window);
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                let Some(window) = found else {
+                    return Ok(false);
+                };
+                window
+            }
+        };
+    let notification_targets = collect_shell_targets(
+        &automation,
+        overflow_window,
+        ShellAppTargetKind::NotificationIcon,
+    )?;
+    let Some(target) = select_shell_app_target(&notification_targets, label, executable) else {
+        return Ok(false);
+    };
+    right_click_shell_target(target.point).map(|()| true)
+}
+
+fn collect_shell_targets(
+    automation: &IUIAutomation,
+    window: HWND,
+    kind: ShellAppTargetKind,
+) -> WindowsResult<Vec<ShellAppTarget>> {
+    // SAFETY: The HWND is a live Explorer top-level window resolved immediately
+    // before this read, and every COM object remains scoped to this call.
+    let root = unsafe { automation.ElementFromHandle(window) }?;
+    // SAFETY: Creates a condition owned by this UI Automation instance.
+    let condition = unsafe { automation.CreateTrueCondition() }?;
+    // SAFETY: Reads descendants from the live UI Automation element.
+    let elements = unsafe { root.FindAll(TreeScope_Descendants, &condition) }?;
+    // SAFETY: Reads the size of the UI Automation array returned above.
+    let length = unsafe { elements.Length() }?.clamp(0, 512);
+    let mut targets = Vec::new();
+    for index in 0..length {
+        // SAFETY: Index is bounded by the array length returned above.
+        let Ok(element) = (unsafe { elements.GetElement(index) }) else {
+            continue;
+        };
+        // SAFETY: Reads an immutable property from the live UI Automation element.
+        let Ok(name) = (unsafe { element.CurrentName() }) else {
+            continue;
+        };
+        let name = name.to_string();
+        if name.trim().is_empty() || !element_matches_kind(&element, kind) {
+            continue;
+        }
+        // SAFETY: Reads an immutable property from the live UI Automation element.
+        let Ok(rect) = (unsafe { element.CurrentBoundingRectangle() }) else {
+            continue;
+        };
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            continue;
+        }
+        targets.push(ShellAppTarget {
+            name,
+            kind,
+            point: TrayScreenPoint::new(
+                rect.left + (rect.right - rect.left) / 2,
+                rect.top + (rect.bottom - rect.top) / 2,
+            ),
+        });
+    }
+    Ok(targets)
+}
+
+fn element_matches_kind(element: &IUIAutomationElement, kind: ShellAppTargetKind) -> bool {
+    // SAFETY: Reads an immutable property from the live UI Automation element.
+    let class_name = unsafe { element.CurrentClassName() }
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    // SAFETY: Reads an immutable property from the live UI Automation element.
+    let automation_id = unsafe { element.CurrentAutomationId() }
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    match kind {
+        ShellAppTargetKind::TaskbarButton => class_name == "Taskbar.TaskListButtonAutomationPeer",
+        ShellAppTargetKind::NotificationIcon => automation_id == "NotifyItemIcon",
+    }
+}
+
+fn open_notification_overflow(
+    automation: &IUIAutomation,
+    shell_window: HWND,
+) -> WindowsResult<bool> {
+    // SAFETY: Reads the current Explorer taskbar accessibility subtree and
+    // invokes only the narrow hidden-icons button pattern.
+    let root = unsafe { automation.ElementFromHandle(shell_window) }?;
+    // SAFETY: Creates a condition owned by this UI Automation instance.
+    let condition = unsafe { automation.CreateTrueCondition() }?;
+    // SAFETY: Reads descendants from the live UI Automation element.
+    let elements = unsafe { root.FindAll(TreeScope_Descendants, &condition) }?;
+    // SAFETY: Reads the size of the UI Automation array returned above.
+    let length = unsafe { elements.Length() }?.clamp(0, 512);
+    for index in 0..length {
+        // SAFETY: Index is bounded by the array length returned above.
+        let Ok(element) = (unsafe { elements.GetElement(index) }) else {
+            continue;
+        };
+        // SAFETY: Reads an immutable property from the live UI Automation element.
+        let automation_id = unsafe { element.CurrentAutomationId() }
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        // SAFETY: Reads an immutable property from the live UI Automation element.
+        let class_name = unsafe { element.CurrentClassName() }
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        // SAFETY: Reads an immutable property from the live UI Automation element.
+        let Ok(rect) = (unsafe { element.CurrentBoundingRectangle() }) else {
+            continue;
+        };
+        if automation_id == "SystemTrayIcon"
+            && class_name == "SystemTray.NormalButton"
+            && rect.right - rect.left <= 36
+        {
+            // SAFETY: Requests the invoke interface from the verified overflow button.
+            let pattern: IUIAutomationInvokePattern =
+                unsafe { element.GetCurrentPatternAs(UIA_InvokePatternId) }?;
+            // SAFETY: Invokes only the verified Windows hidden-icons button.
+            unsafe { pattern.Invoke() }?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn right_click_shell_target(point: TrayScreenPoint) -> WindowsResult<()> {
+    let mut previous = POINT::default();
+    // SAFETY: Reads and restores the scalar cursor position and injects exactly
+    // one user-requested right-button press/release at the verified shell icon.
+    unsafe { GetCursorPos(&mut previous) }?;
+    // SAFETY: Moves the cursor to the verified shell element center.
+    unsafe { SetCursorPos(point.x(), point.y()) }?;
+    let inputs = [
+        mouse_input(MOUSEEVENTF_RIGHTDOWN),
+        mouse_input(MOUSEEVENTF_RIGHTUP),
+    ];
+    // SAFETY: Sends two fully initialized mouse inputs with the correct element size.
+    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+    thread::sleep(Duration::from_millis(25));
+    // SAFETY: Restores the cursor position captured immediately before injection.
+    let restore = unsafe { SetCursorPos(previous.x, previous.y) };
+    if sent != inputs.len() as u32 {
+        let _ = restore;
+        return Err(Error::new(
+            E_FAIL,
+            "Windows shell right-click injection failed",
+        ));
+    }
+    restore
+}
+
+fn mouse_input(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dwFlags: flags,
+                ..MOUSEINPUT::default()
+            },
+        },
+    }
+}
+
+fn select_shell_app_target<'a>(
+    targets: &'a [ShellAppTarget],
+    label: &str,
+    executable: &str,
+) -> Option<&'a ShellAppTarget> {
+    let mut aliases = shell_name_tokens(label);
+    if let Some(stem) = Path::new(executable)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+    {
+        aliases.extend(shell_name_tokens(stem));
+    }
+    aliases.sort();
+    aliases.dedup();
+    targets
+        .iter()
+        .filter_map(|target| {
+            let score = shell_name_match_score(&aliases, &shell_name_tokens(&target.name));
+            (score >= 16).then_some((target.kind, score, target))
+        })
+        .max_by_key(|(kind, score, _)| (*kind, *score))
+        .map(|(_, _, target)| target)
+}
+
+fn shell_name_match_score(aliases: &[String], target: &[String]) -> usize {
+    aliases
+        .iter()
+        .filter(|alias| target.contains(alias))
+        .map(|alias| alias.len().saturating_mul(alias.len()))
+        .sum()
+}
+
+fn shell_name_tokens(value: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut previous_was_lowercase = false;
+    for character in value.chars() {
+        if character.is_uppercase() && previous_was_lowercase && !word.is_empty() {
+            words.push(canonical_shell_word(&word));
+            word.clear();
+        }
+        if let Some(character) = fold_shell_character(character) {
+            word.push(character);
+            previous_was_lowercase = character.is_ascii_lowercase();
+        } else {
+            if !word.is_empty() {
+                words.push(canonical_shell_word(&word));
+                word.clear();
+            }
+            previous_was_lowercase = false;
+        }
+    }
+    if !word.is_empty() {
+        words.push(canonical_shell_word(&word));
+    }
+    words
+}
+
+fn canonical_shell_word(word: &str) -> String {
+    match word.as_bytes() {
+        b"explorador" => "explorer".to_owned(),
+        b"seguranca" => "security".to_owned(),
+        _ => word.to_owned(),
+    }
+}
+
+const fn fold_shell_character(character: char) -> Option<char> {
+    match character {
+        'a'..='z' | '0'..='9' => Some(character),
+        'A'..='Z' => Some(character.to_ascii_lowercase()),
+        'á' | 'à' | 'â' | 'ã' | 'ä' | 'Á' | 'À' | 'Â' | 'Ã' | 'Ä' => Some('a'),
+        'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => Some('e'),
+        'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => Some('i'),
+        'ó' | 'ò' | 'ô' | 'õ' | 'ö' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' => Some('o'),
+        'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => Some('u'),
+        'ç' | 'Ç' => Some('c'),
+        _ => None,
+    }
+}
+
 struct NativeTraySink<'a> {
     ops: &'a dyn NativeTrayOps,
 }
@@ -136,7 +451,10 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
 
-    use super::{NativeTrayActivationError, NativeTrayOps, activate_native_tray_context_menu};
+    use super::{
+        NativeTrayActivationError, NativeTrayOps, ShellAppTarget, ShellAppTargetKind,
+        activate_native_tray_context_menu, select_shell_app_target,
+    };
     use crate::native_tray::NativeTrayIdentity;
     use crate::{
         NativeWindowId, TrayActivationCoordinator, TrayActivationStatus, TrayMessage,
@@ -422,6 +740,47 @@ mod tests {
                     TrayMessage::legacy_with_callback(0x8061, 7, WM_RBUTTONUP),
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn shell_target_prefers_the_real_taskbar_or_notification_icon() {
+        let targets = [
+            ShellAppTarget::test("ChatGPT", ShellAppTargetKind::NotificationIcon, (10, 10)),
+            ShellAppTarget::test(
+                "ChatGPT - 1 janela em execução fixado",
+                ShellAppTargetKind::TaskbarButton,
+                (20, 20),
+            ),
+            ShellAppTarget::test(
+                "AMD Software: Adrenalin Edition",
+                ShellAppTargetKind::NotificationIcon,
+                (30, 30),
+            ),
+            ShellAppTarget::test(
+                "Segurança do Windows - Nenhuma ação necessária.",
+                ShellAppTargetKind::NotificationIcon,
+                (40, 40),
+            ),
+        ];
+
+        assert_eq!(
+            select_shell_app_target(&targets, "ChatGPT", "ChatGPT.exe").map(|target| target.point),
+            Some(TrayScreenPoint::new(20, 20))
+        );
+        assert_eq!(
+            select_shell_app_target(&targets, "RadeonSoftware", "RadeonSoftware.exe")
+                .map(|target| target.point),
+            Some(TrayScreenPoint::new(30, 30))
+        );
+        assert_eq!(
+            select_shell_app_target(
+                &targets,
+                "SecurityHealthSystray",
+                "SecurityHealthSystray.exe",
+            )
+            .map(|target| target.point),
+            Some(TrayScreenPoint::new(40, 40))
         );
     }
 }

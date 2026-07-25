@@ -1394,6 +1394,14 @@ impl RuntimeSurfaces {
         let identity = match entry.origin() {
             crate::background_apps::BackgroundAppOrigin::Native(identity) => *identity,
             crate::background_apps::BackgroundAppOrigin::RegistryFallback => {
+                if crate::win32_tray_activation::activate_windows_shell_app_context_menu(
+                    entry.label(),
+                    entry.executable(),
+                )
+                .unwrap_or(false)
+                {
+                    return Ok(());
+                }
                 return self.show_shell_owned_background_menu(
                     app, false, point, popover, app_menu, topbar, dock, preview, settings,
                 );
