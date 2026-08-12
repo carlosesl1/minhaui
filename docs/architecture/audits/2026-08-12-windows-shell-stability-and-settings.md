@@ -96,8 +96,10 @@ over a fullscreen application. The larger performance work remains:
    registered twice.
 3. Implement UI Automation providers/`WM_GETOBJECT`, accessible names and
    patterns, tooltips, and automated keyboard/focus tests for the custom D2D UI.
-4. Replace or explicitly capability-gate private Windows contracts (Night Light,
-   DND, audio device policy), with supported `ms-settings:` fallbacks.
+4. Replace or explicitly capability-gate the remaining private Windows contracts
+   (DND and audio device policy) with supported `ms-settings:` fallbacks. Night
+   Light now opens Microsoft's documented `ms-settings:nightlight` page and no
+   longer mutates private CloudStore records.
 5. Run Windows quality gates and native soak tests across mixed DPI, monitor
    attach/detach, Explorer restart, sleep/resume, device loss, WARP, high
    contrast, and reduced motion.

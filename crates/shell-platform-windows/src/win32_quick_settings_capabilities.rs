@@ -250,6 +250,8 @@ fn direct_controls() -> Vec<QuickControlCapability> {
                 mode.map_or("Open settings", crate::DoNotDisturbMode::label),
                 mode.map(crate::DoNotDisturbMode::value),
             );
+        } else if kind == QuickControlKind::NightLight {
+            QuickControlAvailability::RouteOnly { active: None }
         } else {
             native_availability(kind)
         };

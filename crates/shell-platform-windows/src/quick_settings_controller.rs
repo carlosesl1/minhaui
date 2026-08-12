@@ -548,12 +548,18 @@ impl QuickSettingsController {
     }
 
     fn night_light_tile(&self, capability: &QuickControlCapability) -> QuickSettingsTile {
+        let (detail, active) = match capability.availability() {
+            QuickControlAvailability::RouteOnly { active } => {
+                (capability.detail(), active.unwrap_or(false))
+            }
+            _ => (self.night_light.detail(), self.night_light.confirmed()),
+        };
         QuickSettingsTile::new(
             QuickControlKind::NightLight,
             capability.label(),
-            self.night_light.detail(),
+            detail,
             glyph_for(QuickControlKind::NightLight),
-            self.night_light.confirmed(),
+            active,
             capability_enabled(capability),
         )
     }
@@ -990,6 +996,20 @@ impl QuickSettingsController {
     }
 
     fn activate_night_light(&mut self) -> Vec<QueuedQuickSettingsAction> {
+        if self
+            .capabilities
+            .get(QuickControlKind::NightLight)
+            .is_some_and(|capability| {
+                matches!(
+                    capability.availability(),
+                    QuickControlAvailability::RouteOnly { .. }
+                )
+            })
+        {
+            return vec![QueuedQuickSettingsAction::Intent(
+                QuickSettingsIntent::Activate(QuickControlKind::NightLight),
+            )];
+        }
         let mut actions = vec![QueuedQuickSettingsAction::Redraw];
         if let Some(request) = self.night_light.request_toggle() {
             actions.push(QueuedQuickSettingsAction::NightLight(request));

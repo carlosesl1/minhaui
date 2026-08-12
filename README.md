@@ -164,6 +164,10 @@ source-gated behind `experimental-taskbar-replacement` until the separate
 watchdog performs real crash-safe restoration; the feature is intended only
 for a controlled Windows validation image.
 
+Night Light opens the documented `ms-settings:nightlight` Windows page. Stable
+builds do not edit private CloudStore records or depend on an unlicensed Git
+package to simulate a direct toggle.
+
 ## Build distributable layouts
 
 ```powershell

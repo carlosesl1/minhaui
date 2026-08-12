@@ -628,3 +628,43 @@ fn night_light_clicks_are_serialized_and_show_latest_desired_direction() {
         "Turning off..."
     );
 }
+
+#[test]
+fn route_only_night_light_opens_documented_windows_settings() {
+    let snapshot = QuickSettingsCapabilities::new(vec![QuickControlCapability::new(
+        QuickControlKind::NightLight,
+        QuickControlAvailability::RouteOnly { active: None },
+        "Night light",
+        "Open settings",
+        None,
+    )]);
+    let mut controller =
+        QuickSettingsController::new(QuickSettingsSettings::default(), snapshot.clone());
+    controller.open(snapshot);
+    let scene = controller.scene();
+    let night_light = scene
+        .display()
+        .expect("display section")
+        .actions()
+        .iter()
+        .find(|tile| tile.kind() == QuickControlKind::NightLight)
+        .expect("night light tile");
+    assert_eq!(night_light.detail(), "Open settings");
+    assert!(!night_light.active());
+    let surface = DipRect::new(0.0, 0.0, 368.0, 420.0);
+    let tile = layout_quick_settings(&controller.scene(), surface)
+        .tiles()
+        .iter()
+        .find(|tile| tile.kind() == QuickControlKind::NightLight)
+        .expect("laid out night light tile")
+        .bounds();
+    let point = DipPoint::new(tile.x + 8.0, tile.y + 8.0);
+
+    controller.pointer_press(point, surface);
+    assert_eq!(
+        controller.pointer_release(point, surface),
+        vec![QueuedQuickSettingsAction::Intent(
+            QuickSettingsIntent::Activate(QuickControlKind::NightLight)
+        )]
+    );
+}

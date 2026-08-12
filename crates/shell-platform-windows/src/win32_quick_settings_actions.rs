@@ -91,6 +91,7 @@ pub(super) fn apply_quick_settings_intent(
 const fn route_for(kind: QuickControlKind) -> Option<SystemRoute> {
     match kind {
         QuickControlKind::Focus => Some(SystemRoute::Focus),
+        QuickControlKind::NightLight => Some(SystemRoute::NightLight),
         _ => None,
     }
 }
@@ -275,6 +276,25 @@ mod tests {
                 Some(&do_not_disturb),
             ),
             QuickSettingsActionResult::OpenSystemRoute(SystemRoute::Focus)
+        ));
+    }
+
+    #[test]
+    fn route_only_night_light_uses_the_documented_settings_route() {
+        let night_light = QuickControlCapability::new(
+            QuickControlKind::NightLight,
+            QuickControlAvailability::RouteOnly { active: None },
+            "Night light",
+            "Open settings",
+            None,
+        );
+
+        assert!(matches!(
+            apply_quick_settings_intent(
+                &QuickSettingsIntent::Activate(QuickControlKind::NightLight),
+                Some(&night_light),
+            ),
+            QuickSettingsActionResult::OpenSystemRoute(SystemRoute::NightLight)
         ));
     }
 
