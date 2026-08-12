@@ -229,29 +229,30 @@ struct SurfaceSet<S> {
     popover: S,
     app_menu: S,
     preview: S,
-    settings: S,
+    settings: Option<S>,
+    settings_target: SurfaceTarget,
 }
 
 impl<S> SurfaceSet<S> {
-    fn surface(&self, role: ShowcaseRole) -> &S {
+    fn surface(&self, role: ShowcaseRole) -> Option<&S> {
         match role {
-            ShowcaseRole::Topbar => &self.topbar,
-            ShowcaseRole::Dock => &self.dock,
-            ShowcaseRole::Popover => &self.popover,
-            ShowcaseRole::AppMenu => &self.app_menu,
-            ShowcaseRole::Preview => &self.preview,
-            ShowcaseRole::Settings => &self.settings,
+            ShowcaseRole::Topbar => Some(&self.topbar),
+            ShowcaseRole::Dock => Some(&self.dock),
+            ShowcaseRole::Popover => Some(&self.popover),
+            ShowcaseRole::AppMenu => Some(&self.app_menu),
+            ShowcaseRole::Preview => Some(&self.preview),
+            ShowcaseRole::Settings => self.settings.as_ref(),
         }
     }
 
-    fn surface_mut(&mut self, role: ShowcaseRole) -> &mut S {
+    fn surface_mut(&mut self, role: ShowcaseRole) -> Option<&mut S> {
         match role {
-            ShowcaseRole::Topbar => &mut self.topbar,
-            ShowcaseRole::Dock => &mut self.dock,
-            ShowcaseRole::Popover => &mut self.popover,
-            ShowcaseRole::AppMenu => &mut self.app_menu,
-            ShowcaseRole::Preview => &mut self.preview,
-            ShowcaseRole::Settings => &mut self.settings,
+            ShowcaseRole::Topbar => Some(&mut self.topbar),
+            ShowcaseRole::Dock => Some(&mut self.dock),
+            ShowcaseRole::Popover => Some(&mut self.popover),
+            ShowcaseRole::AppMenu => Some(&mut self.app_menu),
+            ShowcaseRole::Preview => Some(&mut self.preview),
+            ShowcaseRole::Settings => self.settings.as_mut(),
         }
     }
 }
@@ -330,7 +331,8 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         self.resources
             .as_ref()
             .and_then(|resources| resources.surfaces.as_ref())
-            .map(|surfaces| A::metrics(surfaces.surface(role)))
+            .and_then(|surfaces| surfaces.surface(role))
+            .map(A::metrics)
     }
 
     pub(super) fn size(&self, role: ShowcaseRole) -> Option<(u32, u32)> {
@@ -341,23 +343,24 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         self.resources
             .as_ref()
             .and_then(|resources| resources.surfaces.as_ref())
-            .and_then(|surfaces| A::frame_latency_waitable_object(surfaces.surface(role)))
+            .and_then(|surfaces| surfaces.surface(role))
+            .and_then(A::frame_latency_waitable_object)
     }
 
     pub(super) fn redraw(
-        &self,
+        &mut self,
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> windows::core::Result<SurfaceUpdate> {
+        if role == ShowcaseRole::Settings && !self.has_surface(role) {
+            let target = self.settings_target()?;
+            return self.create_settings_surface(SurfaceFrame { target, scenes });
+        }
         let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
         let renderer = resources.renderer.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
-        normalize_present_result(A::redraw_surface(
-            renderer,
-            surfaces.surface(role),
-            role,
-            scenes,
-        ))
+        let surface = surfaces.surface(role).ok_or_else(surface_not_ready)?;
+        normalize_present_result(A::redraw_surface(renderer, surface, role, scenes))
     }
 
     pub(super) fn resize(
@@ -366,17 +369,17 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         metrics: SurfaceMetrics,
         scenes: ShellScenes<'_>,
     ) -> windows::core::Result<SurfaceUpdate> {
+        if role == ShowcaseRole::Settings && !self.has_surface(role) {
+            let mut target = self.settings_target()?;
+            target.metrics = metrics;
+            return self.create_settings_surface(SurfaceFrame { target, scenes });
+        }
         let resources = self.resources.as_mut().ok_or_else(runtime_not_ready)?;
         let SurfaceResources { surfaces, renderer } = resources;
         let renderer = renderer.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = surfaces.as_mut().ok_or_else(runtime_not_ready)?;
-        normalize_present_result(A::resize_surface(
-            renderer,
-            surfaces.surface_mut(role),
-            metrics,
-            role,
-            scenes,
-        ))
+        let surface = surfaces.surface_mut(role).ok_or_else(surface_not_ready)?;
+        normalize_present_result(A::resize_surface(renderer, surface, metrics, role, scenes))
     }
 
     pub(super) fn set_opacity(
@@ -386,7 +389,10 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
     ) -> windows::core::Result<SurfaceUpdate> {
         let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
-        normalize_unit_result(A::set_opacity(surfaces.surface(role), opacity))
+        let Some(surface) = surfaces.surface(role) else {
+            return Ok(SurfaceUpdate::FrameSkipped);
+        };
+        normalize_unit_result(A::set_opacity(surface, opacity))
     }
 
     pub(super) fn animate_entrance(
@@ -396,7 +402,10 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
     ) -> windows::core::Result<SurfaceUpdate> {
         let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
-        normalize_unit_result(A::animate_entrance(surfaces.surface(role), reduced_motion))
+        let Some(surface) = surfaces.surface(role) else {
+            return Ok(SurfaceUpdate::FrameSkipped);
+        };
+        normalize_unit_result(A::animate_entrance(surface, reduced_motion))
     }
 
     pub(super) fn animate_visibility(
@@ -406,7 +415,10 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
     ) -> windows::core::Result<SurfaceUpdate> {
         let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
-        normalize_unit_result(A::animate_visibility(surfaces.surface(role), spec))
+        let Some(surface) = surfaces.surface(role) else {
+            return Ok(SurfaceUpdate::FrameSkipped);
+        };
+        normalize_unit_result(A::animate_visibility(surface, spec))
     }
 
     pub(super) fn set_visibility_state(
@@ -417,15 +429,28 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
     ) -> windows::core::Result<SurfaceUpdate> {
         let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
-        normalize_unit_result(A::set_visibility_state(
-            surfaces.surface(role),
-            offset_y,
-            opacity,
-        ))
+        let Some(surface) = surfaces.surface(role) else {
+            return Ok(SurfaceUpdate::FrameSkipped);
+        };
+        normalize_unit_result(A::set_visibility_state(surface, offset_y, opacity))
     }
 
     pub(super) fn rebuild(&mut self, plan: SurfaceBuildPlan<'_>) -> windows::core::Result<()> {
         self.build(plan)
+    }
+
+    pub(super) fn rebuild_preserving_visible_settings(
+        &mut self,
+        plan: SurfaceBuildPlan<'_>,
+        settings_visible: bool,
+    ) -> windows::core::Result<SurfaceUpdate> {
+        let settings_frame = plan.settings;
+        self.rebuild(plan)?;
+        if settings_visible {
+            present_frame(self, settings_frame, SurfaceSizeChange::Resize)
+        } else {
+            Ok(SurfaceUpdate::FrameSkipped)
+        }
     }
 
     fn build_once(
@@ -438,7 +463,6 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         let popover = Self::create_surface(&renderer, plan.popover)?;
         let app_menu = Self::create_surface(&renderer, plan.app_menu)?;
         let preview = Self::create_surface(&renderer, plan.preview)?;
-        let settings = Self::create_surface(&renderer, plan.settings)?;
         A::set_visibility_state(
             &dock,
             plan.dock_visibility_offset_y,
@@ -454,7 +478,8 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             popover,
             app_menu,
             preview,
-            settings,
+            settings: None,
+            settings_target: plan.settings.target,
         };
         Ok(SurfaceResources::new(renderer, surfaces))
     }
@@ -493,6 +518,62 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             frame.scenes,
         )
     }
+
+    fn settings_target(&self) -> windows::core::Result<SurfaceTarget> {
+        self.resources
+            .as_ref()
+            .and_then(|resources| resources.surfaces.as_ref())
+            .map(|surfaces| surfaces.settings_target)
+            .ok_or_else(runtime_not_ready)
+    }
+
+    fn has_surface(&self, role: ShowcaseRole) -> bool {
+        self.resources
+            .as_ref()
+            .and_then(|resources| resources.surfaces.as_ref())
+            .is_some_and(|surfaces| surfaces.surface(role).is_some())
+    }
+
+    fn create_settings_surface(
+        &mut self,
+        frame: SurfaceFrame<'_>,
+    ) -> windows::core::Result<SurfaceUpdate> {
+        if frame.target.role != ShowcaseRole::Settings {
+            return Err(windows::core::Error::new(
+                E_INVALIDARG,
+                "lazy surface creation is reserved for Settings",
+            ));
+        }
+        let resources = self.resources.as_mut().ok_or_else(runtime_not_ready)?;
+        let SurfaceResources { surfaces, renderer } = resources;
+        let renderer = renderer.as_ref().ok_or_else(runtime_not_ready)?;
+        let surfaces = surfaces.as_mut().ok_or_else(runtime_not_ready)?;
+        if surfaces.settings.is_some() {
+            return Err(windows::core::Error::new(
+                E_UNEXPECTED,
+                "Settings surface is already materialized",
+            ));
+        }
+        match Self::create_surface(renderer, frame) {
+            Ok(surface) => match normalize_present_result(A::redraw_surface(
+                renderer,
+                &surface,
+                ShowcaseRole::Settings,
+                frame.scenes,
+            ))? {
+                update @ (SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped) => {
+                    surfaces.settings = Some(surface);
+                    surfaces.settings_target = frame.target;
+                    Ok(update)
+                }
+                SurfaceUpdate::RebuildAllRequired => Ok(SurfaceUpdate::RebuildAllRequired),
+            },
+            Err(error) if is_recoverable_hresult(error.code()) => {
+                Ok(SurfaceUpdate::RebuildAllRequired)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 pub(super) fn runtime_device_kind<A: SurfaceAdapter>(
@@ -507,7 +588,11 @@ pub(super) fn present_frame<A: SurfaceAdapter>(
     size_change: SurfaceSizeChange,
 ) -> windows::core::Result<SurfaceUpdate> {
     let role = frame.target.role;
-    match surface_render_decision(runtime.metrics(role), frame.target.metrics) {
+    let current = runtime.metrics(role);
+    if role == ShowcaseRole::Settings && current.is_none() && runtime.device_kind().is_some() {
+        return runtime.create_settings_surface(frame);
+    }
+    match surface_render_decision(current, frame.target.metrics) {
         SurfaceRenderDecision::RebuildAll => Ok(SurfaceUpdate::RebuildAllRequired),
         SurfaceRenderDecision::Redraw => runtime.redraw(role, frame.scenes),
         SurfaceRenderDecision::Resize => match size_change {
@@ -528,6 +613,10 @@ fn runtime_not_ready() -> windows::core::Error {
     windows::core::Error::new(E_UNEXPECTED, "native surface runtime is not ready")
 }
 
+fn surface_not_ready() -> windows::core::Error {
+    windows::core::Error::new(E_UNEXPECTED, "requested native surface is not ready")
+}
+
 pub(super) type Win32NativeSurfaceRuntime = NativeSurfaceRuntime<DirectCompositionAdapter>;
 
 #[cfg(test)]
@@ -542,7 +631,7 @@ mod tests {
         DeviceKind, DeviceLossKind, PresentOutcome, ShellScenes, ShowcaseRole, SurfaceMetrics,
         SurfaceVisibilityAnimation, device_loss_hresult,
     };
-    use shell_renderer::{ContextMenuEntry, ContextMenuScene, VisualPreferences};
+    use shell_renderer::{ContextMenuEntry, ContextMenuScene, SettingsScene, VisualPreferences};
     use windows::Win32::Foundation::{HANDLE, HWND};
     use windows::core::HRESULT;
 
@@ -1051,6 +1140,9 @@ mod tests {
             reset([]);
             let mut runtime = runtime();
             runtime.build(plan()).unwrap();
+            if role == ShowcaseRole::Settings {
+                runtime.redraw(role, empty_scenes()).unwrap();
+            }
             recording().events.clear();
 
             assert_eq!(runtime.size(role), Some(role_size(role)));
@@ -1188,26 +1280,180 @@ mod tests {
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
         recording().events.clear();
+        recording().scene_records.clear();
+        recording().create_records.clear();
+        let settings_scene = SettingsScene::new("Settings", Vec::new(), None);
+        let mut initial = frame(ShowcaseRole::Settings);
+        initial.target.hwnd = HWND(41_usize as *mut std::ffi::c_void);
+        initial.scenes = ShellScenes {
+            settings: Some(&settings_scene),
+            ..empty_scenes()
+        };
 
-        present_frame(
-            &mut runtime,
-            frame(ShowcaseRole::Settings),
-            SurfaceSizeChange::Resize,
-        )
-        .unwrap();
-        let mut changed = frame(ShowcaseRole::Settings);
+        present_frame(&mut runtime, initial, SurfaceSizeChange::Resize).unwrap();
+        present_frame(&mut runtime, initial, SurfaceSizeChange::Resize).unwrap();
+        let mut changed = initial;
         changed.target.metrics = SurfaceMetrics::new(98, 99, Dpi::from_raw(144));
         present_frame(&mut runtime, changed, SurfaceSizeChange::Resize).unwrap();
 
         assert_eq!(
             events(),
             [
+                Event::Created(1, ShowcaseRole::Settings),
+                Event::Redrawn(1, ShowcaseRole::Settings, ShowcaseRole::Settings),
                 Event::MetricsRead(1, ShowcaseRole::Settings),
                 Event::Redrawn(1, ShowcaseRole::Settings, ShowcaseRole::Settings),
                 Event::MetricsRead(1, ShowcaseRole::Settings),
                 Event::Resized(1, ShowcaseRole::Settings, ShowcaseRole::Settings),
             ]
         );
+        assert_eq!(
+            recording().create_records,
+            [CreateRecord {
+                hwnd: 41,
+                role: ShowcaseRole::Settings,
+                metrics: role_size(ShowcaseRole::Settings),
+                preview_item: None,
+            }]
+        );
+        assert_eq!(
+            recording().scene_records,
+            [
+                (
+                    ShowcaseRole::Settings,
+                    ScenePresence {
+                        settings: true,
+                        ..ScenePresence::default()
+                    }
+                ),
+                (
+                    ShowcaseRole::Settings,
+                    ScenePresence {
+                        settings: true,
+                        ..ScenePresence::default()
+                    }
+                ),
+                (
+                    ShowcaseRole::Settings,
+                    ScenePresence {
+                        settings: true,
+                        ..ScenePresence::default()
+                    }
+                ),
+                (
+                    ShowcaseRole::Settings,
+                    ScenePresence {
+                        settings: true,
+                        ..ScenePresence::default()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn first_direct_settings_resize_materializes_with_requested_metrics() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut initial_plan = plan();
+        initial_plan.settings.target.hwnd = HWND(42_usize as *mut std::ffi::c_void);
+        let mut runtime = runtime();
+        runtime.build(initial_plan).unwrap();
+        recording().events.clear();
+        recording().create_records.clear();
+        let requested = SurfaceMetrics::new(720, 540, Dpi::from_raw(144));
+
+        assert_eq!(
+            runtime
+                .resize(ShowcaseRole::Settings, requested, empty_scenes())
+                .unwrap(),
+            SurfaceUpdate::Presented
+        );
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), Some(requested));
+        assert_eq!(
+            recording().create_records,
+            [CreateRecord {
+                hwnd: 42,
+                role: ShowcaseRole::Settings,
+                metrics: requested.size(),
+                preview_item: None,
+            }]
+        );
+        assert_eq!(
+            events(),
+            [
+                Event::Created(1, ShowcaseRole::Settings),
+                Event::Redrawn(1, ShowcaseRole::Settings, ShowcaseRole::Settings),
+                Event::MetricsRead(1, ShowcaseRole::Settings),
+            ]
+        );
+    }
+
+    #[test]
+    fn recoverable_lazy_settings_initial_present_requests_full_rebuild_without_installing_it() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording().events.clear();
+        recording()
+            .redraw_results
+            .push_back(Ok(PresentOutcome::DeviceLost(DeviceLossKind::Removed)));
+
+        assert_eq!(
+            present_frame(
+                &mut runtime,
+                frame(ShowcaseRole::Settings),
+                SurfaceSizeChange::Resize,
+            )
+            .unwrap(),
+            SurfaceUpdate::RebuildAllRequired
+        );
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        assert_eq!(
+            runtime.metrics(ShowcaseRole::Dock),
+            Some(frame(ShowcaseRole::Dock).target.metrics)
+        );
+        assert_eq!(runtime.device_kind(), Some(DeviceKind::Hardware));
+        assert_eq!(
+            events(),
+            [
+                Event::Created(1, ShowcaseRole::Settings),
+                Event::Redrawn(1, ShowcaseRole::Settings, ShowcaseRole::Settings),
+                Event::SurfaceDropped(1, ShowcaseRole::Settings),
+                Event::MetricsRead(1, ShowcaseRole::Dock),
+            ]
+        );
+    }
+
+    #[test]
+    fn fatal_lazy_settings_creation_leaves_renderer_and_eager_surfaces_installed() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([(ShowcaseRole::Settings, unrecoverable_failure())]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording().events.clear();
+
+        assert_eq!(
+            runtime
+                .redraw(ShowcaseRole::Settings, empty_scenes())
+                .unwrap_err()
+                .code(),
+            unrecoverable_failure()
+        );
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        assert_eq!(
+            runtime.metrics(ShowcaseRole::Topbar),
+            Some(frame(ShowcaseRole::Topbar).target.metrics)
+        );
+        assert_eq!(runtime.device_kind(), Some(DeviceKind::Hardware));
+        assert_eq!(events(), [Event::MetricsRead(1, ShowcaseRole::Topbar)]);
     }
 
     #[test]
@@ -1218,9 +1464,12 @@ mod tests {
         reset([]);
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
+        runtime
+            .redraw(ShowcaseRole::Settings, empty_scenes())
+            .unwrap();
         recording().events.clear();
         let mut changed = frame(ShowcaseRole::Settings);
-        changed.target.metrics = SurfaceMetrics::new(5, 15, Dpi::from_raw(144));
+        changed.target.metrics = SurfaceMetrics::new(6, 16, Dpi::from_raw(144));
 
         assert_eq!(
             present_frame(&mut runtime, changed, SurfaceSizeChange::Resize).unwrap(),
@@ -1604,7 +1853,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_build_creates_all_surfaces_in_role_order() {
+    fn successful_build_creates_five_eager_surfaces_and_keeps_settings_lazy() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1625,7 +1874,6 @@ mod tests {
                 installed.popover.role,
                 installed.app_menu.role,
                 installed.preview.role,
-                installed.settings.role,
             ],
             [
                 ShowcaseRole::Topbar,
@@ -1633,9 +1881,9 @@ mod tests {
                 ShowcaseRole::Popover,
                 ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
-                ShowcaseRole::Settings,
             ]
         );
+        assert!(installed.settings.is_none());
         let created = events()
             .into_iter()
             .filter_map(|event| match event {
@@ -1651,7 +1899,6 @@ mod tests {
                 ShowcaseRole::Popover,
                 ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
-                ShowcaseRole::Settings,
             ]
         );
         assert_eq!(
@@ -1666,12 +1913,151 @@ mod tests {
                 ShowcaseRole::Popover,
                 ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
-                ShowcaseRole::Settings,
             ]
         );
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
         assert!(runtime.is_ready());
         assert_eq!(runtime.device_kind(), Some(DeviceKind::Hardware));
         assert_eq!(runtime_device_kind(&runtime), DeviceKind::Hardware);
+    }
+
+    #[test]
+    fn absent_settings_surface_reports_none_and_skips_non_rendering_operations() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording().events.clear();
+        let visibility = SurfaceVisibilityAnimation {
+            start_offset_y: 8.0,
+            target_offset_y: 0.0,
+            start_opacity: 0.25,
+            target_opacity: 1.0,
+            duration_seconds: 0.18,
+        };
+
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        assert_eq!(runtime.size(ShowcaseRole::Settings), None);
+        assert_eq!(
+            runtime.frame_latency_waitable_object(ShowcaseRole::Settings),
+            None
+        );
+        assert_eq!(
+            runtime.set_opacity(ShowcaseRole::Settings, 0.5).unwrap(),
+            SurfaceUpdate::FrameSkipped
+        );
+        assert_eq!(
+            runtime
+                .animate_entrance(ShowcaseRole::Settings, false)
+                .unwrap(),
+            SurfaceUpdate::FrameSkipped
+        );
+        assert_eq!(
+            runtime
+                .animate_visibility(ShowcaseRole::Settings, visibility)
+                .unwrap(),
+            SurfaceUpdate::FrameSkipped
+        );
+        assert_eq!(
+            runtime
+                .set_visibility_state(ShowcaseRole::Settings, 6.0, 0.35)
+                .unwrap(),
+            SurfaceUpdate::FrameSkipped
+        );
+        assert!(events().is_empty());
+    }
+
+    #[test]
+    fn rebuild_drops_materialized_settings_and_installs_a_fresh_lazy_set() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        runtime
+            .redraw(ShowcaseRole::Settings, empty_scenes())
+            .unwrap();
+        let settings_creates_before_rebuild = recording()
+            .create_records
+            .iter()
+            .filter(|record| record.role == ShowcaseRole::Settings)
+            .count();
+        assert_eq!(settings_creates_before_rebuild, 1);
+
+        runtime.rebuild(plan()).unwrap();
+
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        assert!(events().contains(&Event::SurfaceDropped(1, ShowcaseRole::Settings)));
+        let settings_creates_after_rebuild = recording()
+            .create_records
+            .iter()
+            .filter(|record| record.role == ShowcaseRole::Settings)
+            .count();
+        assert_eq!(settings_creates_after_rebuild, 1);
+
+        runtime
+            .redraw(ShowcaseRole::Settings, empty_scenes())
+            .unwrap();
+        let settings_creates_after_next_present = recording()
+            .create_records
+            .iter()
+            .filter(|record| record.role == ShowcaseRole::Settings)
+            .count();
+        assert_eq!(settings_creates_after_next_present, 2);
+        assert!(events().contains(&Event::Created(2, ShowcaseRole::Settings)));
+    }
+
+    #[test]
+    fn rebuild_rematerializes_settings_only_when_the_window_is_visible() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+
+        assert_eq!(
+            runtime
+                .rebuild_preserving_visible_settings(plan(), false)
+                .unwrap(),
+            SurfaceUpdate::FrameSkipped
+        );
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+
+        assert_eq!(
+            runtime
+                .rebuild_preserving_visible_settings(plan(), true)
+                .unwrap(),
+            SurfaceUpdate::Presented
+        );
+        assert_eq!(
+            runtime.metrics(ShowcaseRole::Settings),
+            Some(frame(ShowcaseRole::Settings).target.metrics)
+        );
+    }
+
+    #[test]
+    fn visible_settings_rebuild_returns_one_recoverable_result_without_looping() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording()
+            .redraw_results
+            .push_back(Ok(PresentOutcome::DeviceLost(DeviceLossKind::Removed)));
+
+        assert_eq!(
+            runtime
+                .rebuild_preserving_visible_settings(plan(), true)
+                .unwrap(),
+            SurfaceUpdate::RebuildAllRequired
+        );
+        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
     }
 
     #[test]
@@ -1904,6 +2290,9 @@ mod tests {
         reset([]);
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
+        runtime
+            .redraw(ShowcaseRole::Settings, empty_scenes())
+            .unwrap();
 
         drop(runtime);
 
@@ -1936,6 +2325,9 @@ mod tests {
         reset([]);
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
+        runtime
+            .redraw(ShowcaseRole::Settings, empty_scenes())
+            .unwrap();
         recording()
             .failures
             .push_back((ShowcaseRole::Topbar, unrecoverable_failure()));

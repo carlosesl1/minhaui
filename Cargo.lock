@@ -440,8 +440,12 @@ dependencies = [
 name = "shell-watchdog"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "shell-core",
  "shell-diagnostics",
+ "thiserror",
+ "windows",
 ]
 
 [[package]]

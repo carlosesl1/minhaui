@@ -1,4 +1,4 @@
-use shell_app::{AppMode, QaExit, parse_args};
+use shell_app::{AppMode, QaExit, parse_arg_slice, parse_args};
 
 #[test]
 fn starts_functional_ui_when_no_mode_is_supplied() {
@@ -91,4 +91,13 @@ fn parses_accessibility_and_safe_mode_smoke_flags() {
 fn liquid_glass_is_enabled_for_the_normal_launch() {
     assert!(parse_args(["shell-app.exe"]).liquid_glass);
     assert!(parse_args(["shell-app.exe", "--liquid-glass"]).liquid_glass);
+}
+
+#[test]
+fn watchdog_child_mode_is_explicit_and_internal() {
+    assert!(!parse_args(["shell-app.exe"]).watchdog_child);
+    assert!(parse_args(["shell-app.exe", "--watchdog-child"]).watchdog_child);
+
+    let owned = ["shell-app.exe".to_owned(), "--watchdog-child".to_owned()];
+    assert!(parse_arg_slice(&owned).watchdog_child);
 }

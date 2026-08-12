@@ -63,3 +63,44 @@ fn shutdown_cleanup_escalates_after_bounded_grace_period() {
     assert_eq!(when_requested, SupervisorAction::Continue);
     assert_eq!(when_expired, SupervisorAction::EnterSafeMode);
 }
+
+#[test]
+fn one_heartbeat_does_not_erase_a_crash_loop() {
+    let config = SupervisorConfig::new(
+        RestartDelay::from_millis(100),
+        RestartDelay::from_millis(1_000),
+        2,
+    );
+    let mut state = SupervisorState::default();
+
+    assert!(matches!(
+        state.observe(ChildEvent::ChildCrashed, config),
+        SupervisorAction::Restart { .. }
+    ));
+    assert_eq!(
+        state.observe(ChildEvent::HeartbeatReceived, config),
+        SupervisorAction::Continue
+    );
+    assert_eq!(
+        state.observe(ChildEvent::ChildCrashed, config),
+        SupervisorAction::EnterSafeMode
+    );
+}
+
+#[test]
+fn a_sustained_healthy_window_resets_the_crash_budget() {
+    let config = SupervisorConfig::new(
+        RestartDelay::from_millis(100),
+        RestartDelay::from_millis(1_000),
+        2,
+    );
+    let mut state = SupervisorState::default();
+
+    let _ = state.observe(ChildEvent::ChildCrashed, config);
+    let _ = state.observe(ChildEvent::HealthyWindowElapsed, config);
+
+    assert!(matches!(
+        state.observe(ChildEvent::ChildCrashed, config),
+        SupervisorAction::Restart { .. }
+    ));
+}

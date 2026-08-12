@@ -13,6 +13,8 @@ mod panel_version_regression;
 mod popover_scene;
 #[path = "../tests/quick_settings_scene.rs"]
 mod quick_settings_scene;
+#[path = "../tests/settings_accessibility.rs"]
+mod settings_accessibility;
 #[path = "../tests/settings_layout.rs"]
 mod settings_layout;
 #[path = "../tests/topbar_scene.rs"]

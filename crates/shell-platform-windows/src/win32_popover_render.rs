@@ -3,8 +3,8 @@
 use shell_core::Popover;
 use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
 use shell_renderer::{
-    PhysicalRect, PopoverSurfaceSize, context_menu_height_for_entries, physical_from_dip,
-    popover_surface_size, quick_settings_surface_size,
+    PhysicalRect, PopoverSurfaceSize, context_menu_height_for_entries, layout_settings_scene,
+    physical_from_dip, popover_surface_size, quick_settings_surface_size,
 };
 use windows::core::Result;
 
@@ -821,6 +821,8 @@ impl RuntimeSurfaces {
         self.settings_controller
             .update_surface(crate::win32_dock_render::dip_surface(settings));
         let scene = self.settings_controller.scene();
+        let layout = layout_settings_scene(&scene, crate::win32_dock_render::dip_surface(settings));
+        crate::win32_settings_uia::publish(settings.hwnd, &scene, &layout, settings.dpi())?;
         let scenes = ShellScenes {
             topbar: None,
             dock: None,
@@ -830,19 +832,18 @@ impl RuntimeSurfaces {
             settings: Some(&scene),
             preview: None,
         };
-        let update = present_frame(
-            &mut self.surface_runtime,
-            SurfaceFrame {
-                target: SurfaceTarget {
-                    hwnd: settings.hwnd,
-                    role: ShowcaseRole::Settings,
-                    metrics: SurfaceMetrics::new(window_size.0, window_size.1, settings.dpi()),
-                },
-                scenes,
+        let frame = SurfaceFrame {
+            target: SurfaceTarget {
+                hwnd: settings.hwnd,
+                role: ShowcaseRole::Settings,
+                metrics: SurfaceMetrics::new(window_size.0, window_size.1, settings.dpi()),
             },
-            SurfaceSizeChange::Resize,
-        );
-        self.complete_surface_update(update, windows)
+            scenes,
+        };
+        let update = present_frame(&mut self.surface_runtime, frame, SurfaceSizeChange::Resize);
+        self.complete_surface_update_with_one_retry(update, windows, |runtime| {
+            present_frame(runtime, frame, SurfaceSizeChange::Resize)
+        })
     }
 
     pub(super) fn redraw_popover(

@@ -18,6 +18,7 @@ mod popover_layout;
 mod popover_scene;
 mod quick_settings_layout;
 mod quick_settings_scene;
+mod settings_accessibility;
 mod settings_layout;
 mod settings_scene;
 mod showcase_model;
@@ -155,6 +156,11 @@ pub use quick_settings_scene::{
     QuickSettingsMediaChoice, QuickSettingsMediaPlayer, QuickSettingsMediaSessionId,
     QuickSettingsPlaybackState, QuickSettingsScene, QuickSettingsSlider, QuickSettingsSound,
     QuickSettingsSubmenu, QuickSettingsTile,
+};
+pub use settings_accessibility::{
+    SettingsAccessibilityControlType, SettingsAccessibilityError, SettingsAccessibilityNode,
+    SettingsAccessibilityNodeId, SettingsAccessibilityPattern, SettingsAccessibilitySnapshot,
+    settings_accessibility_snapshot,
 };
 pub use settings_layout::{
     SETTINGS_CONTENT_MAX_WIDTH, SETTINGS_RAIL_WIDTH, SETTINGS_SPLIT_BREAKPOINT, SettingsHit,

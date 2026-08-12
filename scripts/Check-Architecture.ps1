@@ -25,6 +25,7 @@ $violations = @(
     Test-NativeSurfaceOwnershipPolicy -RepositoryRoot $RepositoryRoot
     Test-PublicFacadePolicy -RepositoryRoot $RepositoryRoot
     Test-DiagnosticsPolicyOwnership -RepositoryRoot $RepositoryRoot
+    Test-WatchdogNativeRecoveryBoundary -RepositoryRoot $RepositoryRoot
 )
 
 if ($violations.Count -gt 0) {

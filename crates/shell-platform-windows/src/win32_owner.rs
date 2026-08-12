@@ -9,7 +9,7 @@ use shell_renderer::{
     DipPoint, Dpi, PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene,
     context_menu_height_for_entries, layout_popover_scene, physical_from_dip, popover_surface_size,
 };
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{E_UNEXPECTED, HANDLE};
 use windows::core::Result;
 
 use crate::dock_edge_detection::dock_edge_probe_mode;
@@ -549,6 +549,16 @@ impl RuntimeSurfaces {
             }
         }
         match &event {
+            PlatformEvent::ActivateExistingInstance => {
+                self.dismiss_transient_overlays(topbar, dock, popover, preview, settings)?;
+                let work = crate::win32_windowing::window_work_area(settings.hwnd)?;
+                settings.place_settings(work)?;
+                self.redraw_settings(topbar, dock, popover, preview, settings)?;
+                if !settings.show_activating() {
+                    settings.flash_until_foreground();
+                }
+                return Ok(true);
+            }
             PlatformEvent::DismissTransientOverlays => {
                 let now = Instant::now();
                 let focus_restore_grace = external_menu_focus_restore_is_active(
@@ -1344,6 +1354,14 @@ impl RuntimeSurfaces {
                 let actions = self
                     .settings_controller
                     .handle_pointer(*point, crate::win32_dock_render::dip_surface(settings))
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                return self
+                    .apply_settings_actions(&actions, topbar, dock, popover, preview, settings);
+            }
+            PlatformEvent::SettingsAutomation(action) => {
+                let actions = self
+                    .settings_controller
+                    .handle_automation(*action)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
                 return self
                     .apply_settings_actions(&actions, topbar, dock, popover, preview, settings);
@@ -2403,7 +2421,11 @@ impl RuntimeSurfaces {
             now,
         );
         let plan = surface_build_plan(targets, scenes, composition);
-        self.surface_runtime.rebuild(plan)?;
+        let settings_was_visible = windows.settings.is_visible();
+        let settings_update = self
+            .surface_runtime
+            .rebuild_preserving_visible_settings(plan, settings_was_visible)?;
+        finish_surface_retry(settings_update)?;
         if self.dock_animation_active {
             self.ensure_dock_animation_clock(windows.dock)?;
         }
@@ -2438,6 +2460,21 @@ impl RuntimeSurfaces {
         match outcome? {
             SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => Ok(()),
             SurfaceUpdate::RebuildAllRequired => self.rebuild_native_surfaces(windows),
+        }
+    }
+
+    pub(super) fn complete_surface_update_with_one_retry(
+        &mut self,
+        outcome: Result<SurfaceUpdate>,
+        windows: SurfaceWindows<'_>,
+        retry: impl FnOnce(&mut Win32NativeSurfaceRuntime) -> Result<SurfaceUpdate>,
+    ) -> Result<()> {
+        match outcome? {
+            SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => Ok(()),
+            SurfaceUpdate::RebuildAllRequired => {
+                self.rebuild_native_surfaces(windows)?;
+                finish_surface_retry(retry(&mut self.surface_runtime)?)
+            }
         }
     }
 
@@ -2556,6 +2593,16 @@ impl RuntimeSurfaces {
             }
         }
         Ok(())
+    }
+}
+
+fn finish_surface_retry(update: SurfaceUpdate) -> Result<()> {
+    match update {
+        SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => Ok(()),
+        SurfaceUpdate::RebuildAllRequired => Err(windows::core::Error::new(
+            E_UNEXPECTED,
+            "native surface recovery still requires a rebuild after one bounded retry",
+        )),
     }
 }
 
@@ -2760,12 +2807,13 @@ mod tests {
     use super::{
         CanonicalSurfaceScenes, ShellMenuHandoff, SurfaceCompositionState, SurfaceEndpoint,
         SurfaceEndpoints, canonical_surface_targets, empty_scenes,
-        external_menu_focus_restore_is_active, focused_background_app_anchor,
+        external_menu_focus_restore_is_active, finish_surface_retry, focused_background_app_anchor,
         native_activation_generation, should_dismiss_after_external_menu_end,
         suppress_external_menu_dismissal, surface_build_plan, surface_composition_state,
     };
     use crate::native_event_route::NativeWindowId;
     use crate::native_tray::NativeTrayIdentity;
+    use crate::win32_surface_runtime::SurfaceUpdate;
     use crate::{DockVisibilityMotion, PreviewEntranceMotion, PreviewMotionSpec};
 
     fn endpoint(id: usize, width: u32, height: u32) -> SurfaceEndpoint {
@@ -3088,5 +3136,12 @@ mod tests {
         assert!(!super::dock_frame_waitable_is_active(false, false, true));
         assert!(!super::dock_frame_waitable_is_active(true, true, true));
         assert!(!super::dock_frame_waitable_is_active(true, false, false));
+    }
+
+    #[test]
+    fn surface_recovery_retry_is_bounded_after_one_rebuild() {
+        assert!(finish_surface_retry(SurfaceUpdate::Presented).is_ok());
+        assert!(finish_surface_retry(SurfaceUpdate::FrameSkipped).is_ok());
+        assert!(finish_surface_retry(SurfaceUpdate::RebuildAllRequired).is_err());
     }
 }

@@ -100,6 +100,12 @@ mod win32_do_not_disturb;
 mod win32_dock_render;
 mod win32_dock_visibility;
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 UI Automation COM providers and SAFEARRAY ownership are isolated here"
+)]
+mod win32_settings_uia;
+#[cfg(windows)]
 mod win32_surface_runtime;
 #[cfg(windows)]
 mod win32_topbar_render;
@@ -405,7 +411,9 @@ pub(crate) use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
 };
-pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, SettingsKey};
+pub(crate) use settings_controller::{
+    QueuedSettingsAction, SettingsAutomationAction, SettingsController, SettingsKey,
+};
 #[cfg(test)]
 pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
 pub(crate) use topbar_controller::TopbarController;
@@ -425,7 +433,10 @@ pub(crate) use tray_activation::{
     normalize_executable_identity,
 };
 #[cfg(windows)]
-pub use win32::{ShowcaseRunConfig, run_showcase};
+pub use win32::{
+    ShowcaseRunConfig, activate_existing_instance, current_session_id, local_app_data_path,
+    run_showcase,
+};
 pub(crate) use window_preview::{
     PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
     PreviewWindowState,
@@ -437,6 +448,7 @@ use shell_renderer::{DipRect, rounded_content_hit};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PlatformEvent {
+    ActivateExistingInstance,
     TaskbarCreated,
     AppBarPositionChanged,
     DpiChanged(PhysicalRect),
@@ -492,6 +504,7 @@ pub(crate) enum PlatformEvent {
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SettingsPointerActivated(DipPoint),
+    SettingsAutomation(SettingsAutomationAction),
     SettingsScroll(isize),
     SettingsResized,
     SettingsConfigCommitted(Box<shell_config::ShellConfigV1>),

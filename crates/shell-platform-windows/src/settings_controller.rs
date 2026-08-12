@@ -63,6 +63,34 @@ pub enum SettingsKey {
     Dismiss,
 }
 
+/// Provider-neutral interaction sent to the Settings controller.
+///
+/// A native accessibility adapter can translate UI Automation patterns into
+/// these actions without duplicating mouse or keyboard mutation policy. The
+/// expected section carried by control actions prevents a queued action
+/// captured from an old snapshot from targeting a same-numbered control after
+/// navigation. The Win32 adapter registers the COM provider and handles
+/// `WM_GETOBJECT`; this contract remains platform-neutral.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SettingsAutomationAction {
+    /// Moves logical focus to an existing, enabled Settings element.
+    Focus {
+        focus: SettingsFocus,
+        expected_section: Option<SettingsSectionId>,
+    },
+    /// Invokes the same typed hit target used by pointer input.
+    Invoke {
+        hit: SettingsHit,
+        expected_section: Option<SettingsSectionId>,
+    },
+    /// Sets an active slider by its UI Automation percentage (0 through 100).
+    SetRange {
+        section: SettingsSectionId,
+        control: SettingsControlId,
+        position: f64,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsSection {
     Dock,
@@ -92,6 +120,7 @@ pub enum SettingsError {
     Config(ConfigError),
     Theme(ThemeError),
     Transition(TransitionError),
+    InvalidAutomationRange,
 }
 
 pub struct SettingsController {
@@ -390,26 +419,113 @@ impl SettingsController {
         let Some(hit) = layout.hit_test(point) else {
             return Ok(Vec::new());
         };
+        let slider_position = match hit {
+            SettingsHit::Control(id) => layout
+                .controls()
+                .iter()
+                .find(|control| control.id() == id)
+                .and_then(|control| slider_position_from_point(control.bounds(), point)),
+            _ => None,
+        };
+        self.handle_hit(hit, slider_position)
+    }
+
+    /// Applies one provider-neutral accessibility action.
+    ///
+    /// `Invoke` deliberately flows through the pointer hit reducer, while
+    /// `SetRange` flows through the same slider reducer. This keeps preview,
+    /// commit, cancel, reset, focus, and redraw effects identical across input
+    /// providers. NaN is rejected; other numeric values are clamped to the UI
+    /// Automation range before being snapped to the setting's native step.
+    pub fn handle_automation(
+        &mut self,
+        action: SettingsAutomationAction,
+    ) -> Result<Vec<QueuedSettingsAction>, SettingsError> {
+        match action {
+            SettingsAutomationAction::Focus {
+                focus,
+                expected_section,
+            } => {
+                if !self.matches_automation_section(expected_section) {
+                    return Ok(Vec::new());
+                }
+                if !self.set_automation_focus(focus) {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![QueuedSettingsAction::Redraw])
+            }
+            SettingsAutomationAction::Invoke {
+                hit,
+                expected_section,
+            } => {
+                if !self.matches_automation_section(expected_section) {
+                    return Ok(Vec::new());
+                }
+                self.handle_hit(hit, None)
+            }
+            SettingsAutomationAction::SetRange {
+                section,
+                control,
+                position,
+            } => {
+                if position.is_nan() {
+                    return Err(SettingsError::InvalidAutomationRange);
+                }
+                if !self.matches_automation_section(Some(section)) {
+                    return Ok(Vec::new());
+                }
+                let controls = self.section_controls();
+                let Some(index) = controls
+                    .iter()
+                    .position(|candidate| candidate.id() == control)
+                else {
+                    return Ok(Vec::new());
+                };
+                if !controls[index].enabled()
+                    || !matches!(controls[index].kind(), SettingsControlKind::Slider { .. })
+                {
+                    return Ok(Vec::new());
+                }
+                self.focus = index;
+                self.focus_area = SettingsFocusArea::Controls;
+                self.ensure_focus_visible();
+                let position = position.clamp(0.0, 100.0).round() as u8;
+                self.set_focused_slider_position(position)
+            }
+        }
+    }
+
+    fn matches_automation_section(&self, expected: Option<SettingsSectionId>) -> bool {
+        expected.is_none_or(|section| self.active_section.map(section_id) == Some(section))
+    }
+
+    fn handle_hit(
+        &mut self,
+        hit: SettingsHit,
+        slider_position: Option<u8>,
+    ) -> Result<Vec<QueuedSettingsAction>, SettingsError> {
         match hit {
             SettingsHit::Navigation(id) => {
-                let section = section_for_id(id).unwrap_or(SettingsSection::Dock);
+                let Some(section) = section_for_id(id) else {
+                    return Ok(Vec::new());
+                };
+                if !section_enabled(self, section) {
+                    return Ok(Vec::new());
+                }
                 self.open_section(section);
                 Ok(vec![QueuedSettingsAction::Redraw])
             }
             SettingsHit::Control(id) => {
                 let controls = self.section_controls();
                 if let Some(index) = controls.iter().position(|row| row.id() == id) {
+                    if !controls[index].enabled() {
+                        return Ok(Vec::new());
+                    }
                     self.focus = index;
                     self.focus_area = SettingsFocusArea::Controls;
+                    self.ensure_focus_visible();
                     if matches!(controls[index].kind(), SettingsControlKind::Slider { .. }) {
-                        let position = layout
-                            .controls()
-                            .iter()
-                            .find(|control| control.id() == id)
-                            .and_then(|control| {
-                                slider_position_from_point(control.bounds(), point)
-                            });
-                        if let Some(position) = position {
+                        if let Some(position) = slider_position {
                             self.set_focused_slider_position(position)
                         } else {
                             Ok(vec![QueuedSettingsAction::Redraw])
@@ -422,18 +538,25 @@ impl SettingsController {
                 }
             }
             SettingsHit::Back => {
-                if let Some(section) = self.active_section.take() {
-                    self.focus = section_index(section);
-                }
+                let Some(section) = self.active_section.take() else {
+                    return Ok(Vec::new());
+                };
+                self.focus = section_index(section);
                 self.focus_area = SettingsFocusArea::Navigation;
                 self.ensure_focus_visible();
                 Ok(vec![QueuedSettingsAction::Redraw])
             }
             SettingsHit::Apply => {
+                if !self.is_dirty() {
+                    return Ok(Vec::new());
+                }
                 self.focus_area = SettingsFocusArea::Apply;
                 Ok(vec![QueuedSettingsAction::CommitConfig])
             }
             SettingsHit::Cancel => {
+                if !self.is_dirty() {
+                    return Ok(Vec::new());
+                }
                 self.focus_area = SettingsFocusArea::Cancel;
                 self.cancel();
                 Ok(vec![
@@ -450,6 +573,37 @@ impl SettingsController {
                 ])
             }
         }
+    }
+
+    fn set_automation_focus(&mut self, focus: SettingsFocus) -> bool {
+        let target = match focus {
+            SettingsFocus::Navigation(id) => {
+                let Some(section) = section_for_id(id) else {
+                    return false;
+                };
+                SettingsFocusTarget::Navigation(section_index(section))
+            }
+            SettingsFocus::Control(id) => {
+                let Some(index) = self
+                    .section_controls()
+                    .iter()
+                    .position(|control| control.id() == id)
+                else {
+                    return false;
+                };
+                SettingsFocusTarget::Control(index)
+            }
+            SettingsFocus::Back => SettingsFocusTarget::Back,
+            SettingsFocus::Apply => SettingsFocusTarget::Apply,
+            SettingsFocus::Cancel => SettingsFocusTarget::Cancel,
+            SettingsFocus::Reset => SettingsFocusTarget::Reset,
+        };
+        if !self.focus_targets().contains(&target) {
+            return false;
+        }
+        self.set_focus_target(target);
+        self.ensure_focus_visible();
+        true
     }
 
     pub fn scroll(&mut self, rows: isize) -> Vec<QueuedSettingsAction> {
@@ -1458,6 +1612,9 @@ impl fmt::Display for SettingsError {
             Self::Config(error) => write!(formatter, "{error}"),
             Self::Theme(error) => write!(formatter, "{error}"),
             Self::Transition(error) => write!(formatter, "{error}"),
+            Self::InvalidAutomationRange => {
+                formatter.write_str("Settings automation range cannot be NaN")
+            }
         }
     }
 }

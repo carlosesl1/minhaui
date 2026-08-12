@@ -72,7 +72,9 @@ impl RuntimeOrchestrator {
             PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated => {
                 RuntimeAction::RepositionAndRebuild
             }
-            PlatformEvent::AppBarPositionChanged => RuntimeAction::None,
+            PlatformEvent::ActivateExistingInstance | PlatformEvent::AppBarPositionChanged => {
+                RuntimeAction::None
+            }
             PlatformEvent::QuickSettingsRefresh(_)
             | PlatformEvent::QuickSettingsWorkerCompleted(_)
             | PlatformEvent::MediaSessionsChanged(_)
@@ -107,6 +109,7 @@ impl RuntimeOrchestrator {
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
             PlatformEvent::SettingsKey(_)
             | PlatformEvent::SettingsPointerActivated(_)
+            | PlatformEvent::SettingsAutomation(_)
             | PlatformEvent::SettingsScroll(_)
             | PlatformEvent::SettingsResized
             | PlatformEvent::SettingsConfigCommitted(_) => RuntimeAction::None,

@@ -16,9 +16,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjectsEx, PBT_APMRESUMEAUTOMATIC, PM_REMOVE, PeekMessageW, PostQuitMessage,
     QS_ALLINPUT, SWP_NOACTIVATE, SWP_NOZORDER, SetTimer, SetWindowPos, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY,
-    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_POWERBROADCAST,
-    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_GETOBJECT, WM_KEYDOWN,
+    WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
+    WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
 };
 use windows::core::Result;
 
@@ -29,7 +29,7 @@ use crate::night_light_worker::NIGHT_LIGHT_WAKE_MESSAGE;
 use crate::quick_settings_worker::QUICK_SETTINGS_WAKE_MESSAGE;
 use crate::shell_menu_worker::SHELL_MENU_WAKE_MESSAGE;
 use crate::win32::{
-    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID,
+    ACTIVATE_INSTANCE, DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID,
     EXTERNAL_MENU_TIMER_ID, LIVE_WINDOWS, PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED,
     TIMER_ID,
 };
@@ -41,6 +41,7 @@ use crate::win32_event_queue::{
 use crate::win32_external_menu_events::EXTERNAL_MENU_WAKE_MESSAGE;
 use crate::win32_hit_test::hit_test;
 use crate::win32_pointer::{client_point, track_mouse_leave};
+use crate::win32_settings_uia::SETTINGS_UIA_WAKE_MESSAGE;
 pub(super) use crate::win32_work_area::{
     monitor_placement_inputs, window_monitor_bounds, window_monitor_id, window_work_area,
 };
@@ -204,11 +205,25 @@ pub(super) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let activate_instance = ACTIVATE_INSTANCE.load(Ordering::Acquire);
+    if activate_instance != 0 && message == activate_instance {
+        queue_event(RoutedPlatformEvent::window(
+            hwnd,
+            PlatformEvent::ActivateExistingInstance,
+        ));
+        return LRESULT(1);
+    }
     if message == TASKBAR_CREATED.load(Ordering::Acquire) {
         queue_event(RoutedPlatformEvent::broadcast(
             PlatformEvent::TaskbarCreated,
         ));
         return LRESULT(0);
+    }
+    if message == WM_GETOBJECT
+        && is_settings_window(hwnd)
+        && let Some(result) = crate::win32_settings_uia::handle_wm_getobject(hwnd, wparam, lparam)
+    {
+        return result;
     }
     if message == BACKGROUND_APPS_WAKE_MESSAGE
         || message == MEDIA_SESSION_WAKE_MESSAGE
@@ -736,8 +751,12 @@ pub(super) unsafe extern "system" fn window_proc(
             ));
             LRESULT(0)
         }
+        SETTINGS_UIA_WAKE_MESSAGE if is_settings_window(hwnd) => LRESULT(0),
         WM_DESTROY => {
             set_dragging(hwnd, false);
+            if is_settings_window(hwnd) {
+                crate::win32_settings_uia::unregister(hwnd);
+            }
             if LIVE_WINDOWS.fetch_sub(1, Ordering::AcqRel) == 1 {
                 // SAFETY: Category 8 (FFI boundary). The final owned HWND has been
                 // destroyed, so posting quit deterministically terminates this loop.

@@ -22,11 +22,18 @@ if (-not (Test-Path -LiteralPath $watchdog -PathType Leaf)) {
     throw "Recovery watchdog was not found at $watchdog"
 }
 
-$mutation = if ($DryRun) { 'disabled' } else { 'enabled' }
-if ($PSCmdlet.ShouldProcess($Hook, 'Restore the Windows taskbar transaction')) {
-    & $watchdog --simulate-taskbar-restore --taskbar-mutation $mutation
-    if ($LASTEXITCODE -ne 0) {
-        throw "Recovery watchdog failed with exit code $LASTEXITCODE"
-    }
+$arguments = @('--restore-only', '--hook', $Hook.ToLowerInvariant())
+if ($DryRun) {
+    $arguments += '--check-only'
 }
 
+if ($PSCmdlet.ShouldProcess($Hook, 'Run the watchdog recovery contract')) {
+    $process = Start-Process `
+        -FilePath $watchdog `
+        -ArgumentList $arguments `
+        -Wait `
+        -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "Recovery watchdog failed with exit code $($process.ExitCode)"
+    }
+}

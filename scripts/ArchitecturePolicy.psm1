@@ -263,7 +263,10 @@ $script:AllowedPublicFacadeItems = @{
     )
     "crates/shell-platform-windows/src/lib.rs" = @(
         "ShowcaseRunConfig",
+        "activate_existing_instance",
         "crate_identity",
+        "current_session_id",
+        "local_app_data_path",
         "run_showcase"
     )
     "crates/shell-renderer/src/lib.rs" = @(
@@ -337,6 +340,12 @@ $script:AllowedPublicFacadeItems = @{
         "SETTINGS_CONTENT_MAX_WIDTH",
         "SETTINGS_RAIL_WIDTH",
         "SETTINGS_SPLIT_BREAKPOINT",
+        "SettingsAccessibilityControlType",
+        "SettingsAccessibilityError",
+        "SettingsAccessibilityNode",
+        "SettingsAccessibilityNodeId",
+        "SettingsAccessibilityPattern",
+        "SettingsAccessibilitySnapshot",
         "SettingsControl",
         "SettingsControlId",
         "SettingsControlKind",
@@ -389,6 +398,7 @@ $script:AllowedPublicFacadeItems = @{
         "preview_panel_size",
         "quick_settings_surface_size",
         "rounded_content_hit",
+        "settings_accessibility_snapshot",
         "topbar_height_for_text_scale",
         "topbar_rect"
     )
@@ -519,11 +529,86 @@ function Test-DiagnosticsPolicyOwnership {
     @($violations | Sort-Object -Unique)
 }
 
+function Test-WatchdogNativeRecoveryBoundary {
+    [CmdletBinding(DefaultParameterSetName = "Repository")]
+    param(
+        [Parameter(Mandatory, ParameterSetName = "Repository")]
+        [string] $RepositoryRoot,
+        [Parameter(Mandatory, ParameterSetName = "Sources")]
+        [AllowEmptyCollection()]
+        [object[]] $Sources
+    )
+
+    $watchdogRoot = "crates/shell-watchdog/src"
+    $lib = "$watchdogRoot/lib.rs"
+    $safePlanner = "$watchdogRoot/taskbar_restore.rs"
+    $nativeAdapter = "$watchdogRoot/taskbar_restore_win32.rs"
+    if ($PSCmdlet.ParameterSetName -eq "Repository") {
+        $sourceRoot = Join-Path $RepositoryRoot $watchdogRoot
+        $Sources = @(
+            foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -File -Filter "*.rs") {
+                $relative = $file.FullName.Substring($RepositoryRoot.Length).TrimStart('\', '/')
+                [pscustomobject]@{
+                    file = $relative.Replace('\', '/')
+                    content = Get-Content -Raw -LiteralPath $file.FullName
+                }
+            }
+        )
+    }
+
+    $violations = New-Object System.Collections.Generic.List[string]
+    $unsafeAllows = New-Object System.Collections.Generic.List[string]
+    $sourceByFile = @{}
+    foreach ($source in @($Sources)) {
+        $file = ([string]$source.file).Replace('\', '/')
+        $content = [string]$source.content
+        $sourceByFile[$file] = $content
+        foreach ($match in [regex]::Matches(
+            $content,
+            '(?s)#\s*\[\s*allow\s*\(\s*unsafe_code\b.*?\)\s*\]'
+        )) {
+            $unsafeAllows.Add($file)
+        }
+        if (
+            $file -ne $nativeAdapter -and
+            $content -match '\bunsafe\s*(?:\{|extern\b|fn\b|impl\b|trait\b)'
+        ) {
+            $violations.Add("watchdog unsafe operation outside native recovery adapter: $file")
+        }
+    }
+
+    if (-not $sourceByFile.ContainsKey($nativeAdapter)) {
+        $violations.Add("watchdog native recovery adapter is missing: $nativeAdapter")
+    }
+    if ($unsafeAllows.Count -ne 1 -or $unsafeAllows[0] -ne $lib) {
+        $violations.Add(
+            "watchdog must have exactly one unsafe_code allow on its native recovery module"
+        )
+    }
+    if (
+        -not $sourceByFile.ContainsKey($lib) -or
+        $sourceByFile[$lib] -notmatch '(?s)#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*#\s*\[\s*allow\s*\(\s*unsafe_code\b.*?\)\s*\]\s*mod\s+taskbar_restore_win32\s*;'
+    ) {
+        $violations.Add(
+            "watchdog native recovery adapter must be cfg(windows) with the sole unsafe allow"
+        )
+    }
+    if (
+        $sourceByFile.ContainsKey($safePlanner) -and
+        $sourceByFile[$safePlanner] -match '\bwindows\s*::'
+    ) {
+        $violations.Add("watchdog recovery planner must not import the Windows API")
+    }
+
+    @($violations | Sort-Object -Unique)
+}
+
 Export-ModuleMember -Function @(
     "Get-ArchitectureAllows",
     "Test-ArchitectureExceptionPolicy",
     "Test-DiagnosticsPolicyOwnership",
     "Test-NativeSurfaceOwnershipPolicy",
     "Test-PublicFacadePolicy",
+    "Test-WatchdogNativeRecoveryBoundary",
     "Test-WorkspaceDependencyPolicy"
 )

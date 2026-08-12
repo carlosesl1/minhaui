@@ -219,6 +219,57 @@ pub const fn crate_identity() -> &'static str { "shell-renderer" }
 $compliantFacadeViolations = @(Test-PublicFacadePolicy -Sources $compliantFacadeSources)
 Assert-Equal 0 $compliantFacadeViolations.Count "Approved facades must remain valid."
 
+$validWatchdogBoundary = @(
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/lib.rs" `
+        -Content @'
+#![deny(unsafe_code)]
+mod taskbar_restore;
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "ADR-0011")]
+mod taskbar_restore_win32;
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/taskbar_restore.rs" `
+        -Content @'
+#![deny(unsafe_code)]
+fn plan() {}
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/taskbar_restore_win32.rs" `
+        -Content @'
+unsafe extern "system" fn callback() {}
+'@)
+)
+$watchdogBoundaryViolations = @(
+    Test-WatchdogNativeRecoveryBoundary -Sources $validWatchdogBoundary
+)
+Assert-Equal 0 $watchdogBoundaryViolations.Count "The isolated watchdog FFI boundary must pass."
+
+$invalidWatchdogBoundary = @(
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/lib.rs" `
+        -Content @'
+#![allow(unsafe_code)]
+mod taskbar_restore_win32;
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/taskbar_restore.rs" `
+        -Content @'
+use windows::Win32::Foundation::HWND;
+fn plan() { unsafe {} }
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/taskbar_restore_win32.rs" `
+        -Content @'
+unsafe extern "system" fn callback() {}
+'@)
+)
+$invalidWatchdogBoundaryViolations = @(
+    Test-WatchdogNativeRecoveryBoundary -Sources $invalidWatchdogBoundary
+)
+Assert-Equal 3 $invalidWatchdogBoundaryViolations.Count "Boundary drift must be rejected."
+
 $duplicatedDiagnosticsPolicySources = @(
     (New-NativeSurfaceSource `
         -File "crates/shell-platform-windows/src/diagnostics.rs" `

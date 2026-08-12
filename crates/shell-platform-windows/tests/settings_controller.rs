@@ -1,12 +1,12 @@
 use crate::{
-    QueuedSettingsAction, SettingsController, SettingsEdit, SettingsError, SettingsKey,
-    SettingsSection,
+    QueuedSettingsAction, SettingsAutomationAction, SettingsController, SettingsEdit,
+    SettingsError, SettingsKey, SettingsSection,
 };
 use shell_config::{
     AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
 };
 use shell_core::{AppId, DockItem, DockItemId, DockLayoutEntry, TopbarModuleKind};
-use shell_renderer::{DipPoint, DipRect, SettingsFocus, layout_settings_scene};
+use shell_renderer::{DipPoint, DipRect, SettingsFocus, SettingsHit, layout_settings_scene};
 
 fn qa_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir()
@@ -468,4 +468,253 @@ fn fixed_leading_topbar_modules_cannot_be_customized() {
 
     assert!(matches!(result, Err(SettingsError::Transition(_))));
     assert_eq!(controller.preview(), &ShellConfigV1::default());
+}
+
+#[test]
+fn automation_invoke_shares_mouse_and_keyboard_reducers() -> Result<(), Box<dyn std::error::Error>>
+{
+    let surface = DipRect::new(0.0, 0.0, 992.0, 620.0);
+
+    let mut pointer = SettingsController::new(ShellConfigV1::default());
+    pointer.update_surface(surface);
+    pointer.open_section(SettingsSection::Dock);
+    let pointer_layout = layout_settings_scene(&pointer.scene(), surface);
+    let toggle = pointer_layout
+        .controls()
+        .last()
+        .copied()
+        .ok_or("missing Dock toggle")?;
+    let pointer_actions = pointer.handle_pointer(
+        DipPoint::new(
+            toggle.bounds().x + toggle.bounds().width / 2.0,
+            toggle.bounds().y + toggle.bounds().height / 2.0,
+        ),
+        surface,
+    )?;
+
+    let mut automation = SettingsController::new(ShellConfigV1::default());
+    automation.update_surface(surface);
+    automation.open_section(SettingsSection::Dock);
+    let dock_section = automation
+        .scene()
+        .active_section()
+        .ok_or("missing Dock section")?;
+    let automation_actions = automation.handle_automation(SettingsAutomationAction::Invoke {
+        hit: SettingsHit::Control(toggle.id()),
+        expected_section: Some(dock_section),
+    })?;
+
+    assert_eq!(automation_actions, pointer_actions);
+    assert_eq!(automation.preview(), pointer.preview());
+
+    let choice = automation.scene().controls()[2].id();
+    let mut keyboard = SettingsController::new(ShellConfigV1::default());
+    keyboard.update_surface(surface);
+    keyboard.open_section(SettingsSection::Dock);
+    keyboard.handle_key(SettingsKey::Next)?;
+    keyboard.handle_key(SettingsKey::Next)?;
+    let keyboard_actions = keyboard.handle_key(SettingsKey::Activate)?;
+
+    let mut focused_automation = SettingsController::new(ShellConfigV1::default());
+    focused_automation.update_surface(surface);
+    focused_automation.open_section(SettingsSection::Dock);
+    assert_eq!(
+        focused_automation.handle_automation(SettingsAutomationAction::Focus {
+            focus: SettingsFocus::Control(choice),
+            expected_section: Some(dock_section),
+        })?,
+        vec![QueuedSettingsAction::Redraw]
+    );
+    let automation_actions =
+        focused_automation.handle_automation(SettingsAutomationAction::Invoke {
+            hit: SettingsHit::Control(choice),
+            expected_section: Some(dock_section),
+        })?;
+
+    assert_eq!(automation_actions, keyboard_actions);
+    assert_eq!(focused_automation.preview(), keyboard.preview());
+    Ok(())
+}
+
+#[test]
+fn automation_range_clamps_and_rejects_nan() -> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.open_section(SettingsSection::Dock);
+    let section = controller
+        .scene()
+        .active_section()
+        .ok_or("missing Dock section")?;
+    let slider = controller.scene().controls()[0].id();
+
+    let upper = controller.handle_automation(SettingsAutomationAction::SetRange {
+        section,
+        control: slider,
+        position: 140.0,
+    })?;
+    assert_eq!(controller.preview().dock().item_size(), 72);
+    assert_eq!(
+        upper,
+        vec![
+            QueuedSettingsAction::PreviewConfig,
+            QueuedSettingsAction::Redraw,
+        ]
+    );
+
+    controller.handle_automation(SettingsAutomationAction::SetRange {
+        section,
+        control: slider,
+        position: -20.0,
+    })?;
+    assert_eq!(controller.preview().dock().item_size(), 36);
+    let before_nan = controller.preview().clone();
+    assert!(matches!(
+        controller.handle_automation(SettingsAutomationAction::SetRange {
+            section,
+            control: slider,
+            position: f64::NAN,
+        }),
+        Err(SettingsError::InvalidAutomationRange)
+    ));
+    assert_eq!(controller.preview(), &before_nan);
+    Ok(())
+}
+
+#[test]
+fn automation_focus_scrolls_an_offscreen_control_into_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let surface = DipRect::new(0.0, 0.0, 992.0, 320.0);
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.update_surface(surface);
+    controller.open_section(SettingsSection::Dock);
+    let section = controller
+        .scene()
+        .active_section()
+        .ok_or("missing Dock section")?;
+    let last_control = controller
+        .scene()
+        .controls()
+        .last()
+        .map(shell_renderer::SettingsControl::id)
+        .ok_or("missing Dock controls")?;
+    let before = layout_settings_scene(&controller.scene(), surface);
+    assert!(!before.controls().iter().any(|row| row.id() == last_control));
+
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::Focus {
+            focus: SettingsFocus::Control(last_control),
+            expected_section: Some(section),
+        })?,
+        vec![QueuedSettingsAction::Redraw]
+    );
+
+    let scene = controller.scene();
+    assert_eq!(scene.focus(), Some(SettingsFocus::Control(last_control)));
+    assert!(scene.control_scroll_offset() > 0);
+    assert!(
+        layout_settings_scene(&scene, surface)
+            .controls()
+            .iter()
+            .any(|row| row.id() == last_control)
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_invoke_covers_navigation_back_and_footer_actions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    let appearance = controller.scene().navigation()[5].section();
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::Invoke {
+            hit: SettingsHit::Navigation(appearance),
+            expected_section: None,
+        })?,
+        vec![QueuedSettingsAction::Redraw]
+    );
+    assert_eq!(controller.scene().active_section(), Some(appearance));
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::Invoke {
+            hit: SettingsHit::Back,
+            expected_section: Some(appearance),
+        })?,
+        vec![QueuedSettingsAction::Redraw]
+    );
+    assert_eq!(controller.scene().active_section(), None);
+
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::Invoke {
+            hit: SettingsHit::Apply,
+            expected_section: None,
+        })?,
+        vec![QueuedSettingsAction::CommitConfig]
+    );
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::Invoke {
+            hit: SettingsHit::Cancel,
+            expected_section: None,
+        })?,
+        vec![
+            QueuedSettingsAction::RevertConfig,
+            QueuedSettingsAction::Redraw,
+        ]
+    );
+    assert_eq!(controller.preview(), controller.committed());
+
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::Invoke {
+            hit: SettingsHit::Reset,
+            expected_section: None,
+        })?,
+        vec![
+            QueuedSettingsAction::PreviewConfig,
+            QueuedSettingsAction::Redraw,
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn stale_control_action_is_ignored_after_navigation_to_same_raw_id()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.set_supported_quick_controls(shell_core::QuickControlKind::ALL);
+    controller.open_section(SettingsSection::Dock);
+    let dock_section = controller
+        .scene()
+        .active_section()
+        .ok_or("missing Dock section")?;
+    let stale_control = controller
+        .scene()
+        .controls()
+        .last()
+        .map(shell_renderer::SettingsControl::id)
+        .ok_or("missing Dock controls")?;
+
+    controller.open_section(SettingsSection::QuickControls);
+    let quick_section = controller
+        .scene()
+        .active_section()
+        .ok_or("missing Quick Controls section")?;
+    assert_ne!(dock_section, quick_section);
+    assert!(
+        controller
+            .scene()
+            .controls()
+            .iter()
+            .any(|control| control.id() == stale_control),
+        "fixture must exercise a raw ID collision"
+    );
+    let before = controller.preview().clone();
+
+    let actions = controller.handle_automation(SettingsAutomationAction::Invoke {
+        hit: SettingsHit::Control(stale_control),
+        expected_section: Some(dock_section),
+    })?;
+
+    assert!(actions.is_empty());
+    assert_eq!(controller.preview(), &before);
+    assert_eq!(controller.scene().active_section(), Some(quick_section));
+    Ok(())
 }
