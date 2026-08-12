@@ -25,7 +25,7 @@ Glass design contract.
 | P1 | Top-bar overflow displayed `+N` but opened the system menu; focus could address modules no longer rendered. | Overflow now owns the actual hidden-module list, is focusable, opens a native keyboard-accessible menu, and routes selection through existing module intents. |
 | P1 | Persisted top-bar density and appearance opacity/radius were not applied consistently. | Density respects user preference with a narrow-width safety fallback. Opacity/radius are bounded renderer preferences and support live preview/revert. |
 | P1 | `shell-watchdog` only simulated lifecycle events and normal packages launched `shell-app` directly. | Packaged startup now enters the watchdog, which launches the sibling shell, monitors its heartbeat, applies bounded restart backoff, and attempts safe mode once after a crash loop. |
-| P1 | Six swapchains were created per monitor even when Settings was never opened, and shared transient icon entries had no memory bound. | Settings materializes its swapchain lazily and retries one interrupted frame after device rebuild; the shared native icon cache now uses deterministic item and estimated-byte LRU budgets. |
+| P1 | Six swapchains were created per monitor even when transient windows were never opened, and shared transient icon entries had no memory bound. | Only Topbar and Dock materialize eagerly; Popover, App Menu, Preview and Settings are lazy and rematerialize only while visible. The shared native icon cache uses deterministic item and estimated-byte LRU budgets. |
 
 ## Settings vertical slice
 
@@ -82,15 +82,15 @@ reason. The UI does not present nonfunctional controls as finished features.
 The bounded queue prevents memory growth during bursts, and unchanged top-bar
 hover events no longer present a new frame. Live configuration changes also
 preserve fullscreen auto-hide, so an appearance preview cannot reveal the Dock
-over a fullscreen application. Settings now defers its swapchain until first
-use, preserves a visible Settings surface across renderer rebuild, and the
-shared transient icon cache is bounded to 256 entries and about 32 MiB of
-estimated bitmap/key storage. The larger performance work remains:
+over a fullscreen application. Popover, app menu, preview, and Settings now
+defer their swapchains until first use; visible lazy surfaces are rematerialized
+across renderer rebuild while hidden ones remain absent. The shared transient
+icon cache is bounded to 256 entries and about 32 MiB of estimated bitmap/key
+storage. Native and routed events also run in alternating bounded batches so a
+single flood cannot monopolize the UI thread. The larger performance work remains:
 
 - share the D3D/D2D device across monitor slots;
-- create popover, preview, and app-menu swapchains lazily;
 - move icon resolution/decode and desktop capture off the UI thread;
-- give routed-event draining a count/time budget;
 - use LRU/byte budgets for icon and capture caches;
 - distinguish redraw, resize, surface recreation, and device recreation.
 
@@ -99,8 +99,10 @@ estimated bitmap/key storage. The larger performance work remains:
 1. Complete the watchdog recovery boundary. External process supervision,
    heartbeat monitoring, bounded crash-loop restart, one-shot safe-mode fallback,
    the bounded/versioned write-ahead journal, and fail-closed native restoration
-   of a compatible V1 journal are implemented. Journal arming before mutation
-   and crash-at-every-phase recovery testing on real Windows remain open.
+   of a compatible V1 journal are implemented. A bounded, canonical arming
+   protocol and taskbar fingerprint now exist as pure `shell-core` primitives,
+   but are not connected to either process. Durable journal arming before
+   mutation and crash-at-every-phase recovery testing on real Windows remain open.
 2. Validate the implemented single-instance-per-user-and-session activation
    forwarding under concurrent launch, elevated/medium-integrity launch, RDP,
    Fast User Switching, and primary-process failure during startup.
@@ -108,8 +110,9 @@ estimated bitmap/key storage. The larger performance work remains:
    Windows with Narrator, Accessibility Insights, and automated clients. The
    provider now handles `WM_GETOBJECT`, fragment navigation, screen bounds,
    accessible properties, and Invoke/Toggle/RangeValue patterns through queued
-   controller actions. Snapshot-diffed UIA focus/property/structure events,
-   tooltips, and providers for the remaining custom D2D surfaces are still open.
+   controller actions. Snapshot-diffed focus/property/structure notifications
+   are implemented and remain part of the native validation gate; tooltips and
+   providers for the remaining custom D2D surfaces are still open.
 4. Replace or explicitly capability-gate the remaining private Windows contracts
    (DND and audio device policy) with supported `ms-settings:` fallbacks. Night
    Light now opens Microsoft's documented `ms-settings:nightlight` page and no

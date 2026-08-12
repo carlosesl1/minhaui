@@ -4,11 +4,10 @@
 //! calls may arrive on COM/RPC threads, so they never touch `SettingsController`
 //! directly: they enqueue a typed `PlatformEvent` and wake the HWND owner.
 //!
-//! This vertical slice intentionally does not raise UIA focus, property, or
-//! structure-changed events yet. The next accessibility slice must diff
-//! consecutive snapshots and raise those events from the UI thread; emitting
-//! partial or out-of-order events here would be worse than relying on UIA's
-//! normal property queries after each action.
+//! Consecutive frames are diffed only when they are published by the HWND owner
+//! thread. When an automation client is listening, the provider raises
+//! structure, property, and focus events after atomically installing the new
+//! snapshot. Event delivery never polls and never calls the controller.
 
 #![allow(
     non_snake_case,
@@ -17,6 +16,7 @@
 
 use core::ffi::c_void;
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -29,24 +29,32 @@ use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND, LPARAM, LRESULT,
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
-use windows::Win32::System::Variant::{VARIANT, VT_I4};
+use windows::Win32::System::Variant::{
+    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_ARRAY, VT_I4, VT_R8,
+};
 use windows::Win32::UI::Accessibility::{
     IInvokeProvider, IInvokeProvider_Impl, IRangeValueProvider, IRangeValueProvider_Impl,
     IRawElementProviderFragment, IRawElementProviderFragmentRoot, IRawElementProviderSimple,
     IToggleProvider, IToggleProvider_Impl, NavigateDirection, NavigateDirection_FirstChild,
     NavigateDirection_LastChild, NavigateDirection_NextSibling, NavigateDirection_Parent,
     NavigateDirection_PreviousSibling, ProviderOptions, ProviderOptions_ProviderOwnsSetFocus,
-    ProviderOptions_ServerSideProvider, ProviderOptions_UseComThreading, ToggleState,
-    ToggleState_Off, ToggleState_On, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
-    UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE,
-    UIA_E_ELEMENTNOTENABLED, UIA_E_INVALIDOPERATION, UIA_EditControlTypeId, UIA_GroupControlTypeId,
-    UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId, UIA_InvokePatternId,
-    UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId, UIA_ListControlTypeId,
-    UIA_ListItemControlTypeId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
-    UIA_RangeValuePatternId, UIA_RangeValueValuePropertyId, UIA_SliderControlTypeId,
-    UIA_TextControlTypeId, UIA_TogglePatternId, UIA_ValueValuePropertyId, UIA_WindowControlTypeId,
-    UiaAppendRuntimeId, UiaHostProviderFromHwnd, UiaRect, UiaReturnRawElementProvider,
-    UiaRootObjectId,
+    ProviderOptions_ServerSideProvider, ProviderOptions_UseComThreading,
+    StructureChangeType_ChildrenInvalidated, ToggleState, ToggleState_Off, ToggleState_On,
+    UIA_AutomationFocusChangedEventId, UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
+    UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
+    UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED, UIA_E_INVALIDOPERATION,
+    UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_HasKeyboardFocusPropertyId,
+    UIA_HelpTextPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
+    UIA_IsInvokePatternAvailablePropertyId, UIA_IsOffscreenPropertyId,
+    UIA_IsRangeValuePatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId,
+    UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_NamePropertyId, UIA_PATTERN_ID,
+    UIA_PROPERTY_ID, UIA_RangeValueIsReadOnlyPropertyId, UIA_RangeValueLargeChangePropertyId,
+    UIA_RangeValueMaximumPropertyId, UIA_RangeValueMinimumPropertyId, UIA_RangeValuePatternId,
+    UIA_RangeValueSmallChangePropertyId, UIA_RangeValueValuePropertyId, UIA_SliderControlTypeId,
+    UIA_TextControlTypeId, UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId,
+    UIA_ValueValuePropertyId, UIA_WindowControlTypeId, UiaAppendRuntimeId, UiaClientsAreListening,
+    UiaHostProviderFromHwnd, UiaRaiseAutomationEvent, UiaRaiseAutomationPropertyChangedEvent,
+    UiaRaiseStructureChangedEvent, UiaRect, UiaReturnRawElementProvider, UiaRootObjectId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{
@@ -116,8 +124,13 @@ impl ProviderState {
             .ok_or_else(element_not_available_error)
     }
 
-    fn replace(&self, snapshot: NativeSnapshot) {
-        *lock_recover(&self.snapshot) = Some(Arc::new(snapshot));
+    fn replace(
+        &self,
+        snapshot: NativeSnapshot,
+    ) -> (Option<Arc<NativeSnapshot>>, Arc<NativeSnapshot>) {
+        let snapshot = Arc::new(snapshot);
+        let previous = lock_recover(&self.snapshot).replace(snapshot.clone());
+        (previous, snapshot)
     }
 
     fn queue(&self, action: SettingsAutomationAction) -> Result<()> {
@@ -165,8 +178,92 @@ struct NativeNode {
     bounds: Option<UiaRect>,
 }
 
+#[derive(Clone)]
 struct NativeSnapshot {
     nodes: Box<[NativeNode]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChangedProperty {
+    Name,
+    HelpText,
+    Value,
+    Enabled,
+    Focused,
+    Offscreen,
+    ControlType,
+    BoundingRectangle,
+    InvokeAvailable,
+    ToggleAvailable,
+    RangeValueAvailable,
+    ToggleState,
+    RangeValue,
+    RangeMinimum,
+    RangeMaximum,
+    RangeSmallChange,
+    RangeLargeChange,
+    RangeReadOnly,
+}
+
+impl ChangedProperty {
+    const fn uia_id(self) -> UIA_PROPERTY_ID {
+        match self {
+            Self::Name => UIA_NamePropertyId,
+            Self::HelpText => UIA_HelpTextPropertyId,
+            Self::Value => UIA_ValueValuePropertyId,
+            Self::Enabled => UIA_IsEnabledPropertyId,
+            Self::Focused => UIA_HasKeyboardFocusPropertyId,
+            Self::Offscreen => UIA_IsOffscreenPropertyId,
+            Self::ControlType => UIA_ControlTypePropertyId,
+            Self::BoundingRectangle => UIA_BoundingRectanglePropertyId,
+            Self::InvokeAvailable => UIA_IsInvokePatternAvailablePropertyId,
+            Self::ToggleAvailable => UIA_IsTogglePatternAvailablePropertyId,
+            Self::RangeValueAvailable => UIA_IsRangeValuePatternAvailablePropertyId,
+            Self::ToggleState => UIA_ToggleToggleStatePropertyId,
+            Self::RangeValue => UIA_RangeValueValuePropertyId,
+            Self::RangeMinimum => UIA_RangeValueMinimumPropertyId,
+            Self::RangeMaximum => UIA_RangeValueMaximumPropertyId,
+            Self::RangeSmallChange => UIA_RangeValueSmallChangePropertyId,
+            Self::RangeLargeChange => UIA_RangeValueLargeChangePropertyId,
+            Self::RangeReadOnly => UIA_RangeValueIsReadOnlyPropertyId,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum PropertyValue {
+    Text(String),
+    Bool(bool),
+    Integer(i32),
+    Number(f64),
+    Rectangle(UiaRect),
+}
+
+impl PropertyValue {
+    fn into_variant(self) -> Result<VARIANT> {
+        match self {
+            Self::Text(value) => Ok(VARIANT::from(value.as_str())),
+            Self::Bool(value) => Ok(VARIANT::from(value)),
+            Self::Integer(value) => Ok(VARIANT::from(value)),
+            Self::Number(value) => Ok(VARIANT::from(value)),
+            Self::Rectangle(value) => rectangle_variant(value),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PropertyChange {
+    node: SettingsAccessibilityNodeId,
+    property: ChangedProperty,
+    old_value: PropertyValue,
+    new_value: PropertyValue,
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct SnapshotDiff {
+    invalidated_parents: Vec<SettingsAccessibilityNodeId>,
+    properties: Vec<PropertyChange>,
+    focused: Option<SettingsAccessibilityNodeId>,
 }
 
 impl NativeSnapshot {
@@ -244,6 +341,237 @@ impl NativeSnapshot {
     }
 }
 
+fn diff_snapshots(previous: &NativeSnapshot, current: &NativeSnapshot) -> SnapshotDiff {
+    let previous_children = children_by_parent(previous);
+    let current_children = children_by_parent(current);
+    let invalidated_parents = current
+        .nodes
+        .iter()
+        .filter(|node| previous.node(node.id).is_some())
+        .filter_map(|node| {
+            let previous = previous_children
+                .get(&node.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let current = current_children
+                .get(&node.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            (previous != current).then_some(node.id)
+        })
+        .collect();
+
+    let mut properties = Vec::new();
+    for current_node in &current.nodes {
+        let Some(previous_node) = previous.node(current_node.id) else {
+            continue;
+        };
+        diff_node_properties(previous_node, current_node, &mut properties);
+    }
+
+    let focused = (previous.focused() != current.focused())
+        .then(|| current.focused())
+        .flatten();
+    SnapshotDiff {
+        invalidated_parents,
+        properties,
+        focused,
+    }
+}
+
+fn children_by_parent(
+    snapshot: &NativeSnapshot,
+) -> HashMap<SettingsAccessibilityNodeId, Vec<SettingsAccessibilityNodeId>> {
+    let mut children = HashMap::<_, Vec<_>>::new();
+    for node in &snapshot.nodes {
+        if let Some(parent) = node.parent {
+            children.entry(parent).or_default().push(node.id);
+        }
+    }
+    children
+}
+
+fn diff_node_properties(
+    previous: &NativeNode,
+    current: &NativeNode,
+    changes: &mut Vec<PropertyChange>,
+) {
+    let node = current.id;
+    push_text_property_change(
+        changes,
+        node,
+        ChangedProperty::Name,
+        &previous.name,
+        &current.name,
+    );
+    push_text_property_change(
+        changes,
+        node,
+        ChangedProperty::HelpText,
+        previous.help_text.as_deref().unwrap_or_default(),
+        current.help_text.as_deref().unwrap_or_default(),
+    );
+    push_text_property_change(
+        changes,
+        node,
+        ChangedProperty::Value,
+        previous.value.as_deref().unwrap_or_default(),
+        current.value.as_deref().unwrap_or_default(),
+    );
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::Enabled,
+        PropertyValue::Bool(previous.enabled),
+        PropertyValue::Bool(current.enabled),
+    );
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::Focused,
+        PropertyValue::Bool(previous.focused),
+        PropertyValue::Bool(current.focused),
+    );
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::Offscreen,
+        PropertyValue::Bool(previous.offscreen),
+        PropertyValue::Bool(current.offscreen),
+    );
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::ControlType,
+        PropertyValue::Integer(control_type_id(previous.control_type)),
+        PropertyValue::Integer(control_type_id(current.control_type)),
+    );
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::BoundingRectangle,
+        PropertyValue::Rectangle(previous.bounds.unwrap_or_default()),
+        PropertyValue::Rectangle(current.bounds.unwrap_or_default()),
+    );
+
+    let previous_invoke = has_invoke(previous);
+    let current_invoke = has_invoke(current);
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::InvokeAvailable,
+        PropertyValue::Bool(previous_invoke),
+        PropertyValue::Bool(current_invoke),
+    );
+
+    let previous_toggle = toggle_pattern(previous);
+    let current_toggle = toggle_pattern(current);
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::ToggleAvailable,
+        PropertyValue::Bool(previous_toggle.is_some()),
+        PropertyValue::Bool(current_toggle.is_some()),
+    );
+    if let (Some(previous), Some(current)) = (previous_toggle, current_toggle) {
+        push_property_change(
+            changes,
+            node,
+            ChangedProperty::ToggleState,
+            PropertyValue::Integer(toggle_state_value(previous)),
+            PropertyValue::Integer(toggle_state_value(current)),
+        );
+    }
+
+    let previous_range = range_pattern(previous);
+    let current_range = range_pattern(current);
+    push_property_change(
+        changes,
+        node,
+        ChangedProperty::RangeValueAvailable,
+        PropertyValue::Bool(previous_range.is_some()),
+        PropertyValue::Bool(current_range.is_some()),
+    );
+    if let (Some(previous), Some(current)) = (previous_range, current_range) {
+        for (property, previous, current) in [
+            (
+                ChangedProperty::RangeValue,
+                PropertyValue::Number(previous.value),
+                PropertyValue::Number(current.value),
+            ),
+            (
+                ChangedProperty::RangeMinimum,
+                PropertyValue::Number(previous.minimum),
+                PropertyValue::Number(current.minimum),
+            ),
+            (
+                ChangedProperty::RangeMaximum,
+                PropertyValue::Number(previous.maximum),
+                PropertyValue::Number(current.maximum),
+            ),
+            (
+                ChangedProperty::RangeSmallChange,
+                PropertyValue::Number(previous.small_change),
+                PropertyValue::Number(current.small_change),
+            ),
+            (
+                ChangedProperty::RangeLargeChange,
+                PropertyValue::Number(previous.large_change),
+                PropertyValue::Number(current.large_change),
+            ),
+            (
+                ChangedProperty::RangeReadOnly,
+                PropertyValue::Bool(previous.read_only),
+                PropertyValue::Bool(current.read_only),
+            ),
+        ] {
+            push_property_change(changes, node, property, previous, current);
+        }
+    }
+}
+
+fn push_property_change(
+    changes: &mut Vec<PropertyChange>,
+    node: SettingsAccessibilityNodeId,
+    property: ChangedProperty,
+    old_value: PropertyValue,
+    new_value: PropertyValue,
+) {
+    if old_value != new_value {
+        changes.push(PropertyChange {
+            node,
+            property,
+            old_value,
+            new_value,
+        });
+    }
+}
+
+fn push_text_property_change(
+    changes: &mut Vec<PropertyChange>,
+    node: SettingsAccessibilityNodeId,
+    property: ChangedProperty,
+    old_value: &str,
+    new_value: &str,
+) {
+    if old_value != new_value {
+        changes.push(PropertyChange {
+            node,
+            property,
+            old_value: PropertyValue::Text(old_value.to_owned()),
+            new_value: PropertyValue::Text(new_value.to_owned()),
+        });
+    }
+}
+
+const fn toggle_state_value(checked: bool) -> i32 {
+    if checked {
+        ToggleState_On.0
+    } else {
+        ToggleState_Off.0
+    }
+}
+
 /// Replaces the Settings accessibility tree with one complete immutable frame.
 pub(super) fn publish(
     hwnd: HWND,
@@ -268,8 +596,83 @@ pub(super) fn publish(
             .clone()
     };
     state.active.store(true, Ordering::Release);
-    state.replace(native);
+    let (previous, current) = state.replace(native);
+    if let Some(previous) = previous {
+        // SAFETY: This documented process-wide predicate performs no callback
+        // and is evaluated on the HWND owner thread immediately after a full
+        // immutable frame has been published.
+        if unsafe { UiaClientsAreListening() }.as_bool() {
+            let changes = diff_snapshots(&previous, &current);
+            raise_snapshot_events(&state, changes);
+        }
+    }
     Ok(())
+}
+
+fn raise_snapshot_events(state: &Arc<ProviderState>, changes: SnapshotDiff) {
+    if !state.active.load(Ordering::Acquire) {
+        return;
+    }
+
+    // Structure comes first so a client can refresh its tree before observing
+    // property or focus changes on elements in that tree. ChildrenInvalidated
+    // intentionally carries no AppendRuntimeId pseudo-ID.
+    for parent in changes.invalidated_parents {
+        let Some(provider) = event_provider(state, parent) else {
+            continue;
+        };
+        // SAFETY: The provider is alive in the newly published snapshot. The
+        // documented ChildrenInvalidated form requires a null runtime ID.
+        let _ = unsafe {
+            UiaRaiseStructureChangedEvent(
+                &provider,
+                StructureChangeType_ChildrenInvalidated,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+    }
+
+    for change in changes.properties {
+        let Some(provider) = event_provider(state, change.node) else {
+            continue;
+        };
+        let (Ok(old_value), Ok(new_value)) = (
+            change.old_value.into_variant(),
+            change.new_value.into_variant(),
+        ) else {
+            continue;
+        };
+        // SAFETY: Both VARIANTs own valid values for this documented UIA
+        // property and remain alive for the synchronous call.
+        let _ = unsafe {
+            UiaRaiseAutomationPropertyChangedEvent(
+                &provider,
+                change.property.uia_id(),
+                &old_value,
+                &new_value,
+            )
+        };
+    }
+
+    if let Some(focused) = changes.focused
+        && let Some(provider) = event_provider(state, focused)
+    {
+        // SAFETY: The provider represents the focused node in the currently
+        // published snapshot and remains alive for this synchronous call.
+        let _ = unsafe { UiaRaiseAutomationEvent(&provider, UIA_AutomationFocusChangedEventId) };
+    }
+}
+
+fn event_provider(
+    state: &Arc<ProviderState>,
+    id: SettingsAccessibilityNodeId,
+) -> Option<IRawElementProviderSimple> {
+    let snapshot = state.current().ok()?;
+    snapshot.node(id)?;
+    let raw: ISettingsRawElementProviderSimple =
+        SettingsElementProvider::new(state.clone(), id).into();
+    raw.cast().ok()
 }
 
 /// Removes a destroyed Settings HWND from discovery and invalidates providers
@@ -809,6 +1212,44 @@ fn contains(bounds: UiaRect, x: f64, y: f64) -> bool {
         && y < bounds.top + bounds.height
 }
 
+fn rectangle_variant(rectangle: UiaRect) -> Result<VARIANT> {
+    let values = [
+        rectangle.left,
+        rectangle.top,
+        rectangle.width,
+        rectangle.height,
+    ];
+    // SAFETY: The SAFEARRAY has exactly four VT_R8 slots. Every index written
+    // is in range, and failure destroys the still-owned array. On success the
+    // returned VARIANT owns the array and VariantClear releases it on drop.
+    unsafe {
+        let array = SafeArrayCreateVector(VT_R8, 0, values.len() as u32);
+        if array.is_null() {
+            return Err(Error::from_thread());
+        }
+        for (index, value) in values.iter().enumerate() {
+            let index = index as i32;
+            if let Err(error) =
+                SafeArrayPutElement(array, &index, (value as *const f64).cast::<c_void>())
+            {
+                let _ = SafeArrayDestroy(array);
+                return Err(error);
+            }
+        }
+        Ok(VARIANT {
+            Anonymous: VARIANT_0 {
+                Anonymous: ManuallyDrop::new(VARIANT_0_0 {
+                    vt: VT_ARRAY | VT_R8,
+                    wReserved1: 0,
+                    wReserved2: 0,
+                    wReserved3: 0,
+                    Anonymous: VARIANT_0_0_0 { parray: array },
+                }),
+            },
+        })
+    }
+}
+
 fn runtime_id(id: SettingsAccessibilityNodeId) -> Result<*mut SAFEARRAY> {
     let components = runtime_id_components(id);
     // SAFETY: The array has exactly `components.len()` VT_I4 slots. Every
@@ -949,6 +1390,124 @@ mod tests {
         let layout = shell_renderer::layout_settings_scene(&scene, surface);
         let snapshot = settings_accessibility_snapshot(&scene, &layout).expect("valid fixture");
         NativeSnapshot::from_renderer(&snapshot, POINT { x: 100, y: 200 }, Dpi::from_raw(96))
+    }
+
+    fn node_mut(snapshot: &mut NativeSnapshot, id: SettingsAccessibilityNodeId) -> &mut NativeNode {
+        snapshot
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == id)
+            .expect("fixture node")
+    }
+
+    #[test]
+    fn identical_published_snapshots_do_not_emit_changes() {
+        let snapshot = fixture_snapshot();
+
+        assert_eq!(
+            diff_snapshots(&snapshot, &snapshot),
+            SnapshotDiff::default()
+        );
+    }
+
+    #[test]
+    fn snapshot_diff_reports_property_and_focus_changes_without_tree_churn() {
+        let previous = fixture_snapshot();
+        let mut current = previous.clone();
+        let section = SettingsSectionId::new(1);
+        let slider = SettingsAccessibilityNodeId::Control {
+            section,
+            control: SettingsControlId::new(1),
+        };
+        let toggle = SettingsAccessibilityNodeId::Control {
+            section,
+            control: SettingsControlId::new(2),
+        };
+
+        node_mut(&mut current, toggle).focused = false;
+        let slider_node = node_mut(&mut current, slider);
+        slider_node.focused = true;
+        slider_node.value = Some("64".to_owned());
+        let range = slider_node
+            .patterns
+            .iter_mut()
+            .find(|pattern| matches!(pattern, SettingsAccessibilityPattern::RangeValue { .. }))
+            .expect("slider range pattern");
+        *range = SettingsAccessibilityPattern::RangeValue {
+            value: 64.0,
+            minimum: 0.0,
+            maximum: 100.0,
+            small_change: 1.0,
+            large_change: 10.0,
+            read_only: false,
+        };
+
+        let changes = diff_snapshots(&previous, &current);
+
+        assert!(changes.invalidated_parents.is_empty());
+        assert_eq!(changes.focused, Some(slider));
+        assert!(changes.properties.iter().any(|change| {
+            change.node == slider && change.property == ChangedProperty::RangeValue
+        }));
+        assert!(changes.properties.iter().any(|change| {
+            change.node == slider && change.property == ChangedProperty::Focused
+        }));
+        assert!(changes.properties.iter().any(|change| {
+            change.node == toggle && change.property == ChangedProperty::Focused
+        }));
+    }
+
+    #[test]
+    fn snapshot_diff_invalidates_the_surviving_parent_for_removed_children() {
+        let previous = fixture_snapshot();
+        let mut current = previous.clone();
+        let removed = SettingsAccessibilityNodeId::Control {
+            section: SettingsSectionId::new(1),
+            control: SettingsControlId::new(2),
+        };
+        current.nodes = current
+            .nodes
+            .iter()
+            .filter(|node| node.id != removed)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let changes = diff_snapshots(&previous, &current);
+
+        assert_eq!(
+            changes.invalidated_parents,
+            vec![SettingsAccessibilityNodeId::Content]
+        );
+        assert_eq!(changes.focused, None);
+    }
+
+    #[test]
+    fn deactivated_provider_state_rejects_retained_elements() {
+        let state = ProviderState::new(HWND::default());
+        let _ = state.replace(fixture_snapshot());
+
+        state.active.store(false, Ordering::Release);
+        *lock_recover(&state.snapshot) = None;
+
+        let error = match state.current() {
+            Ok(_) => panic!("destroyed HWND must invalidate UIA"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32));
+    }
+
+    #[test]
+    fn bounding_rectangle_property_uses_a_four_double_variant() {
+        let variant = rectangle_variant(UiaRect {
+            left: 10.0,
+            top: 20.0,
+            width: 30.0,
+            height: 40.0,
+        })
+        .expect("bounding rectangle variant");
+
+        assert_eq!(variant.vt(), VT_ARRAY | VT_R8);
     }
 
     #[test]

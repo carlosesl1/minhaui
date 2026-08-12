@@ -25,8 +25,8 @@ use crate::win32_preview_render::{PreviewPresentation, PreviewRenderWindows};
 use crate::win32_sample_state::density_for_width;
 use crate::win32_shell_observation::ShellObservation;
 use crate::win32_surface_runtime::{
-    NativeSurfaceOptions, SurfaceBuildPlan, SurfaceFrame, SurfaceTarget, SurfaceUpdate,
-    Win32NativeSurfaceRuntime, present_app_menu_frame, runtime_device_kind,
+    LazySurfaceVisibility, NativeSurfaceOptions, SurfaceBuildPlan, SurfaceFrame, SurfaceTarget,
+    SurfaceUpdate, Win32NativeSurfaceRuntime, present_app_menu_frame, runtime_device_kind,
 };
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{ExternalMenuPopoverLayerGuard, OwnedWindow};
@@ -2420,12 +2420,19 @@ impl RuntimeSurfaces {
             self.preview_entrance,
             now,
         );
+        let visibility = LazySurfaceVisibility {
+            popover: popover_scene.is_some()
+                || quick_settings_scene.is_some()
+                || context_menu_scene.is_some(),
+            app_menu: app_menu_scene.is_some(),
+            preview: preview_scene.is_some(),
+            settings: windows.settings.is_visible(),
+        };
         let plan = surface_build_plan(targets, scenes, composition);
-        let settings_was_visible = windows.settings.is_visible();
-        let settings_update = self
+        let visible_surface_update = self
             .surface_runtime
-            .rebuild_preserving_visible_settings(plan, settings_was_visible)?;
-        finish_surface_retry(settings_update)?;
+            .rebuild_preserving_visible_surfaces(plan, visibility)?;
+        finish_surface_retry(visible_surface_update)?;
         if self.dock_animation_active {
             self.ensure_dock_animation_clock(windows.dock)?;
         }

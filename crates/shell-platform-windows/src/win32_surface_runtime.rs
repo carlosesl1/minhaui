@@ -92,6 +92,26 @@ pub(super) struct SurfaceBuildPlan<'scene> {
     pub(super) preview_opacity: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct LazySurfaceVisibility {
+    pub(super) popover: bool,
+    pub(super) app_menu: bool,
+    pub(super) preview: bool,
+    pub(super) settings: bool,
+}
+
+impl LazySurfaceVisibility {
+    const fn is_visible(self, role: ShowcaseRole) -> bool {
+        match role {
+            ShowcaseRole::Topbar | ShowcaseRole::Dock => true,
+            ShowcaseRole::Popover => self.popover,
+            ShowcaseRole::AppMenu => self.app_menu,
+            ShowcaseRole::Preview => self.preview,
+            ShowcaseRole::Settings => self.settings,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SurfaceSizeChange {
     Resize,
@@ -226,11 +246,15 @@ impl SurfaceAdapter for DirectCompositionAdapter {
 struct SurfaceSet<S> {
     topbar: S,
     dock: S,
-    popover: S,
-    app_menu: S,
-    preview: S,
+    popover: Option<S>,
+    app_menu: Option<S>,
+    preview: Option<S>,
     settings: Option<S>,
+    popover_target: SurfaceTarget,
+    app_menu_target: SurfaceTarget,
+    preview_target: SurfaceTarget,
     settings_target: SurfaceTarget,
+    preview_opacity: f32,
 }
 
 impl<S> SurfaceSet<S> {
@@ -238,9 +262,9 @@ impl<S> SurfaceSet<S> {
         match role {
             ShowcaseRole::Topbar => Some(&self.topbar),
             ShowcaseRole::Dock => Some(&self.dock),
-            ShowcaseRole::Popover => Some(&self.popover),
-            ShowcaseRole::AppMenu => Some(&self.app_menu),
-            ShowcaseRole::Preview => Some(&self.preview),
+            ShowcaseRole::Popover => self.popover.as_ref(),
+            ShowcaseRole::AppMenu => self.app_menu.as_ref(),
+            ShowcaseRole::Preview => self.preview.as_ref(),
             ShowcaseRole::Settings => self.settings.as_ref(),
         }
     }
@@ -249,10 +273,44 @@ impl<S> SurfaceSet<S> {
         match role {
             ShowcaseRole::Topbar => Some(&mut self.topbar),
             ShowcaseRole::Dock => Some(&mut self.dock),
-            ShowcaseRole::Popover => Some(&mut self.popover),
-            ShowcaseRole::AppMenu => Some(&mut self.app_menu),
-            ShowcaseRole::Preview => Some(&mut self.preview),
+            ShowcaseRole::Popover => self.popover.as_mut(),
+            ShowcaseRole::AppMenu => self.app_menu.as_mut(),
+            ShowcaseRole::Preview => self.preview.as_mut(),
             ShowcaseRole::Settings => self.settings.as_mut(),
+        }
+    }
+
+    const fn target(&self, role: ShowcaseRole) -> Option<SurfaceTarget> {
+        match role {
+            ShowcaseRole::Topbar | ShowcaseRole::Dock => None,
+            ShowcaseRole::Popover => Some(self.popover_target),
+            ShowcaseRole::AppMenu => Some(self.app_menu_target),
+            ShowcaseRole::Preview => Some(self.preview_target),
+            ShowcaseRole::Settings => Some(self.settings_target),
+        }
+    }
+
+    fn install_lazy(&mut self, role: ShowcaseRole, target: SurfaceTarget, surface: S) {
+        match role {
+            ShowcaseRole::Topbar | ShowcaseRole::Dock => {
+                unreachable!("eager surfaces cannot be installed through the lazy path")
+            }
+            ShowcaseRole::Popover => {
+                self.popover = Some(surface);
+                self.popover_target = target;
+            }
+            ShowcaseRole::AppMenu => {
+                self.app_menu = Some(surface);
+                self.app_menu_target = target;
+            }
+            ShowcaseRole::Preview => {
+                self.preview = Some(surface);
+                self.preview_target = target;
+            }
+            ShowcaseRole::Settings => {
+                self.settings = Some(surface);
+                self.settings_target = target;
+            }
         }
     }
 }
@@ -352,9 +410,9 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> windows::core::Result<SurfaceUpdate> {
-        if role == ShowcaseRole::Settings && !self.has_surface(role) {
-            let target = self.settings_target()?;
-            return self.create_settings_surface(SurfaceFrame { target, scenes });
+        if is_lazy_role(role) && !self.has_surface(role) {
+            let target = self.lazy_target(role)?;
+            return self.create_lazy_surface(SurfaceFrame { target, scenes });
         }
         let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
         let renderer = resources.renderer.as_ref().ok_or_else(runtime_not_ready)?;
@@ -369,10 +427,10 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         metrics: SurfaceMetrics,
         scenes: ShellScenes<'_>,
     ) -> windows::core::Result<SurfaceUpdate> {
-        if role == ShowcaseRole::Settings && !self.has_surface(role) {
-            let mut target = self.settings_target()?;
+        if is_lazy_role(role) && !self.has_surface(role) {
+            let mut target = self.lazy_target(role)?;
             target.metrics = metrics;
-            return self.create_settings_surface(SurfaceFrame { target, scenes });
+            return self.create_lazy_surface(SurfaceFrame { target, scenes });
         }
         let resources = self.resources.as_mut().ok_or_else(runtime_not_ready)?;
         let SurfaceResources { surfaces, renderer } = resources;
@@ -383,12 +441,15 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
     }
 
     pub(super) fn set_opacity(
-        &self,
+        &mut self,
         role: ShowcaseRole,
         opacity: f32,
     ) -> windows::core::Result<SurfaceUpdate> {
-        let resources = self.resources.as_ref().ok_or_else(runtime_not_ready)?;
-        let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
+        let resources = self.resources.as_mut().ok_or_else(runtime_not_ready)?;
+        let surfaces = resources.surfaces.as_mut().ok_or_else(runtime_not_ready)?;
+        if role == ShowcaseRole::Preview {
+            surfaces.preview_opacity = normalized_opacity(opacity);
+        }
         let Some(surface) = surfaces.surface(role) else {
             return Ok(SurfaceUpdate::FrameSkipped);
         };
@@ -439,18 +500,24 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         self.build(plan)
     }
 
-    pub(super) fn rebuild_preserving_visible_settings(
+    pub(super) fn rebuild_preserving_visible_surfaces(
         &mut self,
         plan: SurfaceBuildPlan<'_>,
-        settings_visible: bool,
+        visibility: LazySurfaceVisibility,
     ) -> windows::core::Result<SurfaceUpdate> {
-        let settings_frame = plan.settings;
+        let lazy_frames = [plan.popover, plan.app_menu, plan.preview, plan.settings];
         self.rebuild(plan)?;
-        if settings_visible {
-            present_frame(self, settings_frame, SurfaceSizeChange::Resize)
-        } else {
-            Ok(SurfaceUpdate::FrameSkipped)
+        let mut update = SurfaceUpdate::FrameSkipped;
+        for frame in lazy_frames {
+            if !visibility.is_visible(frame.target.role) {
+                continue;
+            }
+            update = present_frame(self, frame, SurfaceSizeChange::Resize)?;
+            if update == SurfaceUpdate::RebuildAllRequired {
+                return Ok(update);
+            }
         }
+        Ok(update)
     }
 
     fn build_once(
@@ -460,9 +527,6 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         let renderer = A::create_renderer(options)?;
         let topbar = Self::create_surface(&renderer, plan.topbar)?;
         let dock = Self::create_surface(&renderer, plan.dock)?;
-        let popover = Self::create_surface(&renderer, plan.popover)?;
-        let app_menu = Self::create_surface(&renderer, plan.app_menu)?;
-        let preview = Self::create_surface(&renderer, plan.preview)?;
         A::set_visibility_state(
             &dock,
             plan.dock_visibility_offset_y,
@@ -471,15 +535,18 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         if let Some(animation) = plan.dock_visibility_animation {
             A::animate_visibility(&dock, animation)?;
         }
-        A::set_opacity(&preview, plan.preview_opacity)?;
         let surfaces = SurfaceSet {
             topbar,
             dock,
-            popover,
-            app_menu,
-            preview,
+            popover: None,
+            app_menu: None,
+            preview: None,
             settings: None,
+            popover_target: plan.popover.target,
+            app_menu_target: plan.app_menu.target,
+            preview_target: plan.preview.target,
             settings_target: plan.settings.target,
+            preview_opacity: normalized_opacity(plan.preview_opacity),
         };
         Ok(SurfaceResources::new(renderer, surfaces))
     }
@@ -519,11 +586,11 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         )
     }
 
-    fn settings_target(&self) -> windows::core::Result<SurfaceTarget> {
+    fn lazy_target(&self, role: ShowcaseRole) -> windows::core::Result<SurfaceTarget> {
         self.resources
             .as_ref()
             .and_then(|resources| resources.surfaces.as_ref())
-            .map(|surfaces| surfaces.settings_target)
+            .and_then(|surfaces| surfaces.target(role))
             .ok_or_else(runtime_not_ready)
     }
 
@@ -534,36 +601,47 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             .is_some_and(|surfaces| surfaces.surface(role).is_some())
     }
 
-    fn create_settings_surface(
+    fn create_lazy_surface(
         &mut self,
         frame: SurfaceFrame<'_>,
     ) -> windows::core::Result<SurfaceUpdate> {
-        if frame.target.role != ShowcaseRole::Settings {
+        let role = frame.target.role;
+        if !is_lazy_role(role) {
             return Err(windows::core::Error::new(
                 E_INVALIDARG,
-                "lazy surface creation is reserved for Settings",
+                "lazy surface creation is reserved for transient surfaces and Settings",
             ));
         }
         let resources = self.resources.as_mut().ok_or_else(runtime_not_ready)?;
         let SurfaceResources { surfaces, renderer } = resources;
         let renderer = renderer.as_ref().ok_or_else(runtime_not_ready)?;
         let surfaces = surfaces.as_mut().ok_or_else(runtime_not_ready)?;
-        if surfaces.settings.is_some() {
+        if surfaces.surface(role).is_some() {
             return Err(windows::core::Error::new(
                 E_UNEXPECTED,
-                "Settings surface is already materialized",
+                "lazy surface is already materialized",
             ));
         }
         match Self::create_surface(renderer, frame) {
             Ok(surface) => match normalize_present_result(A::redraw_surface(
                 renderer,
                 &surface,
-                ShowcaseRole::Settings,
+                role,
                 frame.scenes,
             ))? {
                 update @ (SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped) => {
-                    surfaces.settings = Some(surface);
-                    surfaces.settings_target = frame.target;
+                    if role == ShowcaseRole::Preview {
+                        match normalize_unit_result(A::set_opacity(
+                            &surface,
+                            surfaces.preview_opacity,
+                        ))? {
+                            SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => {}
+                            SurfaceUpdate::RebuildAllRequired => {
+                                return Ok(SurfaceUpdate::RebuildAllRequired);
+                            }
+                        }
+                    }
+                    surfaces.install_lazy(role, frame.target, surface);
                     Ok(update)
                 }
                 SurfaceUpdate::RebuildAllRequired => Ok(SurfaceUpdate::RebuildAllRequired),
@@ -589,8 +667,8 @@ pub(super) fn present_frame<A: SurfaceAdapter>(
 ) -> windows::core::Result<SurfaceUpdate> {
     let role = frame.target.role;
     let current = runtime.metrics(role);
-    if role == ShowcaseRole::Settings && current.is_none() && runtime.device_kind().is_some() {
-        return runtime.create_settings_surface(frame);
+    if is_lazy_role(role) && current.is_none() && runtime.device_kind().is_some() {
+        return runtime.create_lazy_surface(frame);
     }
     match surface_render_decision(current, frame.target.metrics) {
         SurfaceRenderDecision::RebuildAll => Ok(SurfaceUpdate::RebuildAllRequired),
@@ -617,6 +695,24 @@ fn surface_not_ready() -> windows::core::Error {
     windows::core::Error::new(E_UNEXPECTED, "requested native surface is not ready")
 }
 
+const fn is_lazy_role(role: ShowcaseRole) -> bool {
+    matches!(
+        role,
+        ShowcaseRole::Popover
+            | ShowcaseRole::AppMenu
+            | ShowcaseRole::Preview
+            | ShowcaseRole::Settings
+    )
+}
+
+fn normalized_opacity(opacity: f32) -> f32 {
+    if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 pub(super) type Win32NativeSurfaceRuntime = NativeSurfaceRuntime<DirectCompositionAdapter>;
 
 #[cfg(test)]
@@ -636,10 +732,10 @@ mod tests {
     use windows::core::HRESULT;
 
     use super::{
-        NativeSurfaceOptions, NativeSurfaceRuntime, SurfaceAdapter, SurfaceBuildPlan, SurfaceFrame,
-        SurfaceRenderDecision, SurfaceSizeChange, SurfaceTarget, SurfaceUpdate,
-        normalize_present_result, present_app_menu_frame, present_frame, runtime_device_kind,
-        surface_render_decision,
+        LazySurfaceVisibility, NativeSurfaceOptions, NativeSurfaceRuntime, SurfaceAdapter,
+        SurfaceBuildPlan, SurfaceFrame, SurfaceRenderDecision, SurfaceSizeChange, SurfaceTarget,
+        SurfaceUpdate, is_lazy_role, normalize_present_result, present_app_menu_frame,
+        present_frame, runtime_device_kind, surface_render_decision,
     };
 
     #[test]
@@ -1011,6 +1107,10 @@ mod tests {
         }
     }
 
+    fn hwnd_for_test(value: usize) -> HWND {
+        HWND(value as *mut std::ffi::c_void)
+    }
+
     fn plan() -> SurfaceBuildPlan<'static> {
         SurfaceBuildPlan {
             topbar: frame(ShowcaseRole::Topbar),
@@ -1140,7 +1240,7 @@ mod tests {
             reset([]);
             let mut runtime = runtime();
             runtime.build(plan()).unwrap();
-            if role == ShowcaseRole::Settings {
+            if is_lazy_role(role) {
                 runtime.redraw(role, empty_scenes()).unwrap();
             }
             recording().events.clear();
@@ -1227,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn app_menu_open_resizes_surface_before_present() {
+    fn app_menu_open_materializes_the_lazy_surface_at_its_current_size() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1251,8 +1351,8 @@ mod tests {
         assert_eq!(
             events(),
             [
-                Event::MetricsRead(1, ShowcaseRole::AppMenu),
-                Event::Resized(1, ShowcaseRole::AppMenu, ShowcaseRole::AppMenu),
+                Event::Created(1, ShowcaseRole::AppMenu),
+                Event::Redrawn(1, ShowcaseRole::AppMenu, ShowcaseRole::AppMenu),
                 Event::MetricsRead(1, ShowcaseRole::AppMenu),
             ]
         );
@@ -1392,6 +1492,54 @@ mod tests {
     }
 
     #[test]
+    fn first_direct_transient_resize_materializes_with_requested_metrics_and_target_hwnd() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        for (index, role) in [
+            ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
+            ShowcaseRole::Preview,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            reset([]);
+            let hwnd = 51 + index;
+            let mut initial_plan = plan();
+            match role {
+                ShowcaseRole::Popover => initial_plan.popover.target.hwnd = hwnd_for_test(hwnd),
+                ShowcaseRole::AppMenu => initial_plan.app_menu.target.hwnd = hwnd_for_test(hwnd),
+                ShowcaseRole::Preview => initial_plan.preview.target.hwnd = hwnd_for_test(hwnd),
+                ShowcaseRole::Topbar | ShowcaseRole::Dock | ShowcaseRole::Settings => {
+                    unreachable!()
+                }
+            }
+            let mut runtime = runtime();
+            runtime.build(initial_plan).unwrap();
+            recording().events.clear();
+            recording().create_records.clear();
+            let requested = SurfaceMetrics::new(640, 360, Dpi::from_raw(144));
+
+            assert_eq!(
+                runtime.resize(role, requested, empty_scenes()).unwrap(),
+                SurfaceUpdate::Presented
+            );
+            assert_eq!(runtime.metrics(role), Some(requested));
+            assert_eq!(
+                recording().create_records,
+                [CreateRecord {
+                    hwnd,
+                    role,
+                    metrics: requested.size(),
+                    preview_item: None,
+                }]
+            );
+        }
+    }
+
+    #[test]
     fn recoverable_lazy_settings_initial_present_requests_full_rebuild_without_installing_it() {
         let _guard = TEST_LOCK
             .lock()
@@ -1490,7 +1638,7 @@ mod tests {
     }
 
     #[test]
-    fn popover_present_frame_redraws_or_resizes_shared_context_surface() {
+    fn popover_present_frame_materializes_then_resizes_shared_context_surface() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1522,14 +1670,28 @@ mod tests {
             ShowcaseRole::Popover,
             ShowcaseRole::Popover,
         )));
-        assert!(!events().iter().any(|event| matches!(
-            event,
-            Event::Created(_, ShowcaseRole::Popover)
-                | Event::SurfaceDropped(_, ShowcaseRole::Popover)
-        )));
+        assert_eq!(
+            events()
+                .iter()
+                .filter(|event| matches!(event, Event::Created(_, ShowcaseRole::Popover)))
+                .count(),
+            1
+        );
+        assert!(
+            !events()
+                .iter()
+                .any(|event| matches!(event, Event::SurfaceDropped(_, ShowcaseRole::Popover)))
+        );
         assert_eq!(
             recording().scene_records,
             [
+                (
+                    ShowcaseRole::Popover,
+                    ScenePresence {
+                        context_menu: true,
+                        ..ScenePresence::default()
+                    }
+                ),
                 (
                     ShowcaseRole::Popover,
                     ScenePresence {
@@ -1586,8 +1748,9 @@ mod tests {
         assert_eq!(
             events(),
             [
-                Event::MetricsRead(1, ShowcaseRole::Preview),
+                Event::Created(1, ShowcaseRole::Preview),
                 Event::Redrawn(1, ShowcaseRole::Preview, ShowcaseRole::Preview),
+                Event::SurfaceDropped(1, ShowcaseRole::Preview),
             ]
         );
 
@@ -1601,8 +1764,9 @@ mod tests {
         assert_eq!(
             events(),
             [
-                Event::MetricsRead(1, ShowcaseRole::Preview),
-                Event::Resized(1, ShowcaseRole::Preview, ShowcaseRole::Preview),
+                Event::Created(1, ShowcaseRole::Preview),
+                Event::Redrawn(1, ShowcaseRole::Preview, ShowcaseRole::Preview),
+                Event::Opacity(1, ShowcaseRole::Preview, 1.0),
             ]
         );
     }
@@ -1711,6 +1875,12 @@ mod tests {
         reset([]);
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
+        runtime
+            .redraw(ShowcaseRole::Preview, empty_scenes())
+            .unwrap();
+        runtime
+            .redraw(ShowcaseRole::Popover, empty_scenes())
+            .unwrap();
         recording().events.clear();
         let visibility = SurfaceVisibilityAnimation {
             start_offset_y: 8.0,
@@ -1853,7 +2023,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_build_creates_five_eager_surfaces_and_keeps_settings_lazy() {
+    fn successful_build_creates_only_topbar_and_dock_eagerly() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1867,22 +2037,11 @@ mod tests {
             .as_ref()
             .and_then(|resources| resources.surfaces.as_ref())
             .unwrap();
-        assert_eq!(
-            [
-                installed.topbar.role,
-                installed.dock.role,
-                installed.popover.role,
-                installed.app_menu.role,
-                installed.preview.role,
-            ],
-            [
-                ShowcaseRole::Topbar,
-                ShowcaseRole::Dock,
-                ShowcaseRole::Popover,
-                ShowcaseRole::AppMenu,
-                ShowcaseRole::Preview,
-            ]
-        );
+        assert_eq!(installed.topbar.role, ShowcaseRole::Topbar);
+        assert_eq!(installed.dock.role, ShowcaseRole::Dock);
+        assert!(installed.popover.is_none());
+        assert!(installed.app_menu.is_none());
+        assert!(installed.preview.is_none());
         assert!(installed.settings.is_none());
         let created = events()
             .into_iter()
@@ -1891,38 +2050,25 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            created,
-            [
-                ShowcaseRole::Topbar,
-                ShowcaseRole::Dock,
-                ShowcaseRole::Popover,
-                ShowcaseRole::AppMenu,
-                ShowcaseRole::Preview,
-            ]
-        );
+        assert_eq!(created, [ShowcaseRole::Topbar, ShowcaseRole::Dock]);
         assert_eq!(
             recording()
                 .scene_records
                 .iter()
                 .map(|(role, _)| *role)
                 .collect::<Vec<_>>(),
-            [
-                ShowcaseRole::Topbar,
-                ShowcaseRole::Dock,
-                ShowcaseRole::Popover,
-                ShowcaseRole::AppMenu,
-                ShowcaseRole::Preview,
-            ]
+            [ShowcaseRole::Topbar, ShowcaseRole::Dock]
         );
-        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        for role in ROLES.into_iter().filter(|role| is_lazy_role(*role)) {
+            assert_eq!(runtime.metrics(role), None);
+        }
         assert!(runtime.is_ready());
         assert_eq!(runtime.device_kind(), Some(DeviceKind::Hardware));
         assert_eq!(runtime_device_kind(&runtime), DeviceKind::Hardware);
     }
 
     #[test]
-    fn absent_settings_surface_reports_none_and_skips_non_rendering_operations() {
+    fn absent_lazy_surfaces_report_none_and_skip_non_rendering_operations() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1938,35 +2084,50 @@ mod tests {
             duration_seconds: 0.18,
         };
 
-        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
-        assert_eq!(runtime.size(ShowcaseRole::Settings), None);
+        for role in ROLES.into_iter().filter(|role| is_lazy_role(*role)) {
+            assert_eq!(runtime.metrics(role), None);
+            assert_eq!(runtime.size(role), None);
+            assert_eq!(runtime.frame_latency_waitable_object(role), None);
+            assert_eq!(
+                runtime.set_opacity(role, 0.5).unwrap(),
+                SurfaceUpdate::FrameSkipped
+            );
+            assert_eq!(
+                runtime.animate_entrance(role, false).unwrap(),
+                SurfaceUpdate::FrameSkipped
+            );
+            assert_eq!(
+                runtime.animate_visibility(role, visibility).unwrap(),
+                SurfaceUpdate::FrameSkipped
+            );
+            assert_eq!(
+                runtime.set_visibility_state(role, 6.0, 0.35).unwrap(),
+                SurfaceUpdate::FrameSkipped
+            );
+        }
+        assert!(events().is_empty());
+    }
+
+    #[test]
+    fn preview_opacity_requested_before_materialization_is_applied_on_first_frame() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording().events.clear();
+
         assert_eq!(
-            runtime.frame_latency_waitable_object(ShowcaseRole::Settings),
-            None
-        );
-        assert_eq!(
-            runtime.set_opacity(ShowcaseRole::Settings, 0.5).unwrap(),
-            SurfaceUpdate::FrameSkipped
-        );
-        assert_eq!(
-            runtime
-                .animate_entrance(ShowcaseRole::Settings, false)
-                .unwrap(),
-            SurfaceUpdate::FrameSkipped
-        );
-        assert_eq!(
-            runtime
-                .animate_visibility(ShowcaseRole::Settings, visibility)
-                .unwrap(),
-            SurfaceUpdate::FrameSkipped
-        );
-        assert_eq!(
-            runtime
-                .set_visibility_state(ShowcaseRole::Settings, 6.0, 0.35)
-                .unwrap(),
+            runtime.set_opacity(ShowcaseRole::Preview, 0.25).unwrap(),
             SurfaceUpdate::FrameSkipped
         );
         assert!(events().is_empty());
+
+        runtime
+            .redraw(ShowcaseRole::Preview, empty_scenes())
+            .unwrap();
+        assert!(events().contains(&Event::Opacity(1, ShowcaseRole::Preview, 0.25)));
     }
 
     #[test]
@@ -2011,7 +2172,7 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_rematerializes_settings_only_when_the_window_is_visible() {
+    fn rebuild_rematerializes_only_lazy_surfaces_marked_visible() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2021,26 +2182,38 @@ mod tests {
 
         assert_eq!(
             runtime
-                .rebuild_preserving_visible_settings(plan(), false)
+                .rebuild_preserving_visible_surfaces(plan(), LazySurfaceVisibility::default())
                 .unwrap(),
             SurfaceUpdate::FrameSkipped
         );
-        assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        for role in ROLES.into_iter().filter(|role| is_lazy_role(*role)) {
+            assert_eq!(runtime.metrics(role), None);
+        }
 
+        let visible = LazySurfaceVisibility {
+            popover: true,
+            app_menu: false,
+            preview: true,
+            settings: true,
+        };
         assert_eq!(
             runtime
-                .rebuild_preserving_visible_settings(plan(), true)
+                .rebuild_preserving_visible_surfaces(plan(), visible)
                 .unwrap(),
             SurfaceUpdate::Presented
         );
-        assert_eq!(
-            runtime.metrics(ShowcaseRole::Settings),
-            Some(frame(ShowcaseRole::Settings).target.metrics)
-        );
+        for role in [
+            ShowcaseRole::Popover,
+            ShowcaseRole::Preview,
+            ShowcaseRole::Settings,
+        ] {
+            assert_eq!(runtime.metrics(role), Some(frame(role).target.metrics));
+        }
+        assert_eq!(runtime.metrics(ShowcaseRole::AppMenu), None);
     }
 
     #[test]
-    fn visible_settings_rebuild_returns_one_recoverable_result_without_looping() {
+    fn visible_lazy_surface_rebuild_returns_one_recoverable_result_without_looping() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2053,11 +2226,56 @@ mod tests {
 
         assert_eq!(
             runtime
-                .rebuild_preserving_visible_settings(plan(), true)
+                .rebuild_preserving_visible_surfaces(
+                    plan(),
+                    LazySurfaceVisibility {
+                        popover: true,
+                        ..LazySurfaceVisibility::default()
+                    }
+                )
                 .unwrap(),
             SurfaceUpdate::RebuildAllRequired
         );
+        assert_eq!(runtime.metrics(ShowcaseRole::Popover), None);
+        assert_eq!(recording().attempts, 2);
+    }
+
+    #[test]
+    fn rebuild_stops_after_the_first_visible_lazy_surface_requests_recovery() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording()
+            .redraw_results
+            .push_back(Ok(PresentOutcome::DeviceLost(DeviceLossKind::Removed)));
+
+        assert_eq!(
+            runtime
+                .rebuild_preserving_visible_surfaces(
+                    plan(),
+                    LazySurfaceVisibility {
+                        popover: true,
+                        app_menu: true,
+                        preview: true,
+                        settings: true,
+                    },
+                )
+                .unwrap(),
+            SurfaceUpdate::RebuildAllRequired
+        );
+        assert_eq!(runtime.metrics(ShowcaseRole::Popover), None);
+        assert_eq!(runtime.metrics(ShowcaseRole::AppMenu), None);
+        assert_eq!(runtime.metrics(ShowcaseRole::Preview), None);
         assert_eq!(runtime.metrics(ShowcaseRole::Settings), None);
+        let lazy_creations = recording()
+            .create_records
+            .iter()
+            .filter(|record| is_lazy_role(record.role))
+            .count();
+        assert_eq!(lazy_creations, 1);
     }
 
     #[test]
@@ -2089,8 +2307,24 @@ mod tests {
         second.preview.scenes.preview = Some(&second_scene);
         let mut runtime = runtime();
 
-        runtime.build(first).unwrap();
-        runtime.rebuild(second).unwrap();
+        runtime
+            .rebuild_preserving_visible_surfaces(
+                first,
+                LazySurfaceVisibility {
+                    preview: true,
+                    ..LazySurfaceVisibility::default()
+                },
+            )
+            .unwrap();
+        runtime
+            .rebuild_preserving_visible_surfaces(
+                second,
+                LazySurfaceVisibility {
+                    preview: true,
+                    ..LazySurfaceVisibility::default()
+                },
+            )
+            .unwrap();
 
         let preview_creates = recording()
             .create_records
@@ -2102,7 +2336,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_opacity_must_succeed_before_transaction_becomes_ready() {
+    fn preview_opacity_must_succeed_before_lazy_surface_is_installed() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2112,14 +2346,22 @@ mod tests {
             .push_back((UnitOperation::Opacity, unrecoverable_failure()));
         let mut runtime = runtime();
 
-        assert!(runtime.build(plan()).is_err());
+        runtime.build(plan()).unwrap();
+        let error = present_frame(
+            &mut runtime,
+            frame(ShowcaseRole::Preview),
+            SurfaceSizeChange::Resize,
+        )
+        .unwrap_err();
 
-        assert!(!runtime.is_ready());
+        assert_eq!(error.code(), unrecoverable_failure());
+        assert!(runtime.is_ready());
+        assert_eq!(runtime.metrics(ShowcaseRole::Preview), None);
         assert!(events().contains(&Event::Opacity(1, ShowcaseRole::Preview, 1.0)));
     }
 
     #[test]
-    fn build_applies_transient_dock_and_preview_state_before_becoming_ready() {
+    fn build_applies_dock_state_and_defers_preview_state_until_materialization() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2139,6 +2381,17 @@ mod tests {
         let mut runtime = runtime();
 
         runtime.build(transient).unwrap();
+        assert!(
+            !events()
+                .iter()
+                .any(|event| matches!(event, Event::Opacity(_, ShowcaseRole::Preview, _)))
+        );
+        present_frame(
+            &mut runtime,
+            frame(ShowcaseRole::Preview),
+            SurfaceSizeChange::Resize,
+        )
+        .unwrap();
 
         assert!(runtime.is_ready());
         let events = events();
@@ -2186,7 +2439,7 @@ mod tests {
         reset([]);
         recording()
             .unit_failures
-            .push_back((UnitOperation::Opacity, unrecoverable_failure()));
+            .push_back((UnitOperation::VisibilityState, unrecoverable_failure()));
         let mut runtime = runtime();
 
         assert_eq!(
@@ -2194,7 +2447,7 @@ mod tests {
             unrecoverable_failure()
         );
         assert!(!runtime.is_ready());
-        assert!(events().contains(&Event::Opacity(1, ShowcaseRole::Preview, 1.0,)));
+        assert!(events().contains(&Event::VisibilityState(1, ShowcaseRole::Dock, 0.0, 0.42,)));
     }
 
     #[test]
@@ -2251,11 +2504,11 @@ mod tests {
     }
 
     #[test]
-    fn recoverable_partial_build_drops_surfaces_then_renderer_before_retry() {
+    fn recoverable_partial_eager_build_drops_surface_then_renderer_before_retry() {
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        reset([(ShowcaseRole::Popover, recoverable_failure())]);
+        reset([(ShowcaseRole::Dock, recoverable_failure())]);
         let mut runtime = runtime();
 
         runtime.build(plan()).unwrap();
@@ -2264,10 +2517,6 @@ mod tests {
         let topbar_drop = events
             .iter()
             .position(|event| *event == Event::SurfaceDropped(1, ShowcaseRole::Topbar))
-            .unwrap();
-        let dock_drop = events
-            .iter()
-            .position(|event| *event == Event::SurfaceDropped(1, ShowcaseRole::Dock))
             .unwrap();
         let renderer_drop = events
             .iter()
@@ -2278,7 +2527,6 @@ mod tests {
             .position(|event| *event == Event::Attempt(2))
             .unwrap();
         assert!(topbar_drop < renderer_drop);
-        assert!(dock_drop < renderer_drop);
         assert!(renderer_drop < retry);
     }
 
@@ -2290,9 +2538,9 @@ mod tests {
         reset([]);
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
-        runtime
-            .redraw(ShowcaseRole::Settings, empty_scenes())
-            .unwrap();
+        for role in ROLES.into_iter().filter(|role| is_lazy_role(*role)) {
+            runtime.redraw(role, empty_scenes()).unwrap();
+        }
 
         drop(runtime);
 
@@ -2325,9 +2573,9 @@ mod tests {
         reset([]);
         let mut runtime = runtime();
         runtime.build(plan()).unwrap();
-        runtime
-            .redraw(ShowcaseRole::Settings, empty_scenes())
-            .unwrap();
+        for role in ROLES.into_iter().filter(|role| is_lazy_role(*role)) {
+            runtime.redraw(role, empty_scenes()).unwrap();
+        }
         recording()
             .failures
             .push_back((ShowcaseRole::Topbar, unrecoverable_failure()));

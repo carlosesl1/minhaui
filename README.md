@@ -155,9 +155,10 @@ unavailable instead of showing controls that do nothing.
 
 The Settings window now exposes its logical navigation and controls through a
 server-side Windows UI Automation provider, including Invoke, Toggle, and
-RangeValue patterns. Native Narrator/Accessibility Insights validation and
-snapshot-diffed focus/property/structure notifications remain release gates;
-the Dock, top bar, previews, and popovers do not yet expose equivalent providers.
+RangeValue patterns. Consecutive snapshots raise structure, property, and focus
+notifications only while UIA clients are listening. Native Narrator/
+Accessibility Insights validation remains a release gate; the Dock, top bar,
+previews, and popovers do not yet expose equivalent providers.
 
 The **Apps** module in the top bar lists active applications from read-only
 per-user notification registrations and the current process snapshot. The
