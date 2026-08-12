@@ -1,15 +1,16 @@
 #![deny(unsafe_code)]
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use shell_config::{ConfigStore, ShellConfigV1};
 use shell_core::{DockItem, PinState, ShellState, TopbarModule, TopbarModuleKind};
 use windows::core::Result;
 
+static PROCESS_CONFIG: OnceLock<Mutex<ShellConfigV1>> = OnceLock::new();
+
 pub(super) fn load_config() -> ShellConfigV1 {
-    default_store()
-        .map(|store| store.load().config().clone())
-        .unwrap_or_default()
+    lock_config(process_config()).clone()
 }
 
 pub(super) fn state_from_config(config: &ShellConfigV1, defaults: ShellState) -> ShellState {
@@ -19,18 +20,64 @@ pub(super) fn state_from_config(config: &ShellConfigV1, defaults: ShellState) ->
 pub(super) fn persist_dock_state(state: &ShellState) -> Result<()> {
     let store = default_store()
         .ok_or_else(|| windows::core::Error::new(invalid_arg(), "LOCALAPPDATA is unavailable"))?;
-    let config = config_with_dock_state(store.load().config(), state);
+    let mut current = lock_config(process_config());
+    let config = config_with_dock_state(&current, state);
     store
         .persist(&config)
-        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
+        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+    *current = config;
+    Ok(())
 }
 
-pub(super) fn persist_config(config: &ShellConfigV1) -> Result<()> {
+/// Persists user-facing settings without replacing a dock layout that changed
+/// while the Settings window was open.
+pub(super) fn persist_settings_config(config: &ShellConfigV1) -> Result<ShellConfigV1> {
     let store = default_store()
         .ok_or_else(|| windows::core::Error::new(invalid_arg(), "LOCALAPPDATA is unavailable"))?;
+    let mut current = lock_config(process_config());
+    let merged = merge_settings(&current, config);
+    merged
+        .validate()
+        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
     store
-        .persist(config)
-        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
+        .persist(&merged)
+        .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+    *current = merged.clone();
+    Ok(merged)
+}
+
+fn process_config() -> &'static Mutex<ShellConfigV1> {
+    PROCESS_CONFIG.get_or_init(|| {
+        let config = default_store()
+            .map(|store| store.load().config().clone())
+            .unwrap_or_default();
+        Mutex::new(config)
+    })
+}
+
+fn lock_config(mutex: &Mutex<ShellConfigV1>) -> MutexGuard<'_, ShellConfigV1> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn merge_settings(current: &ShellConfigV1, edited: &ShellConfigV1) -> ShellConfigV1 {
+    current
+        .with_autohide(edited.autohide())
+        .with_taskbar_policy(edited.taskbar_policy())
+        .with_accessibility(edited.accessibility())
+        .with_performance(edited.performance())
+        .with_topbar_modules(edited.topbar_modules().to_vec())
+        .with_dock(edited.dock().clone())
+        .with_topbar(edited.topbar().clone())
+        .with_quick_settings(edited.quick_settings().clone())
+        .with_behavior(edited.behavior())
+        .with_appearance(edited.appearance().clone())
+        .with_advanced(edited.advanced())
 }
 
 fn configured_state(config: &ShellConfigV1, defaults: ShellState) -> Option<ShellState> {
@@ -101,7 +148,7 @@ mod tests {
 
     use crate::dock_launch::initial_launch_targets;
 
-    use super::{config_with_dock_state, configured_state};
+    use super::{config_with_dock_state, configured_state, merge_settings};
 
     #[test]
     fn dock_order_and_separators_survive_config_roundtrip() {
@@ -146,6 +193,24 @@ mod tests {
             initial_launch_targets(&restarted).get(&DockItemId::new(7)),
             Some(&target.to_owned())
         );
+    }
+
+    #[test]
+    fn settings_commit_preserves_a_newer_dock_layout() {
+        let first = DockItem::pinned(DockItemId::new(1), AppId::parse("first.exe").unwrap());
+        let latest = ShellConfigV1::default()
+            .with_dock_items(vec![first])
+            .with_dock_layout(vec![DockLayoutEntry::App(DockItemId::new(1))]);
+        let edited = ShellConfigV1::default()
+            .with_autohide(true)
+            .with_dock(shell_config::DockSettings::default().with_item_size(64));
+
+        let merged = merge_settings(&latest, &edited);
+
+        assert_eq!(merged.dock_items(), latest.dock_items());
+        assert_eq!(merged.dock_layout(), latest.dock_layout());
+        assert!(merged.autohide());
+        assert_eq!(merged.dock().item_size(), 64);
     }
 
     #[test]

@@ -8,8 +8,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_DOWN, VK_ESCAPE, VK_F10, VK_LEFT,
-    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F10,
+    VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, MWMO_INPUTAVAILABLE,
@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY,
     WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KILLFOCUS,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_POWERBROADCAST,
-    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER,
+    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
 };
 use windows::core::Result;
 
@@ -233,6 +233,14 @@ pub(super) unsafe extern "system" fn window_proc(
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::PopoverScroll(-isize::from(delta.signum())),
+            ));
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL if is_settings_window(hwnd) => {
+            let delta = ((wparam.0 >> 16) as u16) as i16;
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SettingsScroll(-isize::from(delta.signum())),
             ));
             LRESULT(0)
         }
@@ -490,10 +498,10 @@ pub(super) unsafe extern "system" fn window_proc(
             // required after observing the unchanged popup activation message.
             unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
         }
-        WM_KILLFOCUS if is_settings_window(hwnd) => {
+        WM_LBUTTONUP if is_settings_window(hwnd) => {
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
-                PlatformEvent::SettingsKey(SettingsKey::Escape),
+                PlatformEvent::SettingsPointerActivated(client_point(hwnd, lparam)),
             ));
             LRESULT(0)
         }
@@ -584,7 +592,19 @@ pub(super) unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_NCHITTEST if is_settings_window(hwnd) => {
+            // SAFETY: Settings is a standard resizable top-level window; default
+            // non-client hit testing owns its caption, resize borders and buttons.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         WM_NCHITTEST => hit_test(hwnd, lparam),
+        WM_SIZE if is_settings_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SettingsResized,
+            ));
+            LRESULT(0)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_WINDOWPOSCHANGED if is_topbar_window(hwnd) => {
             notify_window_position(hwnd);
             // SAFETY: Category 8 (FFI boundary). Default handling remains required
@@ -700,6 +720,13 @@ pub(super) unsafe extern "system" fn window_proc(
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::AppMenuDismissed,
+            ));
+            LRESULT(0)
+        }
+        WM_CLOSE if is_settings_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SettingsKey(SettingsKey::Dismiss),
             ));
             LRESULT(0)
         }
@@ -824,6 +851,11 @@ fn shift_pressed() -> bool {
     unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 }
 }
 
+fn control_pressed() -> bool {
+    // SAFETY: GetAsyncKeyState only reads process-global keyboard state.
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 }
+}
+
 fn dock_key(wparam: WPARAM) -> Option<DockKey> {
     let code = wparam.0 as u16;
     if code == VK_TAB.0 || code == VK_DOWN.0 {
@@ -858,7 +890,11 @@ fn topbar_key(wparam: WPARAM) -> Option<TopbarKey> {
 
 fn settings_key(wparam: WPARAM) -> Option<SettingsKey> {
     let code = wparam.0 as u16;
-    if code == VK_TAB.0 || code == VK_DOWN.0 {
+    if code == VK_RETURN.0 && control_pressed() {
+        Some(SettingsKey::Apply)
+    } else if code == VK_TAB.0 && shift_pressed() {
+        Some(SettingsKey::Previous)
+    } else if code == VK_TAB.0 || code == VK_DOWN.0 {
         Some(SettingsKey::Next)
     } else if code == VK_UP.0 {
         Some(SettingsKey::Previous)

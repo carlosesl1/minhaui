@@ -9,6 +9,12 @@ version.workspace = true
 [features]
 default = []
 native-validation = []
+# Unsupported Explorer internals are kept only for isolated research builds.
+# Stable builds use documented, read-only notification registrations instead.
+experimental-tray-bridge = []
+# Explorer replacement is disabled in release builds until the watchdog owns
+# crash-safe restoration. The feature exists for controlled validation only.
+experimental-taskbar-replacement = []
 
 [dependencies]
 shell-config = { path = "../shell-config", version = "0.1.0" }

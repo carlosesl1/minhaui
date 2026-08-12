@@ -110,7 +110,7 @@ pub(crate) fn draw_functional_topbar(
     if let TopbarOverflow::Collapsed {
         hidden_count,
         bounds,
-        ..
+        focused,
     } = layout.overflow()
     {
         fill_round(
@@ -136,6 +136,19 @@ pub(crate) fn draw_functional_topbar(
             },
             brushes.secondary,
         );
+        if focused {
+            fill_round(
+                context,
+                rect(
+                    bounds.x + 6.0,
+                    bounds.y + bounds.height - 2.0,
+                    bounds.x + bounds.width - 6.0,
+                    bounds.y + bounds.height - 1.0,
+                    0.5,
+                ),
+                brushes.focus,
+            );
+        }
     }
 }
 

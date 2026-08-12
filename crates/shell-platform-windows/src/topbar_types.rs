@@ -50,8 +50,34 @@ pub enum QueuedTopbarAction {
         popover: Popover,
         anchor: TopbarOverlayAnchor,
     },
+    OpenOverflow {
+        items: Vec<TopbarOverflowItem>,
+    },
     OpenSearch,
     RedrawTopbar,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TopbarOverflowItem {
+    kind: TopbarModuleKind,
+    label: String,
+}
+
+impl TopbarOverflowItem {
+    #[must_use]
+    pub(crate) fn new(kind: TopbarModuleKind, label: String) -> Self {
+        Self { kind, label }
+    }
+
+    #[must_use]
+    pub(crate) const fn kind(&self) -> TopbarModuleKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

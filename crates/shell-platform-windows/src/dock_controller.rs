@@ -87,6 +87,24 @@ impl DockController {
         self.config
     }
 
+    pub fn update_config(
+        &mut self,
+        config: DockRuntimeConfig,
+    ) -> Result<Vec<crate::QueuedDockAction>, DockControllerError> {
+        let effective_autohide = config.autohide() || self.fullscreen_autohide;
+        let actions = if self.state.dock().enabled() != effective_autohide {
+            self.apply(ShellEvent::EnableAutohide(effective_autohide))?
+        } else {
+            Vec::new()
+        };
+        if self.config != config {
+            self.config = config;
+            self.invalidate_hit_layout();
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
+        Ok(actions)
+    }
+
     #[must_use]
     #[cfg(test)]
     pub const fn animator(&self) -> DockAnimator {

@@ -123,13 +123,46 @@ cargo run --release --bin shell-app -- --liquid-glass
 It affects only the dock material and is suppressed by safe mode and high
 contrast. WARP and reduced-motion launches use its static fallback.
 
-The **Apps** module in the top bar lists active applications registered in the
-Windows notification area. It refreshes only when opened, reads Explorer's
-per-user registration data without changing it, and uses no background polling.
-Selecting a row focuses an existing eligible window or opens the already-running
-application; it does not reproduce private tray-icon callbacks. If a future
-Windows version removes the Explorer registry contract, the popover reports
-that background apps are unavailable and the rest of the shell keeps running.
+## Settings and personalization
+
+Open **Settings** from the top-bar system menu, or choose **Edit controls** in
+Quick Settings. The native, resizable Settings window currently supports:
+
+- Dock size, spacing, alignment, magnification, and auto-hide;
+- top-bar density and module visibility;
+- Quick Controls visibility and keyboard reordering; and
+- shared surface opacity and corner radius with live preview.
+
+Changes remain in a draft until **Apply** is selected (`Ctrl+Enter` also
+applies). **Cancel**, closing the window, or dismissing the draft restores the
+last committed runtime configuration. A successful commit is broadcast to all
+monitor slots while preserving the latest pinned Dock layout. If another
+monitor commits while a local draft is open, that draft is preserved and
+Settings shows an explicit review warning instead of silently replacing it.
+Sections whose Windows/runtime contract is not complete remain visibly
+unavailable instead of showing controls that do nothing.
+
+The **Apps** module in the top bar lists active applications from read-only
+per-user notification registrations and the current process snapshot. The
+registration location is treated as a capability-probed compatibility fallback,
+not as a guaranteed public Windows API.
+It refreshes only when opened and uses no background polling. Stable builds do
+not inject code into Explorer, install a helper at sign-in, or read Explorer's
+private toolbar memory. Selecting a row focuses an eligible existing window or
+opens the already-running application. If registrations are unavailable, the
+popover reports that background apps are unavailable and the rest of the shell
+keeps running.
+
+An unsupported Explorer tray bridge remains source-gated behind the
+`experimental-tray-bridge` Cargo feature for isolated research only. It is not
+compiled or executed by normal builds and must not be enabled for release,
+Store, or end-user packages.
+
+Stable builds also leave the Windows taskbar untouched, including when an old
+configuration contains the legacy `hide` policy. Explorer replacement is
+source-gated behind `experimental-taskbar-replacement` until the separate
+watchdog performs real crash-safe restoration; the feature is intended only
+for a controlled Windows validation image.
 
 ## Build distributable layouts
 

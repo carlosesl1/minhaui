@@ -1,3 +1,4 @@
+use shell_renderer::VisualPreferences;
 use shell_renderer::native::{
     CompositionRenderer, DeviceKind, PresentOutcome, ShellScenes, ShowcaseRole, SurfaceMetrics,
     SurfaceVisibilityAnimation, WindowSurface, is_recoverable_hresult,
@@ -55,12 +56,13 @@ fn normalize_unit_result(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct NativeSurfaceOptions {
     pub(super) force_warp: bool,
     pub(super) solid_material: bool,
     pub(super) liquid_glass: bool,
     pub(super) reduced_motion: bool,
+    pub(super) visual_preferences: VisualPreferences,
 }
 
 #[derive(Clone, Copy)]
@@ -149,6 +151,7 @@ impl SurfaceAdapter for DirectCompositionAdapter {
             options.solid_material,
             options.liquid_glass,
             options.reduced_motion,
+            options.visual_preferences,
         )
     }
 
@@ -285,6 +288,14 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             options,
             resources: None,
         }
+    }
+
+    pub(super) fn update_visual_preferences(&mut self, preferences: VisualPreferences) -> bool {
+        if self.options.visual_preferences == preferences {
+            return false;
+        }
+        self.options.visual_preferences = preferences;
+        true
     }
 
     pub(super) fn build(&mut self, plan: SurfaceBuildPlan<'_>) -> windows::core::Result<()> {
@@ -531,7 +542,7 @@ mod tests {
         DeviceKind, DeviceLossKind, PresentOutcome, ShellScenes, ShowcaseRole, SurfaceMetrics,
         SurfaceVisibilityAnimation, device_loss_hresult,
     };
-    use shell_renderer::{ContextMenuEntry, ContextMenuScene};
+    use shell_renderer::{ContextMenuEntry, ContextMenuScene, VisualPreferences};
     use windows::Win32::Foundation::{HANDLE, HWND};
     use windows::core::HRESULT;
 
@@ -932,6 +943,7 @@ mod tests {
             solid_material: false,
             liquid_glass: false,
             reduced_motion: false,
+            visual_preferences: VisualPreferences::default(),
         })
     }
 

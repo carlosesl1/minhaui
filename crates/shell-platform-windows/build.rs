@@ -3,8 +3,10 @@ use std::{error::Error, path::PathBuf};
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/win32_do_not_disturb_bridge.cpp");
     println!("cargo:rerun-if-changed=src/win32_brightness_bridge.cpp");
-    println!("cargo:rerun-if-changed=src/win32_tray_bridge_hook.cpp");
-    println!("cargo:rerun-if-changed=src/win32_tray_bridge_host.cpp");
+    if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_TRAY_BRIDGE").is_some() {
+        println!("cargo:rerun-if-changed=src/win32_tray_bridge_hook.cpp");
+        println!("cargo:rerun-if-changed=src/win32_tray_bridge_host.cpp");
+    }
     if !std::env::var("TARGET").is_ok_and(|target| target.contains("windows")) {
         return Ok(());
     }
@@ -14,7 +16,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .file("src/win32_brightness_bridge.cpp")
         .flag_if_supported("/std:c++17")
         .compile("minhaui_windows_bridges");
-    build_tray_bridge_hook()?;
+    if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_TRAY_BRIDGE").is_some() {
+        build_tray_bridge_hook()?;
+    }
     println!("cargo:rustc-link-lib=runtimeobject");
     println!("cargo:rustc-link-lib=wbemuuid");
     println!("cargo:rustc-link-lib=oleaut32");

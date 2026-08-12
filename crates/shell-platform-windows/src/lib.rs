@@ -105,6 +105,13 @@ mod win32_surface_runtime;
 mod win32_topbar_render;
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 topbar overflow menu ownership is isolated here"
+)]
+mod win32_topbar_overflow;
+
+#[cfg(windows)]
 mod win32_event_queue;
 
 #[cfg(windows)]
@@ -287,6 +294,10 @@ mod topbar_types;
     reason = "pure tray activation coordination is consumed by the native adapter incrementally"
 )]
 mod tray_activation;
+#[allow(
+    dead_code,
+    reason = "the unsupported tray bridge catalog is compiled only as an experimental compatibility contract"
+)]
 mod tray_bridge_catalog;
 #[allow(
     dead_code,
@@ -321,7 +332,7 @@ mod win32_taskbar_visibility;
     reason = "validated Win32 tray callback forwarding is isolated and wired incrementally"
 )]
 mod win32_tray_activation;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-tray-bridge"))]
 #[allow(
     unsafe_code,
     reason = "Explorer hook installation and shared-memory reads are isolated here"
@@ -330,6 +341,7 @@ mod win32_tray_bridge;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
+    dead_code,
     reason = "bounded Explorer toolbar discovery and remote-memory reads are isolated here"
 )]
 mod win32_tray_source;
@@ -398,8 +410,9 @@ pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, S
 pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
 pub(crate) use topbar_controller::TopbarController;
 pub(crate) use topbar_types::{
-    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor,
-    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot, foreground_app_label,
+    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverflowItem,
+    TopbarOverlayAnchor, TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot,
+    foreground_app_label,
 };
 #[allow(
     unused_imports,
@@ -478,6 +491,10 @@ pub(crate) enum PlatformEvent {
     AppMenuDismissed,
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
+    SettingsPointerActivated(DipPoint),
+    SettingsScroll(isize),
+    SettingsResized,
+    SettingsConfigCommitted(Box<shell_config::ShellConfigV1>),
     SyncWindows,
     ShellObservationLoaded(win32_shell_observation::ShellObservationLoadResult),
     BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),

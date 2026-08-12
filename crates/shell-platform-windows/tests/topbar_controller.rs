@@ -228,6 +228,109 @@ fn topbar_keyboard_focus_opens_visible_modules_without_pointer_input()
 }
 
 #[test]
+fn topbar_overflow_opens_the_actual_hidden_modules_instead_of_system_menu()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Compact)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 520.0, 40.0));
+    let layout = shell_renderer::layout_topbar_scene(
+        &controller.scene(),
+        DipRect::new(0.0, 0.0, 520.0, 40.0),
+    );
+    let hidden = layout
+        .hidden_modules()
+        .iter()
+        .map(shell_renderer::TopbarModuleVisual::kind)
+        .collect::<Vec<_>>();
+    assert!(!hidden.is_empty(), "test surface must expose overflow");
+    let bounds = layout.overflow_bounds().ok_or("missing overflow bounds")?;
+    let point = DipPoint::new(
+        bounds.x + bounds.width / 2.0,
+        bounds.y + bounds.height / 2.0,
+    );
+
+    controller.handle_pointer(TopbarPointerSample::new(TopbarPointerPhase::Pressed, point))?;
+    let actions = controller.handle_pointer(TopbarPointerSample::new(
+        TopbarPointerPhase::Released,
+        point,
+    ))?;
+    let items = actions
+        .iter()
+        .find_map(|action| match action {
+            QueuedTopbarAction::OpenOverflow { items } => Some(items),
+            _ => None,
+        })
+        .ok_or("overflow action was not queued")?;
+
+    assert_eq!(
+        items.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+        hidden
+    );
+    assert!(!actions.iter().any(|action| matches!(
+        action,
+        QueuedTopbarAction::OpenPopover {
+            popover: Popover::SystemMenu,
+            ..
+        }
+    )));
+
+    let selected = items
+        .iter()
+        .find(|item| item.kind() == TopbarModuleKind::Network)
+        .ok_or("network must be one of the hidden modules")?;
+    assert_eq!(
+        controller.activate_overflow_item(selected.kind())?,
+        vec![QueuedTopbarAction::OpenPopover {
+            popover: Popover::Network,
+            anchor: crate::TopbarOverlayAnchor::Overflow,
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn keyboard_focus_moves_hidden_module_to_focusable_overflow_after_reflow()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Compact)?;
+    controller.update_surface(DipRect::new(0.0, 0.0, 900.0, 40.0));
+    for _ in 0..3 {
+        controller.handle_key(TopbarKey::Next)?;
+    }
+    assert_eq!(
+        controller.scene().focused_module(),
+        Some(TopbarModuleKind::Network)
+    );
+
+    controller.update_surface(DipRect::new(0.0, 0.0, 520.0, 40.0));
+    let layout = shell_renderer::layout_topbar_scene(
+        &controller.scene(),
+        DipRect::new(0.0, 0.0, 520.0, 40.0),
+    );
+    assert!(
+        layout
+            .hidden_modules()
+            .iter()
+            .any(|module| module.kind() == TopbarModuleKind::Network)
+    );
+    assert_eq!(controller.scene().focused_module(), None);
+    assert!(controller.scene().focused_overflow());
+
+    let actions = controller.handle_key(TopbarKey::Activate)?;
+    let items = actions
+        .iter()
+        .find_map(|action| match action {
+            QueuedTopbarAction::OpenOverflow { items } => Some(items),
+            _ => None,
+        })
+        .ok_or("keyboard activation did not open overflow")?;
+    assert!(
+        items
+            .iter()
+            .any(|item| item.kind() == TopbarModuleKind::Network)
+    );
+    Ok(())
+}
+
+#[test]
 fn search_dispatches_directly_and_active_app_is_informational()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut controller = TopbarController::new(ShellState::default(), TopbarDensity::Comfortable)?;

@@ -15,6 +15,7 @@ use windows::core::Result;
 use crate::dock_edge_detection::dock_edge_probe_mode;
 use crate::win32_actions::apply_dock_actions;
 use crate::win32_dock_render::{DockRenderBaseline, DockRenderWindows, dip_surface};
+use crate::win32_event_queue::{RoutedPlatformEvent, queue_event};
 use crate::win32_fullscreen_sync::FullscreenSyncWindows;
 use crate::win32_pointer::{DockCursorLocation, dock_cursor_location};
 use crate::win32_preview::DwmPreviewThumbnail;
@@ -261,6 +262,13 @@ const fn dock_pointer_waits_for_frame(
         )
 }
 
+fn visual_preferences(config: &shell_config::ShellConfigV1) -> shell_renderer::VisualPreferences {
+    shell_renderer::VisualPreferences::new(
+        config.appearance().opacity(),
+        config.appearance().radius(),
+    )
+}
+
 const fn dock_frame_waitable_is_active(
     animation_active: bool,
     fallback_timer_active: bool,
@@ -291,6 +299,7 @@ impl RuntimeSurfaces {
                 solid_material: options.solid_material,
                 liquid_glass: options.liquid_glass,
                 reduced_motion: options.reduced_motion,
+                visual_preferences: visual_preferences(&config),
             }),
             fullscreen_suppressed: false,
             orchestration: RuntimeOrchestrator::new(),
@@ -957,7 +966,9 @@ impl RuntimeSurfaces {
                     .handle_pointer(*sample)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
                 self.apply_topbar_actions(&actions, topbar, dock, popover, preview, settings)?;
-                self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                if actions.contains(&crate::QueuedTopbarAction::RedrawTopbar) {
+                    self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                }
                 return Ok(true);
             }
             PlatformEvent::TopbarKey(key) => {
@@ -966,7 +977,9 @@ impl RuntimeSurfaces {
                     .handle_key(*key)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
                 self.apply_topbar_actions(&actions, topbar, dock, popover, preview, settings)?;
-                self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                if actions.contains(&crate::QueuedTopbarAction::RedrawTopbar) {
+                    self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                }
                 return Ok(true);
             }
             PlatformEvent::PopoverKey(key) => {
@@ -1316,18 +1329,43 @@ impl RuntimeSurfaces {
                     .settings_controller
                     .handle_key(*key)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
-                if actions.contains(&crate::QueuedSettingsAction::ApplyQuickSettings) {
-                    let config = self.settings_controller.apply().map_err(|error| {
-                        windows::core::Error::new(invalid_arg(), error.to_string())
-                    })?;
-                    crate::win32_config::persist_config(&config)?;
-                    self.quick_settings_controller
-                        .set_preferences(config.quick_settings().clone());
-                }
-                if actions.contains(&crate::QueuedSettingsAction::Dismiss) {
-                    settings.hide();
-                }
+                return self
+                    .apply_settings_actions(&actions, topbar, dock, popover, preview, settings);
+            }
+            PlatformEvent::SettingsPointerActivated(point) => {
+                let actions = self
+                    .settings_controller
+                    .handle_pointer(*point, crate::win32_dock_render::dip_surface(settings))
+                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                return self
+                    .apply_settings_actions(&actions, topbar, dock, popover, preview, settings);
+            }
+            PlatformEvent::SettingsScroll(rows) => {
+                let actions = self.settings_controller.scroll(*rows);
+                return self
+                    .apply_settings_actions(&actions, topbar, dock, popover, preview, settings);
+            }
+            PlatformEvent::SettingsResized => {
+                settings.refresh_rect()?;
                 self.redraw_settings(topbar, dock, popover, preview, settings)?;
+                return Ok(true);
+            }
+            PlatformEvent::SettingsConfigCommitted(config) => {
+                if self
+                    .settings_controller
+                    .reconcile_committed(config.as_ref().clone())
+                {
+                    self.redraw_settings(topbar, dock, popover, preview, settings)?;
+                } else {
+                    self.apply_effective_config(
+                        config.as_ref(),
+                        topbar,
+                        dock,
+                        popover,
+                        preview,
+                        settings,
+                    )?;
+                }
                 return Ok(true);
             }
             PlatformEvent::SyncWindows => {
@@ -1422,6 +1460,139 @@ impl RuntimeSurfaces {
         Ok(true)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "settings effects update every surface in the owning monitor slot"
+    )]
+    fn apply_settings_actions(
+        &mut self,
+        actions: &[crate::QueuedSettingsAction],
+        topbar: &mut OwnedWindow,
+        dock: &mut OwnedWindow,
+        popover: &mut OwnedWindow,
+        preview: &mut OwnedWindow,
+        settings: &mut OwnedWindow,
+    ) -> Result<bool> {
+        if actions.contains(&crate::QueuedSettingsAction::PreviewConfig) {
+            let config = self.settings_controller.preview().clone();
+            self.apply_effective_config(&config, topbar, dock, popover, preview, settings)?;
+        }
+        if actions.contains(&crate::QueuedSettingsAction::RevertConfig) {
+            let config = self.settings_controller.committed().clone();
+            self.apply_effective_config(&config, topbar, dock, popover, preview, settings)?;
+        }
+        if actions.contains(&crate::QueuedSettingsAction::CommitConfig) {
+            let requested = self
+                .settings_controller
+                .validated_draft()
+                .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+            let committed = match crate::win32_config::persist_settings_config(&requested) {
+                Ok(committed) => committed,
+                Err(error) => {
+                    let message = error.to_string();
+                    crate::diagnostics::record(
+                        crate::diagnostics::DiagnosticModule::AppLifecycle,
+                        crate::diagnostics::LogLevel::Error,
+                        "settings.persist.failed",
+                        &[("error", &message)],
+                    );
+                    self.settings_controller.commit_failed();
+                    self.redraw_settings(topbar, dock, popover, preview, settings)?;
+                    return Ok(true);
+                }
+            };
+            self.settings_controller
+                .replace_committed(committed.clone());
+            queue_event(RoutedPlatformEvent::broadcast(
+                PlatformEvent::SettingsConfigCommitted(Box::new(committed)),
+            ));
+        }
+        if actions.contains(&crate::QueuedSettingsAction::Dismiss) {
+            self.dismiss_settings(topbar, dock, popover, preview, settings)?;
+        }
+        if actions.contains(&crate::QueuedSettingsAction::Redraw)
+            && !actions.contains(&crate::QueuedSettingsAction::PreviewConfig)
+            && !actions.contains(&crate::QueuedSettingsAction::RevertConfig)
+        {
+            self.redraw_settings(topbar, dock, popover, preview, settings)?;
+        }
+        Ok(true)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "settings dismissal reverts its live preview across every owned surface"
+    )]
+    pub(super) fn dismiss_settings(
+        &mut self,
+        topbar: &mut OwnedWindow,
+        dock: &mut OwnedWindow,
+        popover: &mut OwnedWindow,
+        preview: &mut OwnedWindow,
+        settings: &mut OwnedWindow,
+    ) -> Result<()> {
+        let needs_revert = self.settings_controller.is_dirty();
+        self.settings_controller.cancel();
+        if needs_revert {
+            let committed = self.settings_controller.committed().clone();
+            self.apply_effective_config(&committed, topbar, dock, popover, preview, settings)?;
+        }
+        settings.hide();
+        Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "an effective configuration synchronizes the complete native monitor slot"
+    )]
+    fn apply_effective_config(
+        &mut self,
+        config: &shell_config::ShellConfigV1,
+        topbar: &mut OwnedWindow,
+        dock: &mut OwnedWindow,
+        popover: &mut OwnedWindow,
+        preview: &mut OwnedWindow,
+        settings: &mut OwnedWindow,
+    ) -> Result<()> {
+        let dock_config = crate::win32_sample_state::dock_runtime_config(config);
+        self.dock_controller
+            .update_config(dock_config)
+            .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+        let work = window_work_area(dock.hwnd)?;
+        let (_, hidden) = crate::resolve_dock_visibility(
+            dock_config,
+            self.dock_controller.state().dock().is_revealed(),
+            self.fullscreen_suppressed,
+        );
+        dock.set_dock_size(
+            work,
+            self.dock_controller.preferred_width_dip(),
+            dock_config.dock_height_dip(),
+            dock_config,
+            hidden,
+        )?;
+
+        let state =
+            crate::win32_config::state_from_config(config, self.topbar_controller.state().clone());
+        self.topbar_controller
+            .update_configuration(
+                state,
+                density_for_width(topbar.rect.width, config.topbar().density()),
+            )
+            .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+        self.quick_settings_controller
+            .set_preferences(config.quick_settings().clone());
+        self.surface_runtime
+            .update_visual_preferences(visual_preferences(config));
+        self.rebuild_native_surfaces(SurfaceWindows {
+            topbar,
+            dock,
+            popover,
+            preview,
+            settings,
+        })
+    }
+
     pub(super) fn apply_shell_observation(
         &mut self,
         observation: &ShellObservation,
@@ -1504,16 +1675,16 @@ impl RuntimeSurfaces {
         &mut self,
         sample: crate::DockPointerSample,
         frame_delta_seconds: Option<f32>,
-        topbar: &OwnedWindow,
+        topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
-        popover: &OwnedWindow,
+        popover: &mut OwnedWindow,
         preview: &mut OwnedWindow,
-        settings: &OwnedWindow,
+        settings: &mut OwnedWindow,
     ) -> Result<bool> {
         self.edge_reveal_active = false;
         self.edge_reveal_grace_deadline = None;
         if sample.phase == crate::DockPointerPhase::Pressed {
-            settings.hide();
+            self.dismiss_settings(topbar, dock, popover, preview, settings)?;
         }
         let before = self.dock_controller.state().clone();
         let visual_before = self.dock_controller.visual_generation();
@@ -2144,8 +2315,10 @@ impl RuntimeSurfaces {
     pub(super) fn rebuild_native_surfaces(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
         let now = now_ms();
         let preview_scene = self.preview_scene.clone();
-        self.topbar_controller
-            .update_density(density_for_width(windows.topbar.rect.width));
+        self.topbar_controller.update_density(density_for_width(
+            windows.topbar.rect.width,
+            self.settings_controller.preview().topbar().density(),
+        ));
         self.topbar_controller
             .update_surface(dip_surface(windows.topbar));
         let topbar_scene = self.topbar_controller.scene();

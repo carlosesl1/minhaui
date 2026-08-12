@@ -105,7 +105,11 @@ impl RuntimeOrchestrator {
             | PlatformEvent::AppMenuPointerReleased(_)
             | PlatformEvent::AppMenuDismissed => RuntimeAction::None,
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
-            PlatformEvent::SettingsKey(_) => RuntimeAction::None,
+            PlatformEvent::SettingsKey(_)
+            | PlatformEvent::SettingsPointerActivated(_)
+            | PlatformEvent::SettingsScroll(_)
+            | PlatformEvent::SettingsResized
+            | PlatformEvent::SettingsConfigCommitted(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. }
             | PlatformEvent::SyncWindows
             | PlatformEvent::ShellObservationLoaded(_)

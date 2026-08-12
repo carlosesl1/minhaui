@@ -101,8 +101,6 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     // null-terminated UTF-16 string and the returned identifier is process-global.
     let taskbar_message = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
     TASKBAR_CREATED.store(taskbar_message, Ordering::Release);
-    let mut explorer_taskbars = ExplorerTaskbarVisibilityGuard::prepare_work_area()?;
-
     let monitors = monitor_placement_inputs()?;
     if monitors.is_empty() {
         return Err(windows::core::Error::new(
@@ -110,7 +108,11 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             "no display monitors were enumerated",
         ));
     }
-    let shell_config = crate::win32_config::load_config();
+    let mut shell_config = crate::win32_config::load_config();
+    let mut explorer_taskbars =
+        taskbar_replacement_enabled(shell_config.taskbar_policy(), config.safe_mode)
+            .then(ExplorerTaskbarVisibilityGuard::prepare_work_area)
+            .transpose()?;
     print_monitor_placements(&monitors, &shell_config);
     let liquid_glass = config.liquid_glass && !config.safe_mode && !config.high_contrast;
     println!(
@@ -145,7 +147,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         .iter()
         .map(|slot| slot.dock_hwnd())
         .collect::<Vec<_>>();
-    explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+    if let Some(taskbars) = explorer_taskbars.as_mut() {
+        taskbars.reconcile_and_hide(&dock_handles)?;
+    }
     for slot in &mut slots {
         slot.show_shells();
         slot.print_windows();
@@ -178,7 +182,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                     .iter()
                     .map(|slot| slot.dock_hwnd())
                     .collect::<Vec<_>>();
-                explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+                if let Some(taskbars) = explorer_taskbars.as_mut() {
+                    taskbars.reconcile_and_hide(&dock_handles)?;
+                }
             }
         }
     }
@@ -188,6 +194,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             Ok(true)
         }
         MessageLoopAction::Dispatch(event) => {
+            if let PlatformEvent::SettingsConfigCommitted(config) = event.event() {
+                shell_config = config.as_ref().clone();
+            }
             let taskbar_layout_changed = matches!(
                 event.event(),
                 PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated
@@ -205,7 +214,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                     .iter()
                     .map(|slot| slot.dock_hwnd())
                     .collect::<Vec<_>>();
-                explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+                if let Some(taskbars) = explorer_taskbars.as_mut() {
+                    taskbars.reconcile_and_hide(&dock_handles)?;
+                }
             }
             Ok(keep_running)
         }
@@ -220,6 +231,12 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
 
 const fn solid_material_for_accessibility(safe_mode: bool, high_contrast: bool) -> bool {
     safe_mode || high_contrast
+}
+
+const fn taskbar_replacement_enabled(policy: shell_core::TaskbarPolicy, safe_mode: bool) -> bool {
+    !safe_mode
+        && cfg!(feature = "experimental-taskbar-replacement")
+        && matches!(policy, shell_core::TaskbarPolicy::Hide)
 }
 
 struct ComApartment;
@@ -381,12 +398,33 @@ const fn invalid_arg() -> windows::core::HRESULT {
 
 #[cfg(test)]
 mod material_policy_tests {
-    use super::solid_material_for_accessibility;
+    use super::{solid_material_for_accessibility, taskbar_replacement_enabled};
 
     #[test]
     fn system_backdrop_is_not_required_for_translucent_composition() {
         assert!(!solid_material_for_accessibility(false, false));
         assert!(solid_material_for_accessibility(true, false));
         assert!(solid_material_for_accessibility(false, true));
+    }
+
+    #[test]
+    fn stable_build_never_replaces_the_explorer_taskbar() {
+        if !cfg!(feature = "experimental-taskbar-replacement") {
+            for policy in [
+                shell_core::TaskbarPolicy::Off,
+                shell_core::TaskbarPolicy::AutoHide,
+                shell_core::TaskbarPolicy::Hide,
+            ] {
+                assert!(!taskbar_replacement_enabled(policy, false));
+            }
+        }
+    }
+
+    #[test]
+    fn safe_mode_never_replaces_the_explorer_taskbar() {
+        assert!(!taskbar_replacement_enabled(
+            shell_core::TaskbarPolicy::Hide,
+            true,
+        ));
     }
 }

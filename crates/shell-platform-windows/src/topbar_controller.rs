@@ -22,8 +22,8 @@ pub struct TopbarController {
     text_scale: f32,
     surface: DipRect,
     snapshot: TopbarSnapshot,
-    pressed_target: Option<(TopbarOverlayAnchor, TopbarIntent)>,
-    focused_module: Option<TopbarModuleKind>,
+    pressed_target: Option<TopbarOverlayAnchor>,
+    focused_target: Option<TopbarOverlayAnchor>,
     hovered_module: Option<TopbarModuleKind>,
     active_module: Option<TopbarModuleKind>,
     visual_generation: u64,
@@ -41,7 +41,7 @@ impl TopbarController {
             surface: DipRect::new(0.0, 0.0, 1.0, 1.0),
             snapshot: TopbarSnapshot::default(),
             pressed_target: None,
-            focused_module: None,
+            focused_target: None,
             hovered_module: None,
             active_module: None,
             visual_generation: 0,
@@ -51,7 +51,6 @@ impl TopbarController {
     }
 
     #[must_use]
-    #[expect(dead_code, reason = "retained for focused controller diagnostics")]
     pub const fn state(&self) -> &ShellState {
         &self.state
     }
@@ -65,6 +64,10 @@ impl TopbarController {
         layout_topbar_scene(&self.scene(), self.surface).module_bounds(kind)
     }
 
+    pub(crate) fn overflow_bounds(&self) -> Option<DipRect> {
+        layout_topbar_scene(&self.scene(), self.surface).overflow_bounds()
+    }
+
     #[must_use]
     pub const fn visual_generation(&self) -> u64 {
         self.visual_generation
@@ -76,29 +79,80 @@ impl TopbarController {
         self.resource_generation
     }
 
-    pub const fn update_surface(&mut self, surface: DipRect) {
+    pub fn update_surface(&mut self, surface: DipRect) {
         self.surface = surface;
+        self.reconcile_focus_to_layout();
     }
 
-    pub const fn update_density(&mut self, density: TopbarDensity) {
+    pub fn update_density(&mut self, density: TopbarDensity) {
         self.density = density;
+        self.reconcile_focus_to_layout();
+    }
+
+    pub fn update_configuration(
+        &mut self,
+        state: ShellState,
+        density: TopbarDensity,
+    ) -> Result<(), TopbarControllerError> {
+        state.validate()?;
+        let changed =
+            self.state.topbar_modules() != state.topbar_modules() || self.density != density;
+        self.state = state;
+        self.density = density;
+        let focused_is_visible = self.focused_target.is_none_or(|target| match target {
+            TopbarOverlayAnchor::Module(kind) => self
+                .state
+                .topbar_modules()
+                .iter()
+                .any(|module| module.kind() == kind && module.visible()),
+            TopbarOverlayAnchor::Overflow => true,
+        });
+        let hovered_is_visible = self.hovered_module.is_none_or(|kind| {
+            self.state
+                .topbar_modules()
+                .iter()
+                .any(|module| module.kind() == kind && module.visible())
+        });
+        let active_is_visible = self.active_module.is_none_or(|kind| {
+            self.state
+                .topbar_modules()
+                .iter()
+                .any(|module| module.kind() == kind && module.visible())
+        });
+        if !focused_is_visible {
+            self.focused_target = None;
+        }
+        if !hovered_is_visible {
+            self.hovered_module = None;
+        }
+        if !active_is_visible {
+            self.active_module = None;
+        }
+        if changed {
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
+        self.reconcile_focus_to_layout();
+        Ok(())
     }
 
     pub fn update_text_scale(&mut self, text_scale: f32) {
         self.text_scale = text_scale.clamp(1.0, 2.5);
+        self.reconcile_focus_to_layout();
     }
 
     pub fn update_snapshot(&mut self, snapshot: TopbarSnapshot) {
         if self.snapshot != snapshot {
             self.snapshot = snapshot;
             self.visual_generation += 1;
+            self.reconcile_focus_to_layout();
         }
     }
 
     #[must_use]
     pub fn scene(&self) -> TopbarScene {
         TopbarScene::new(self.density, self.visible_modules())
-            .with_focused_module(self.focused_module)
+            .with_focused_module(self.focused_module())
+            .with_focused_overflow(self.focused_target == Some(TopbarOverlayAnchor::Overflow))
             .with_hovered_module(self.hovered_module)
             .with_pressed_module(self.pressed_module())
             .with_active_module(self.active_module)
@@ -134,7 +188,7 @@ impl TopbarController {
                 Ok(actions)
             }
             TopbarPointerPhase::Moved => {
-                let hovered = self.hit_test(sample).and_then(|(anchor, _)| match anchor {
+                let hovered = self.hit_test(sample).and_then(|anchor| match anchor {
                     TopbarOverlayAnchor::Module(kind) => Some(kind),
                     TopbarOverlayAnchor::Overflow => None,
                 });
@@ -171,50 +225,97 @@ impl TopbarController {
             }
             TopbarKey::Activate => self.open_focused(),
             TopbarKey::Escape => {
-                self.set_focused_module(None);
+                self.set_focused_target(None);
                 Ok(vec![QueuedTopbarAction::RedrawTopbar])
             }
         }
     }
 
-    fn hit_test(&self, sample: TopbarPointerSample) -> Option<(TopbarOverlayAnchor, TopbarIntent)> {
+    fn hit_test(&self, sample: TopbarPointerSample) -> Option<TopbarOverlayAnchor> {
         let layout = layout_topbar_scene(&self.scene(), self.surface);
         layout
             .item_at(sample.point())
             .and_then(|item| {
                 item.intent()
-                    .map(|intent| (TopbarOverlayAnchor::Module(item.kind()), intent))
+                    .map(|_| TopbarOverlayAnchor::Module(item.kind()))
             })
             .or_else(|| {
                 layout
-                    .hit_test(sample.point())
-                    .map(|intent| (TopbarOverlayAnchor::Overflow, intent))
+                    .overflow_at(sample.point())
+                    .then_some(TopbarOverlayAnchor::Overflow)
             })
     }
 
     fn open_target(
         &mut self,
-        target: Option<(TopbarOverlayAnchor, TopbarIntent)>,
+        target: Option<TopbarOverlayAnchor>,
     ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
         let Some(target) = target else {
             return Ok(Vec::new());
         };
-        self.open_intent(target.1, target.0)
+        self.open_anchor(target)
     }
 
     fn open_focused(&mut self) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
-        let Some(focused) = self.focused_module else {
+        let Some(focused) = self.focused_target else {
             return Ok(Vec::new());
         };
-        let Some(intent) = self
-            .visible_modules()
-            .into_iter()
-            .find(|module| module.kind() == focused)
-            .and_then(|module| module.intent())
+        self.open_anchor(focused)
+    }
+
+    fn open_anchor(
+        &mut self,
+        anchor: TopbarOverlayAnchor,
+    ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
+        let layout = layout_topbar_scene(&self.scene(), self.surface);
+        match anchor {
+            TopbarOverlayAnchor::Module(kind) => {
+                let Some(intent) = layout
+                    .visible_items()
+                    .iter()
+                    .find(|module| module.kind() == kind)
+                    .and_then(|module| module.intent())
+                else {
+                    self.set_focused_target(None);
+                    return Ok(vec![QueuedTopbarAction::RedrawTopbar]);
+                };
+                self.open_intent(intent, anchor)
+            }
+            TopbarOverlayAnchor::Overflow => {
+                let items = layout
+                    .hidden_modules()
+                    .iter()
+                    .filter(|module| module.intent().is_some())
+                    .map(|module| {
+                        crate::TopbarOverflowItem::new(
+                            module.kind(),
+                            overflow_label(module.kind(), module.text()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if items.is_empty() {
+                    self.set_focused_target(None);
+                    return Ok(vec![QueuedTopbarAction::RedrawTopbar]);
+                }
+                Ok(vec![QueuedTopbarAction::OpenOverflow { items }])
+            }
+        }
+    }
+
+    pub(crate) fn activate_overflow_item(
+        &mut self,
+        kind: TopbarModuleKind,
+    ) -> Result<Vec<QueuedTopbarAction>, TopbarControllerError> {
+        let layout = layout_topbar_scene(&self.scene(), self.surface);
+        let Some(intent) = layout
+            .hidden_modules()
+            .iter()
+            .find(|module| module.kind() == kind)
+            .and_then(TopbarModuleVisual::intent)
         else {
             return Ok(Vec::new());
         };
-        self.open_intent(intent, TopbarOverlayAnchor::Module(focused))
+        self.open_intent(intent, TopbarOverlayAnchor::Overflow)
     }
 
     fn open_intent(
@@ -233,43 +334,79 @@ impl TopbarController {
     }
 
     fn focus_delta(&mut self, delta: isize) {
-        let modules = self
-            .visible_modules()
-            .into_iter()
-            .filter(|module| module.intent().is_some())
-            .map(|module| module.kind())
-            .collect::<Vec<_>>();
-        if modules.is_empty() {
-            self.set_focused_module(None);
+        let targets = self.layout_focus_targets();
+        if targets.is_empty() {
+            self.set_focused_target(None);
             return;
         }
-        let Some(current) = self.focused_module else {
+        let Some(current) = self.focused_target else {
             if delta < 0 {
-                self.set_focused_module(modules.last().copied());
+                self.set_focused_target(targets.last().copied());
             } else {
-                self.set_focused_module(Some(modules[0]));
+                self.set_focused_target(Some(targets[0]));
             }
             return;
         };
-        let position = modules
+        let position = targets
             .iter()
-            .position(|module| *module == current)
+            .position(|target| *target == current)
             .unwrap_or(0);
-        let next = position.saturating_add_signed(delta).min(modules.len() - 1);
-        self.set_focused_module(Some(modules[next]));
+        let next = position.saturating_add_signed(delta).min(targets.len() - 1);
+        self.set_focused_target(Some(targets[next]));
     }
 
-    fn set_focused_module(&mut self, focused_module: Option<TopbarModuleKind>) {
-        if self.focused_module != focused_module {
-            self.focused_module = focused_module;
+    fn set_focused_target(&mut self, focused_target: Option<TopbarOverlayAnchor>) {
+        if self.focused_target != focused_target {
+            self.focused_target = focused_target;
             self.visual_generation = self.visual_generation.wrapping_add(1);
         }
+    }
+
+    fn focused_module(&self) -> Option<TopbarModuleKind> {
+        match self.focused_target {
+            Some(TopbarOverlayAnchor::Module(kind)) => Some(kind),
+            Some(TopbarOverlayAnchor::Overflow) | None => None,
+        }
+    }
+
+    fn layout_focus_targets(&self) -> Vec<TopbarOverlayAnchor> {
+        let layout = layout_topbar_scene(&self.scene(), self.surface);
+        let mut positioned = layout
+            .visible_items()
+            .iter()
+            .filter(|module| module.intent().is_some())
+            .map(|module| {
+                (
+                    module.bounds().x,
+                    TopbarOverlayAnchor::Module(module.kind()),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(bounds) = layout.overflow_bounds() {
+            positioned.push((bounds.x, TopbarOverlayAnchor::Overflow));
+        }
+        positioned.sort_by(|left, right| left.0.total_cmp(&right.0));
+        positioned.into_iter().map(|(_, target)| target).collect()
+    }
+
+    fn reconcile_focus_to_layout(&mut self) {
+        let Some(focused) = self.focused_target else {
+            return;
+        };
+        let targets = self.layout_focus_targets();
+        if targets.contains(&focused) {
+            return;
+        }
+        let fallback = targets
+            .contains(&TopbarOverlayAnchor::Overflow)
+            .then_some(TopbarOverlayAnchor::Overflow);
+        self.set_focused_target(fallback);
     }
 
     fn pressed_module(&self) -> Option<TopbarModuleKind> {
         self.pressed_target
             .as_ref()
-            .and_then(|(anchor, _)| match anchor {
+            .and_then(|anchor| match anchor {
                 TopbarOverlayAnchor::Module(kind) => Some(*kind),
                 TopbarOverlayAnchor::Overflow => None,
             })
@@ -350,6 +487,25 @@ impl TopbarController {
                 Some(TopbarIntent::Popover(Popover::BackgroundApps)),
             ),
         }
+    }
+}
+
+fn overflow_label(kind: TopbarModuleKind, detail: &str) -> String {
+    let name = match kind {
+        TopbarModuleKind::SystemMenu => "Minha UI",
+        TopbarModuleKind::AppIdentity => "Active app",
+        TopbarModuleKind::Search => "Search",
+        TopbarModuleKind::Clock => "Calendar",
+        TopbarModuleKind::Network => "Network",
+        TopbarModuleKind::Volume => "Volume",
+        TopbarModuleKind::Power => "Power",
+        TopbarModuleKind::Notifications => "Controls",
+        TopbarModuleKind::BackgroundApps => "Background apps",
+    };
+    if detail.trim().is_empty() || detail == name {
+        name.to_owned()
+    } else {
+        format!("{name} — {detail}")
     }
 }
 

@@ -34,7 +34,6 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::core::{Interface, Result};
 
-use crate::ShowcaseTokens;
 use crate::native_desktop_capture::{DesktopBlurCapture, wants_desktop_blur};
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
@@ -48,6 +47,7 @@ use crate::{
     ContextMenuScene, DockScene, Dpi, PopoverScene, QuickSettingsScene, SettingsScene, TopbarScene,
     WindowPreviewScene, logical_surface_rect,
 };
+use crate::{ShowcaseTokens, VisualPreferences};
 
 pub use crate::native_present::{
     DeviceLossKind, PresentOutcome, classify_present_hresult, device_loss_hresult,
@@ -95,6 +95,7 @@ pub struct CompositionRenderer {
     showcase_resources: RefCell<ShowcaseResourceCache>,
     solid_material: bool,
     liquid_glass_mode: LiquidGlassMode,
+    visual_preferences: VisualPreferences,
 }
 
 pub struct WindowSurface {
@@ -177,6 +178,7 @@ impl CompositionRenderer {
         solid_material: bool,
         liquid_glass: bool,
         reduced_motion: bool,
+        visual_preferences: VisualPreferences,
     ) -> Result<Self> {
         let (d3d, device_kind) = create_d3d_device(force_warp)?;
         let dxgi_device: IDXGIDevice = d3d.cast()?;
@@ -215,6 +217,7 @@ impl CompositionRenderer {
                 device_kind,
                 reduced_motion,
             ),
+            visual_preferences,
         })
     }
 
@@ -277,13 +280,16 @@ impl CompositionRenderer {
                 &self.d2d_context,
                 logical_surface.width,
                 logical_surface.height,
-                ShowcaseTokens::obsidian_glass().dock_radius,
+                ShowcaseTokens::obsidian_glass()
+                    .with_preferences(self.visual_preferences, self.solid_material)
+                    .dock_radius,
             )?)
         } else {
             None
         };
         let liquid_glass = if let Some(profile) = profile_for_role(role) {
-            let tokens = ShowcaseTokens::obsidian_glass();
+            let tokens = ShowcaseTokens::obsidian_glass()
+                .with_preferences(self.visual_preferences, self.solid_material);
             let (glass_width, glass_height, radius) = match profile {
                 LiquidGlassProfile::Dock => (
                     logical_surface.width,
@@ -340,6 +346,7 @@ impl CompositionRenderer {
                 dock_inset.as_ref(),
                 liquid_glass.as_ref(),
                 desktop_blur.as_ref(),
+                self.visual_preferences,
             ),
             logical_surface,
             scenes,
@@ -501,6 +508,7 @@ impl CompositionRenderer {
                 surface.dock_inset.as_ref(),
                 surface.liquid_glass.as_ref(),
                 surface.desktop_blur.borrow().as_ref(),
+                self.visual_preferences,
             ),
             logical_surface_rect(surface.width, surface.height, surface.dpi),
             scenes,

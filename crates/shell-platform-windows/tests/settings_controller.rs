@@ -5,7 +5,8 @@ use crate::{
 use shell_config::{
     AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
 };
-use shell_core::TopbarModuleKind;
+use shell_core::{AppId, DockItem, DockItemId, DockLayoutEntry, TopbarModuleKind};
+use shell_renderer::{DipPoint, DipRect, SettingsFocus, layout_settings_scene};
 
 fn qa_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir()
@@ -38,6 +39,89 @@ fn transactional_apply_cancel_and_reset_keep_committed_state_until_apply()
     assert_eq!(applied.dock().spacing(), 12);
     assert_eq!(controller.committed().dock().spacing(), 12);
     assert_eq!(controller.preview(), &ShellConfigV1::default());
+    Ok(())
+}
+
+#[test]
+fn reset_preserves_current_dock_items_and_layout() -> Result<(), Box<dyn std::error::Error>> {
+    let id = DockItemId::new(41);
+    let original = ShellConfigV1::default()
+        .with_dock_items(vec![DockItem::pinned(id, AppId::parse("safe.exe")?)])
+        .with_dock_layout(vec![DockLayoutEntry::App(id)]);
+    let mut controller = SettingsController::new(original.clone());
+    controller.edit(SettingsEdit::DockItemSize(60))?;
+
+    controller.reset();
+
+    assert_eq!(controller.draft().dock_items(), original.dock_items());
+    assert_eq!(controller.draft().dock_layout(), original.dock_layout());
+    assert_eq!(
+        controller.draft().dock().item_size(),
+        ShellConfigV1::default().dock().item_size()
+    );
+    Ok(())
+}
+
+#[test]
+fn commit_failure_keeps_the_draft_and_surfaces_retry_status()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    let draft = controller.draft().clone();
+
+    controller.commit_failed();
+
+    assert_eq!(controller.draft(), &draft);
+    assert!(controller.is_dirty());
+    assert_eq!(
+        controller.scene().status_text(),
+        "Couldn't save changes. Your draft is still available."
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_commit_preserves_dirty_draft_and_updates_cancel_baseline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let original = ShellConfigV1::default();
+    let mut controller = SettingsController::new(original.clone());
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    let local_draft = controller.draft().clone();
+    let remote = original.with_appearance(AppearanceSettings::default().with_blur(18));
+
+    let preserved = controller.reconcile_committed(remote.clone());
+
+    assert!(preserved);
+    assert_eq!(controller.committed(), &remote);
+    assert_eq!(controller.draft(), &local_draft);
+    assert_eq!(controller.preview(), &local_draft);
+    assert_eq!(
+        controller.scene().status_text(),
+        "Settings changed elsewhere. Review your draft before applying."
+    );
+
+    controller.cancel();
+    assert_eq!(controller.draft(), &remote);
+    assert_eq!(controller.preview(), &remote);
+    assert!(!controller.is_dirty());
+    Ok(())
+}
+
+#[test]
+fn matching_remote_commit_resolves_the_local_draft_without_conflict()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    let remote = controller.draft().clone();
+
+    let preserved = controller.reconcile_committed(remote.clone());
+
+    assert!(!preserved);
+    assert_eq!(controller.committed(), &remote);
+    assert_eq!(controller.draft(), &remote);
+    assert_eq!(controller.preview(), &remote);
+    assert!(!controller.is_dirty());
+    assert_eq!(controller.scene().status_text(), "Up to date");
     Ok(())
 }
 
@@ -141,7 +225,7 @@ fn settings_keyboard_navigation_activates_sections_and_escapes()
     let mut controller = SettingsController::new(ShellConfigV1::default());
 
     // When: keyboard navigation moves to Appearance and activates it.
-    for _ in 0..5 {
+    for _ in 0..3 {
         assert_eq!(
             controller.handle_key(SettingsKey::Next)?,
             vec![QueuedSettingsAction::Redraw]
@@ -149,20 +233,30 @@ fn settings_keyboard_navigation_activates_sections_and_escapes()
     }
     let actions = controller.handle_key(SettingsKey::Activate)?;
 
-    // Then: activation emits the typed section instead of doing nothing.
+    // Then: activation opens a real content page instead of emitting an ignored action.
+    assert_eq!(actions, vec![QueuedSettingsAction::Redraw]);
     assert_eq!(
-        actions,
-        vec![QueuedSettingsAction::OpenSection(
-            SettingsSection::Appearance
-        )]
+        controller
+            .scene()
+            .active_navigation_item()
+            .map(shell_renderer::SettingsNavigationItem::label),
+        Some("Appearance")
     );
 
     // When: Escape is pressed after a draft edit.
     controller.edit(SettingsEdit::DockSpacing(12))?;
+    let back = controller.handle_key(SettingsKey::Escape)?;
     let escape = controller.handle_key(SettingsKey::Escape)?;
 
-    // Then: the draft is cancelled and the native settings surface can close.
-    assert_eq!(escape, vec![QueuedSettingsAction::Dismiss]);
+    // Then: Escape first navigates back, then reverts and dismisses the window.
+    assert_eq!(back, vec![QueuedSettingsAction::Redraw]);
+    assert_eq!(
+        escape,
+        vec![
+            QueuedSettingsAction::RevertConfig,
+            QueuedSettingsAction::Dismiss,
+        ]
+    );
     assert_eq!(controller.preview(), controller.committed());
     Ok(())
 }
@@ -189,6 +283,104 @@ fn quick_controls_editor_lists_only_supported_controls() {
             shell_core::QuickControlKind::Focus,
         ]
     );
+}
+
+#[test]
+fn capability_refresh_does_not_move_focus_outside_quick_controls()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    for _ in 0..3 {
+        controller.handle_key(SettingsKey::Next)?;
+    }
+
+    controller.set_supported_quick_controls([shell_core::QuickControlKind::Wifi]);
+
+    let scene = controller.scene();
+    let focused_label = match scene.focus() {
+        Some(SettingsFocus::Navigation(section)) => {
+            scene.navigation_item(section).map(|item| item.label())
+        }
+        _ => None,
+    };
+    assert_eq!(focused_label, Some("Appearance"));
+    Ok(())
+}
+
+#[test]
+fn quick_control_adapter_preserves_typed_modified_state() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.set_supported_quick_controls([shell_core::QuickControlKind::Wifi]);
+    controller.open_section(SettingsSection::QuickControls);
+    controller.edit(SettingsEdit::QuickControlVisibility {
+        control: shell_core::QuickControlKind::Wifi,
+        visible: false,
+    })?;
+
+    let scene = controller.scene();
+    assert_eq!(scene.controls().len(), 1);
+    assert!(scene.controls()[0].modified());
+    Ok(())
+}
+
+#[test]
+fn compact_keyboard_focus_reaches_back_and_footer_actions() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.update_surface(DipRect::new(0.0, 0.0, 680.0, 560.0));
+    controller.open_section(SettingsSection::Dock);
+
+    controller.handle_key(SettingsKey::Previous)?;
+    assert_eq!(controller.scene().focus(), Some(SettingsFocus::Back));
+    controller.handle_key(SettingsKey::Next)?;
+    assert!(matches!(
+        controller.scene().focus(),
+        Some(SettingsFocus::Control(_))
+    ));
+
+    controller.edit(SettingsEdit::DockSpacing(12))?;
+    for _ in 0..5 {
+        controller.handle_key(SettingsKey::Next)?;
+    }
+    assert_eq!(controller.scene().focus(), Some(SettingsFocus::Reset));
+    controller.handle_key(SettingsKey::Next)?;
+    assert_eq!(controller.scene().focus(), Some(SettingsFocus::Cancel));
+    controller.handle_key(SettingsKey::Next)?;
+    assert_eq!(controller.scene().focus(), Some(SettingsFocus::Apply));
+    assert_eq!(
+        controller.handle_key(SettingsKey::Activate)?,
+        vec![QueuedSettingsAction::CommitConfig]
+    );
+    Ok(())
+}
+
+#[test]
+fn slider_pointer_maps_track_position_to_a_snapped_value() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    let surface = DipRect::new(0.0, 0.0, 992.0, 620.0);
+    controller.update_surface(surface);
+    controller.open_section(SettingsSection::Dock);
+    let scene = controller.scene();
+    let layout = layout_settings_scene(&scene, surface);
+    let bounds = layout.controls()[0].bounds();
+    let row_width = (bounds.width - 24.0).max(0.0);
+    let track_right = bounds.x + 12.0 + row_width - 8.0;
+
+    let actions = controller.handle_pointer(
+        DipPoint::new(track_right - 0.5, bounds.y + bounds.height / 2.0),
+        surface,
+    )?;
+
+    assert_eq!(controller.draft().dock().item_size(), 72);
+    assert_eq!(
+        actions,
+        vec![
+            QueuedSettingsAction::PreviewConfig,
+            QueuedSettingsAction::Redraw,
+        ]
+    );
+    Ok(())
 }
 
 #[test]

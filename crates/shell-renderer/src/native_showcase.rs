@@ -38,10 +38,11 @@ use crate::native_showcase_resources::{
     create_detail_format, create_icon_format, create_popover_title_format,
     create_quick_settings_detail_format, create_quick_settings_label_format, create_text_format,
 };
-use crate::native_showcase_settings::{SettingsBrushes, draw_functional_settings};
+use crate::native_showcase_settings::{SettingsBrushes, SettingsFormats, draw_functional_settings};
 use crate::native_showcase_topbar::{TopbarBrushes, draw_functional_topbar};
 use crate::{
     DipRect, PopoverLayoutStyle, QUICK_SETTINGS_BODY_TOP, Rgba8, ShowcaseTokens, TopbarScene,
+    VisualPreferences,
 };
 
 struct ReusableResourceMap<K, V> {
@@ -224,6 +225,7 @@ pub(crate) struct ShowcaseStyle<'a> {
     dock_inset: Option<&'a DockInsetBitmap>,
     liquid_glass: Option<&'a LiquidGlassResources>,
     desktop_blur: Option<&'a DesktopBlurCapture>,
+    visual_preferences: VisualPreferences,
 }
 
 impl<'a> ShowcaseStyle<'a> {
@@ -233,6 +235,7 @@ impl<'a> ShowcaseStyle<'a> {
         dock_inset: Option<&'a DockInsetBitmap>,
         liquid_glass: Option<&'a LiquidGlassResources>,
         desktop_blur: Option<&'a DesktopBlurCapture>,
+        visual_preferences: VisualPreferences,
     ) -> Self {
         Self {
             role,
@@ -240,6 +243,7 @@ impl<'a> ShowcaseStyle<'a> {
             dock_inset,
             liquid_glass,
             desktop_blur,
+            visual_preferences,
         }
     }
 }
@@ -268,7 +272,8 @@ pub(crate) fn draw_showcase(
         ShowcaseTokens::solid_fallback()
     } else {
         ShowcaseTokens::obsidian_glass()
-    };
+    }
+    .with_preferences(style.visual_preferences, solid_material);
     let base_color = if role == ShowcaseRole::Preview {
         if solid_material {
             PREVIEW_PANEL_SOLID_FILL
@@ -279,10 +284,19 @@ pub(crate) fn draw_showcase(
         tokens.surface_base
     };
     let base = resources.brush(context, base_color)?;
-    let panel_base = resources.brush(context, panel_base_color(solid_material))?;
-    let panel_luminance = resources.brush(context, panel_luminance_color(solid_material))?;
-    let panel_veil = resources.brush(context, panel_veil_color(solid_material))?;
-    let panel_reflection = resources.brush(context, panel_reflection_color(solid_material))?;
+    let panel_color = |color| {
+        if solid_material {
+            color
+        } else {
+            style.visual_preferences.apply_background_alpha(color)
+        }
+    };
+    let panel_base = resources.brush(context, panel_color(panel_base_color(solid_material)))?;
+    let panel_luminance =
+        resources.brush(context, panel_color(panel_luminance_color(solid_material)))?;
+    let panel_veil = resources.brush(context, panel_color(panel_veil_color(solid_material)))?;
+    let panel_reflection =
+        resources.brush(context, panel_color(panel_reflection_color(solid_material)))?;
     let raised = resources.brush(context, tokens.surface_raised)?;
     let hover = resources.brush(context, tokens.surface_hover)?;
     let pressed = resources.brush(context, tokens.surface_pressed)?;
@@ -702,18 +716,29 @@ pub(crate) fn draw_showcase(
         }
     } else if role == ShowcaseRole::Settings {
         if let Some(scene) = scenes.settings {
+            let title_format = resources.popover_title(dwrite)?;
             draw_functional_settings(
                 context,
-                &text_format,
-                width,
+                SettingsFormats {
+                    title: &title_format,
+                    label: &quick_label_format,
+                    detail: &quick_detail_format,
+                    icon: &icon_format,
+                },
+                DipRect::new(0.0, 0.0, width, height),
                 scene,
                 SettingsBrushes {
                     raised: &raised,
                     hover: &hover,
                     selected: &selected,
+                    pressed: &pressed,
                     primary: &primary,
                     secondary: &secondary,
+                    disabled: &disabled,
                     accent: &accent,
+                    focus: &focus,
+                    divider: &rim_inner,
+                    on_accent: &quick_on_accent,
                 },
             );
         }
