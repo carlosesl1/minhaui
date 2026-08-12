@@ -5,6 +5,7 @@ use shell_core::DockItemId;
 pub const PREVIEW_DWELL_MS: u64 = 300;
 pub const PREVIEW_BRIDGE_MS: u64 = 200;
 pub const PREVIEW_MOTION_MS: u64 = 160;
+const PREVIEW_SWITCH_DWELL_MS: u64 = 80;
 #[expect(
     dead_code,
     reason = "preview pagination is retained for the next native preview increment"
@@ -22,6 +23,8 @@ pub enum PreviewPhase {
         item: DockItemId,
         page: usize,
         bridge_deadline_ms: Option<u64>,
+        pending_item: Option<DockItemId>,
+        switch_deadline_ms: Option<u64>,
     },
     Closing {
         item: DockItemId,
@@ -92,14 +95,37 @@ impl PreviewController {
                     item,
                     page,
                     bridge_deadline_ms: None,
+                    pending_item: None,
+                    switch_deadline_ms: None,
                 };
                 Vec::new()
             }
-            (PreviewPhase::Visible { .. } | PreviewPhase::Closing { .. }, Some(item)) => {
+            (
+                PreviewPhase::Visible {
+                    item,
+                    page,
+                    bridge_deadline_ms: _,
+                    pending_item: _,
+                    switch_deadline_ms: _,
+                },
+                Some(target),
+            ) => {
+                self.phase = PreviewPhase::Visible {
+                    item,
+                    page,
+                    bridge_deadline_ms: None,
+                    pending_item: Some(target),
+                    switch_deadline_ms: Some(now_ms.saturating_add(PREVIEW_SWITCH_DWELL_MS)),
+                };
+                Vec::new()
+            }
+            (PreviewPhase::Closing { .. }, Some(item)) => {
                 self.phase = PreviewPhase::Visible {
                     item,
                     page: 0,
                     bridge_deadline_ms: None,
+                    pending_item: None,
+                    switch_deadline_ms: None,
                 };
                 vec![PreviewEffect::Update { item, page: 0 }]
             }
@@ -112,6 +138,8 @@ impl PreviewController {
                     item,
                     page,
                     bridge_deadline_ms: Some(now_ms.saturating_add(PREVIEW_BRIDGE_MS)),
+                    pending_item: None,
+                    switch_deadline_ms: None,
                 };
                 Vec::new()
             }
@@ -125,6 +153,8 @@ impl PreviewController {
             item,
             page: 0,
             bridge_deadline_ms: None,
+            pending_item: None,
+            switch_deadline_ms: None,
         };
         let mut effects = Vec::with_capacity(2);
         if hold {
@@ -144,6 +174,8 @@ impl PreviewController {
                 item,
                 page,
                 bridge_deadline_ms: None,
+                pending_item: None,
+                switch_deadline_ms: None,
             };
         }
     }
@@ -169,6 +201,8 @@ impl PreviewController {
             item,
             page,
             bridge_deadline_ms: None,
+            pending_item: None,
+            switch_deadline_ms: None,
         };
         vec![PreviewEffect::Update { item, page }]
     }
@@ -180,6 +214,8 @@ impl PreviewController {
                     item,
                     page: 0,
                     bridge_deadline_ms: None,
+                    pending_item: None,
+                    switch_deadline_ms: None,
                 };
                 vec![
                     PreviewEffect::HoldDockReveal,
@@ -189,6 +225,20 @@ impl PreviewController {
                         from_keyboard: false,
                     },
                 ]
+            }
+            PreviewPhase::Visible {
+                pending_item: Some(item),
+                switch_deadline_ms: Some(deadline_ms),
+                ..
+            } if now_ms >= deadline_ms => {
+                self.phase = PreviewPhase::Visible {
+                    item,
+                    page: 0,
+                    bridge_deadline_ms: None,
+                    pending_item: None,
+                    switch_deadline_ms: None,
+                };
+                vec![PreviewEffect::Update { item, page: 0 }]
             }
             PreviewPhase::Visible {
                 item,

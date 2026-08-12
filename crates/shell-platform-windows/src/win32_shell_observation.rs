@@ -45,6 +45,10 @@ impl ShellObservation {
 }
 
 pub(super) trait ShellObservationSource {
+    fn initial_observation(&mut self, _now_ms: u64) -> ShellObservation {
+        ShellObservation::new(Vec::new(), TopbarSnapshot::default())
+    }
+
     fn capture(&mut self, now_ms: u64) -> Result<ShellObservation>;
 
     fn worker_started(&mut self) -> Result<()> {
@@ -60,6 +64,10 @@ pub(super) struct WindowsShellObservationSource {
 }
 
 impl ShellObservationSource for WindowsShellObservationSource {
+    fn initial_observation(&mut self, now_ms: u64) -> ShellObservation {
+        ShellObservation::new(Vec::new(), self.topbar.snapshot(now_ms))
+    }
+
     fn capture(&mut self, now_ms: u64) -> Result<ShellObservation> {
         let mut windows = discover_running_windows(&[], true, &mut self.identities)?;
         seed_restricted_preview_for_qa(&mut windows)?;
@@ -141,7 +149,7 @@ impl ShellObservationRuntime {
         S: ShellObservationSource + Send + 'static,
         F: FnMut(ShellObservationLoadResult) + Send + 'static,
     {
-        let current = source.capture(initial_now_ms)?;
+        let current = source.initial_observation(initial_now_ms);
         let mut worker_started = false;
         let mut worker_start_error = None;
         let worker = LatestRequestWorker::spawn(
@@ -153,10 +161,12 @@ impl ShellObservationRuntime {
                         worker_start_error = Some(error.code());
                     }
                 }
+                let started_at = std::time::Instant::now();
                 let captured = worker_start_error.map_or_else(
                     || source.capture(request.now_ms).map_err(|error| error.code()),
                     Err,
                 );
+                record_slow_observation(started_at.elapsed());
                 deliver(ShellObservationLoadResult::new(
                     request.generation,
                     captured,
@@ -164,13 +174,18 @@ impl ShellObservationRuntime {
             },
         )
         .map_err(|error| windows::core::Error::new(E_FAIL, error.to_string()))?;
-        Ok(Self {
+        let runtime = Self {
             minimum_interval_ms,
             last_request_ms: initial_now_ms,
-            latest_requested_generation: 0,
+            latest_requested_generation: 1,
             current,
             worker,
-        })
+        };
+        runtime.worker.submit(ShellObservationRequest {
+            generation: 1,
+            now_ms: initial_now_ms,
+        });
+        Ok(runtime)
     }
 
     pub(super) fn request_refresh(&mut self, now_ms: u64) -> bool {
@@ -207,6 +222,19 @@ impl ShellObservationRuntime {
     pub(super) const fn current(&self) -> &ShellObservation {
         &self.current
     }
+}
+
+fn record_slow_observation(elapsed: std::time::Duration) {
+    if elapsed < std::time::Duration::from_millis(16) {
+        return;
+    }
+    let elapsed_us = elapsed.as_micros().to_string();
+    crate::diagnostics::record(
+        crate::diagnostics::DiagnosticModule::AppLifecycle,
+        crate::diagnostics::LogLevel::Info,
+        "performance.shell_observation",
+        &[("elapsed_us", &elapsed_us)],
+    );
 }
 
 #[cfg(windows)]

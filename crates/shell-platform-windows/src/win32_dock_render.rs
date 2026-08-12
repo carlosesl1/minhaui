@@ -137,7 +137,7 @@ impl RuntimeSurfaces {
         result
     }
 
-    fn redraw_dock(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
+    pub(super) fn redraw_dock(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
         let diagnostic_started =
             crate::diagnostics::enabled(crate::diagnostics::DiagnosticModule::DockPerformance)
                 .then(Instant::now);
@@ -214,18 +214,20 @@ impl RuntimeSurfaces {
         update: Result<SurfaceUpdate>,
         windows: SurfaceWindows<'_>,
     ) -> Result<()> {
-        let qa_line = std::env::var_os("MINHA_UI_QA_TRACE")
-            .is_some()
-            .then(|| self.dock_controller.qa_trace_line());
-        finish_dock_update_with(
-            update,
-            || {
-                if let Some(line) = qa_line {
-                    println!("{line}");
+        match dock_update_disposition(update?) {
+            DockUpdateDisposition::Presented => {
+                self.pending_dock_redraw = false;
+                if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
+                    println!("{}", self.dock_controller.qa_trace_line());
                 }
-            },
-            || self.rebuild_native_surfaces(windows),
-        )
+                Ok(())
+            }
+            DockUpdateDisposition::Retry => self.schedule_dock_redraw_retry(windows.dock),
+            DockUpdateDisposition::Rebuild => {
+                self.pending_dock_redraw = false;
+                self.rebuild_native_surfaces(windows)
+            }
+        }
     }
 }
 
@@ -233,21 +235,23 @@ const fn dock_width_measurement_required(change: DockRenderChange) -> bool {
     change.state_changed || change.rebuild_requested
 }
 
+#[cfg(test)]
 const fn dock_qa_trace_required(update: Option<SurfaceUpdate>) -> bool {
     matches!(update, Some(SurfaceUpdate::Presented))
 }
 
-fn finish_dock_update_with<E>(
-    update: std::result::Result<SurfaceUpdate, E>,
-    on_presented: impl FnOnce(),
-    on_rebuild: impl FnOnce() -> std::result::Result<(), E>,
-) -> std::result::Result<(), E> {
-    let update = update?;
-    if dock_qa_trace_required(Some(update)) {
-        on_presented();
-        Ok(())
-    } else {
-        on_rebuild()
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DockUpdateDisposition {
+    Presented,
+    Retry,
+    Rebuild,
+}
+
+const fn dock_update_disposition(update: SurfaceUpdate) -> DockUpdateDisposition {
+    match update {
+        SurfaceUpdate::Presented => DockUpdateDisposition::Presented,
+        SurfaceUpdate::FrameSkipped => DockUpdateDisposition::Retry,
+        SurfaceUpdate::RebuildAllRequired => DockUpdateDisposition::Rebuild,
     }
 }
 
@@ -333,7 +337,10 @@ mod tests {
     use shell_renderer::Dpi;
     use shell_renderer::native::SurfaceMetrics;
 
-    use super::{dock_qa_trace_required, dock_width_measurement_required, finish_dock_update_with};
+    use super::{
+        DockUpdateDisposition, dock_qa_trace_required, dock_update_disposition,
+        dock_width_measurement_required,
+    };
 
     #[test]
     fn dock_surface_policy_covers_missing_redraw_resize_and_recovery() {
@@ -358,6 +365,7 @@ mod tests {
     #[test]
     fn dock_qa_trace_is_emitted_only_after_presented_updates() {
         assert!(dock_qa_trace_required(Some(SurfaceUpdate::Presented)));
+        assert!(!dock_qa_trace_required(Some(SurfaceUpdate::FrameSkipped)));
         assert!(!dock_qa_trace_required(Some(
             SurfaceUpdate::RebuildAllRequired
         )));
@@ -365,43 +373,19 @@ mod tests {
     }
 
     #[test]
-    fn dock_finish_wiring_runs_qa_for_presented_and_rebuild_only_for_recovery() {
-        let calls = std::cell::RefCell::new(Vec::new());
-        finish_dock_update_with(
-            Ok::<_, &'static str>(SurfaceUpdate::Presented),
-            || calls.borrow_mut().push("qa"),
-            || {
-                calls.borrow_mut().push("rebuild");
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(calls.borrow().as_slice(), ["qa"]);
-
-        calls.borrow_mut().clear();
-        finish_dock_update_with(
-            Ok::<_, &'static str>(SurfaceUpdate::RebuildAllRequired),
-            || calls.borrow_mut().push("qa"),
-            || {
-                calls.borrow_mut().push("rebuild");
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(calls.borrow().as_slice(), ["rebuild"]);
-
-        calls.borrow_mut().clear();
-        let error = finish_dock_update_with(
-            Err::<SurfaceUpdate, _>("fatal"),
-            || calls.borrow_mut().push("qa"),
-            || {
-                calls.borrow_mut().push("rebuild");
-                Ok(())
-            },
-        )
-        .unwrap_err();
-        assert_eq!(error, "fatal");
-        assert!(calls.borrow().is_empty());
+    fn dock_finish_policy_distinguishes_present_retry_and_recovery() {
+        assert_eq!(
+            dock_update_disposition(SurfaceUpdate::Presented),
+            DockUpdateDisposition::Presented
+        );
+        assert_eq!(
+            dock_update_disposition(SurfaceUpdate::FrameSkipped),
+            DockUpdateDisposition::Retry
+        );
+        assert_eq!(
+            dock_update_disposition(SurfaceUpdate::RebuildAllRequired),
+            DockUpdateDisposition::Rebuild
+        );
     }
 
     #[test]

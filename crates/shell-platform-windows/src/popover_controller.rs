@@ -105,6 +105,19 @@ impl PopoverController {
         self.load_generation
     }
 
+    pub fn begin_background_apps_refresh(&mut self, cached: Option<Vec<PopoverItem>>) -> u64 {
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.external_active = None;
+        let state = match cached {
+            None => PopoverLoadState::Loading,
+            Some(items) if items.is_empty() => PopoverLoadState::Empty,
+            Some(items) => PopoverLoadState::Ready(items),
+        };
+        let payload = crate::PopoverPayload::new(Popover::BackgroundApps, state);
+        self.active = ActivePopover::from_payload(payload).ok();
+        self.load_generation
+    }
+
     /// Marks a stable background-app row as externally active while its
     /// application-owned menu is open.  The ID is resolved to an index only
     /// when a BackgroundApps popover is active; no row geometry is changed.

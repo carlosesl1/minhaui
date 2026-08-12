@@ -2,12 +2,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use shell_core::{
     DockItemId, DockLayoutEntry, DockSeparatorId, RunningState, ShellEvent, ShellState, WindowId,
     reduce,
 };
-use shell_renderer::{DipRect, DockScene, WindowPreviewVisual};
+use shell_renderer::{DipRect, DockItemVisual, DockLayout, DockScene, WindowPreviewVisual};
 
 use crate::dock_launch::initial_launch_targets;
 use crate::dock_visuals::{DockIconSourceCache, visual_items};
@@ -27,6 +28,8 @@ pub struct DockController {
     pub(crate) visual_generation: u64,
     pub(crate) launch_targets: HashMap<DockItemId, String>,
     pub(crate) icon_sources: RefCell<DockIconSourceCache>,
+    pub(crate) visual_items: RefCell<Option<Arc<[DockItemVisual]>>>,
+    pub(crate) hit_layout: RefCell<Option<DockLayout>>,
     pub(crate) previews: HashMap<WindowId, crate::PreviewWindowState>,
     pub(crate) animator: DockAnimator,
     pub(crate) drag_session: Option<DockDragSession>,
@@ -61,6 +64,8 @@ impl DockController {
             visual_generation: 0,
             launch_targets,
             icon_sources: RefCell::new(DockIconSourceCache::default()),
+            visual_items: RefCell::new(None),
+            hit_layout: RefCell::new(None),
             previews: HashMap::new(),
             animator: DockAnimator::new(),
             drag_session: None,
@@ -99,8 +104,12 @@ impl DockController {
         self.launch_targets.get(&item).map(String::as_str)
     }
 
-    pub const fn update_surface(&mut self, surface: DipRect) {
+    pub fn update_surface(&mut self, surface: DipRect) {
+        if self.surface == surface {
+            return;
+        }
         self.surface = surface;
+        self.invalidate_hit_layout();
     }
 
     #[must_use]
@@ -139,10 +148,9 @@ impl DockController {
                     drag.target_valid,
                 )
             });
-        let mut icon_sources = self.icon_sources.borrow_mut();
-        let mut scene = DockScene::new(
+        let mut scene = DockScene::from_shared_items(
             self.config.layout(),
-            visual_items(&self.state, layout, &self.launch_targets, &mut icon_sources),
+            self.visual_items_for_layout(layout),
         )
         .with_hovered_item(self.hovered_item.map(DockItemId::value))
         .with_hover_position_x(self.animator.position_x())
@@ -264,11 +272,54 @@ impl DockController {
     ) -> Result<Vec<crate::QueuedDockAction>, DockControllerError> {
         let transition = reduce(&self.state, event)?;
         self.state = transition.state;
+        self.invalidate_model_caches();
         Ok(transition
             .effects
             .into_iter()
             .map(crate::QueuedDockAction::Effect)
             .collect())
+    }
+
+    pub(crate) fn invalidate_hit_layout(&self) {
+        self.hit_layout.replace(None);
+    }
+
+    pub(crate) fn invalidate_model_caches(&self) {
+        self.visual_items.replace(None);
+        self.invalidate_hit_layout();
+    }
+
+    pub(crate) fn visual_items_for_layout(
+        &self,
+        layout: &[DockLayoutEntry],
+    ) -> Arc<[DockItemVisual]> {
+        let cacheable = self.drag_session.is_none() && layout == self.state.dock_layout();
+        if cacheable {
+            let mut cached_items = self.visual_items.borrow_mut();
+            if let Some(items) = cached_items.as_ref() {
+                return Arc::clone(items);
+            }
+            let mut icon_sources = self.icon_sources.borrow_mut();
+            let items: Arc<[DockItemVisual]> =
+                visual_items(&self.state, layout, &self.launch_targets, &mut icon_sources).into();
+            *cached_items = Some(Arc::clone(&items));
+            return items;
+        }
+        let mut icon_sources = self.icon_sources.borrow_mut();
+        visual_items(&self.state, layout, &self.launch_targets, &mut icon_sources).into()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hit_layout_cache_populated(&self) -> bool {
+        self.hit_layout.borrow().is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visual_items_cache_strong_count(&self) -> usize {
+        self.visual_items
+            .borrow()
+            .as_ref()
+            .map_or(0, Arc::strong_count)
     }
 }
 

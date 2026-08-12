@@ -1,6 +1,7 @@
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
+use crate::latest_request_worker::LatestRequestWorker;
 use crate::night_light_coordinator::{
     NightLightApplyError, NightLightApplyResult, NightLightRequest,
 };
@@ -15,21 +16,49 @@ pub(crate) struct NightLightWorkerResult {
     pub(crate) result: Result<NightLightApplyResult, NightLightApplyError>,
 }
 
+#[derive(Clone, Copy)]
+struct NightLightWorkerRequest {
+    request: NightLightRequest,
+    wake_window: NativeWindowId,
+}
+
 pub(super) fn request_night_light(request: NightLightRequest, wake_window: NativeWindowId) {
-    std::thread::spawn(move || {
-        let result = crate::win32_quick_settings_system::apply_night_light(
-            request.active,
-            request.minimum_timestamp,
-        );
-        queue_event(RoutedPlatformEvent::window_id(
-            wake_window,
-            PlatformEvent::NightLightCompleted(NightLightWorkerResult {
-                request: request.id,
-                result,
-            }),
-        ));
-        wake_owner_window(wake_window);
+    static WORKER: std::sync::OnceLock<Option<LatestRequestWorker<NightLightWorkerRequest>>> =
+        std::sync::OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        LatestRequestWorker::spawn("night-light", |work: NightLightWorkerRequest| {
+            complete_night_light(work);
+        })
+        .ok()
     });
+    if let Some(worker) = worker {
+        worker.submit(NightLightWorkerRequest {
+            request,
+            wake_window,
+        });
+    } else {
+        std::thread::spawn(move || {
+            complete_night_light(NightLightWorkerRequest {
+                request,
+                wake_window,
+            });
+        });
+    }
+}
+
+fn complete_night_light(work: NightLightWorkerRequest) {
+    let result = crate::win32_quick_settings_system::apply_night_light(
+        work.request.active,
+        work.request.minimum_timestamp,
+    );
+    queue_event(RoutedPlatformEvent::window_id(
+        work.wake_window,
+        PlatformEvent::NightLightCompleted(NightLightWorkerResult {
+            request: work.request.id,
+            result,
+        }),
+    ));
+    wake_owner_window(work.wake_window);
 }
 
 fn wake_owner_window(window: NativeWindowId) {

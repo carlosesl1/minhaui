@@ -13,11 +13,13 @@ use windows::core::{Result, w};
 use crate::PlatformEvent;
 use crate::win32_shell_observation::ShellObservationRuntime;
 use crate::win32_slots::{
-    SlotFeatures, create_slots, dispatch_event, handle_broadcast_event, print_monitor_placements,
+    SlotFeatures, collect_dock_frame_waitables, create_slots, dispatch_event,
+    handle_broadcast_event, print_monitor_placements,
 };
+use crate::win32_taskbar_visibility::ExplorerTaskbarVisibilityGuard;
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::WindowClass;
-use crate::win32_windowing::{message_loop, monitor_placement_inputs};
+use crate::win32_windowing::{MessageLoopAction, message_loop, monitor_placement_inputs};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShowcaseRunConfig {
@@ -99,6 +101,7 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     // null-terminated UTF-16 string and the returned identifier is process-global.
     let taskbar_message = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
     TASKBAR_CREATED.store(taskbar_message, Ordering::Release);
+    let mut explorer_taskbars = ExplorerTaskbarVisibilityGuard::prepare_work_area()?;
 
     let monitors = monitor_placement_inputs()?;
     if monitors.is_empty() {
@@ -107,7 +110,8 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             "no display monitors were enumerated",
         ));
     }
-    print_monitor_placements(&monitors);
+    let shell_config = crate::win32_config::load_config();
+    print_monitor_placements(&monitors, &shell_config);
     let liquid_glass = config.liquid_glass && !config.safe_mode && !config.high_contrast;
     println!(
         "ACCESSIBILITY safe_mode={} high_contrast={} reduced_motion={} liquid_glass={}",
@@ -123,7 +127,6 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         reduced_motion: config.reduced_motion,
         liquid_glass,
     };
-    let shell_config = crate::win32_config::load_config();
     let mut observation_runtime =
         ShellObservationRuntime::new(1_000, crate::win32_owner::now_ms())?;
     let initial_observation = observation_runtime.current();
@@ -138,6 +141,11 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         .qa_exit_ms
         .map(|milliseconds| TimerGuard::start(slots[0].topbar_hwnd(), milliseconds))
         .transpose()?;
+    let dock_handles = slots
+        .iter()
+        .map(|slot| slot.dock_hwnd())
+        .collect::<Vec<_>>();
+    explorer_taskbars.reconcile_and_hide(&dock_handles)?;
     for slot in &mut slots {
         slot.show_shells();
         slot.print_windows();
@@ -153,6 +161,10 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             PlatformEvent::PowerResumed,
             PlatformEvent::TaskbarCreated,
         ] {
+            let taskbar_layout_changed = matches!(
+                event,
+                PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated
+            );
             handle_broadcast_event(
                 &class,
                 features,
@@ -161,22 +173,48 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                 &mut slots,
                 event,
             )?;
+            if taskbar_layout_changed {
+                let dock_handles = slots
+                    .iter()
+                    .map(|slot| slot.dock_hwnd())
+                    .collect::<Vec<_>>();
+                explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+            }
         }
     }
-    let result = message_loop(|event| {
-        dispatch_event(
-            &class,
-            features,
-            &shell_config,
-            &mut observation_runtime,
-            &mut slots,
-            event,
-        )
+    let result = message_loop(|action| match action {
+        MessageLoopAction::CollectDockFrameWaitables(waitables) => {
+            collect_dock_frame_waitables(&slots, waitables);
+            Ok(true)
+        }
+        MessageLoopAction::Dispatch(event) => {
+            let taskbar_layout_changed = matches!(
+                event.event(),
+                PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated
+            );
+            let keep_running = dispatch_event(
+                &class,
+                features,
+                &shell_config,
+                &mut observation_runtime,
+                &mut slots,
+                event,
+            )?;
+            if taskbar_layout_changed {
+                let dock_handles = slots
+                    .iter()
+                    .map(|slot| slot.dock_hwnd())
+                    .collect::<Vec<_>>();
+                explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+            }
+            Ok(keep_running)
+        }
     });
     drop(observation_runtime);
     drop(slots);
     drop(timer);
     drop(class);
+    drop(explorer_taskbars);
     result
 }
 

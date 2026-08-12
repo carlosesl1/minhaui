@@ -5,7 +5,7 @@ mod resize;
 
 pub use animation::SurfaceVisibilityAnimation;
 
-use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, HWND};
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, HANDLE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -26,9 +26,10 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
-    IDXGISwapChain3,
+    IDXGISwapChain2, IDXGISwapChain3,
 };
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::core::{Interface, Result};
@@ -41,7 +42,7 @@ use crate::native_liquid_glass::{
     LiquidGlassMode, LiquidGlassProfile, LiquidGlassResources, liquid_glass_mode, profile_for_role,
 };
 use crate::native_present::{present_swap_chain, present_swap_chain_initial};
-use crate::native_showcase::{ShowcaseStyle, draw_showcase};
+use crate::native_showcase::{ShowcaseResourceCache, ShowcaseStyle, draw_showcase};
 use crate::native_showcase_resources::{DockInsetBitmap, create_dock_inset_bitmap};
 use crate::{
     ContextMenuScene, DockScene, Dpi, PopoverScene, QuickSettingsScene, SettingsScene, TopbarScene,
@@ -69,6 +70,10 @@ pub enum ShowcaseRole {
     Settings,
 }
 
+const fn should_present_initial_frame(role: ShowcaseRole, visible: bool) -> bool {
+    visible || matches!(role, ShowcaseRole::Topbar | ShowcaseRole::Dock)
+}
+
 #[derive(Clone, Copy)]
 pub struct ShellScenes<'a> {
     pub topbar: Option<&'a TopbarScene>,
@@ -87,6 +92,7 @@ pub struct CompositionRenderer {
     dcomp: IDCompositionDevice,
     device_kind: DeviceKind,
     icons: RefCell<NativeIconCache>,
+    showcase_resources: RefCell<ShowcaseResourceCache>,
     solid_material: bool,
     liquid_glass_mode: LiquidGlassMode,
 }
@@ -94,6 +100,8 @@ pub struct CompositionRenderer {
 pub struct WindowSurface {
     hwnd: HWND,
     pub(super) swap_chain: IDXGISwapChain1,
+    pub(super) swap_chain_flags: DXGI_SWAP_CHAIN_FLAG,
+    frame_latency_waitable: Option<HANDLE>,
     pub(super) back_buffers: RefCell<BackBufferCache<ID2D1Bitmap1>>,
     device: ID3D11Device,
     composition: DirectCompositionAttachment,
@@ -199,6 +207,7 @@ impl CompositionRenderer {
             dcomp,
             device_kind,
             icons: RefCell::new(icons),
+            showcase_resources: RefCell::new(ShowcaseResourceCache::default()),
             solid_material,
             liquid_glass_mode: liquid_glass_mode(
                 liquid_glass,
@@ -229,7 +238,7 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). The adapter has a DXGI factory parent;
         // the requested `IDXGIFactory2` is required by composition swap chains.
         let factory: IDXGIFactory2 = unsafe { adapter.GetParent() }?;
-        let description = DXGI_SWAP_CHAIN_DESC1 {
+        let mut description = DXGI_SWAP_CHAIN_DESC1 {
             Width: width,
             Height: height,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -245,10 +254,8 @@ impl CompositionRenderer {
             AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
             Flags: 0,
         };
-        // SAFETY: Category 8 (FFI boundary). The descriptor uses the documented
-        // flip-model composition combination and the device outlives the chain.
-        let swap_chain =
-            unsafe { factory.CreateSwapChainForComposition(&self._d3d, &description, None) }?;
+        let (swap_chain, swap_chain_flags, frame_latency_waitable) =
+            self.create_composition_swap_chain(&factory, &mut description, role)?;
         let index = Self::current_back_buffer_index(&swap_chain)?;
         let mut back_buffers = BackBufferCache::default();
         let bitmap = back_buffers
@@ -321,10 +328,12 @@ impl CompositionRenderer {
         } else {
             None
         };
+        let mut showcase_resources = self.showcase_resources.borrow_mut();
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
             &mut icons,
+            &mut showcase_resources,
             ShowcaseStyle::new(
                 role,
                 self.solid_material,
@@ -340,6 +349,8 @@ impl CompositionRenderer {
         let surface = WindowSurface {
             hwnd,
             swap_chain,
+            swap_chain_flags,
+            frame_latency_waitable,
             back_buffers: RefCell::new(back_buffers),
             device: self._d3d.clone(),
             composition,
@@ -350,8 +361,55 @@ impl CompositionRenderer {
             liquid_glass,
             desktop_blur: RefCell::new(desktop_blur),
         };
-        validate_initial_present_outcome(surface.present_initial()?)?;
+        // SAFETY: The surface owns this HWND. Hidden transient surfaces are
+        // redrawn and presented immediately before their first show.
+        let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+        if should_present_initial_frame(role, visible) {
+            validate_initial_present_outcome(surface.present_initial()?)?;
+        }
         Ok(surface)
+    }
+
+    fn create_composition_swap_chain(
+        &self,
+        factory: &IDXGIFactory2,
+        description: &mut DXGI_SWAP_CHAIN_DESC1,
+        role: ShowcaseRole,
+    ) -> Result<(IDXGISwapChain1, DXGI_SWAP_CHAIN_FLAG, Option<HANDLE>)> {
+        let preferred_flags = swap_chain_flags_for_role(role);
+        description.Flags = preferred_flags.0 as u32;
+        let preferred = self
+            .create_swap_chain(factory, description)
+            .and_then(|swap_chain| {
+                let waitable = frame_latency_waitable(&swap_chain, preferred_flags)?;
+                Ok((swap_chain, preferred_flags, waitable))
+            });
+        match preferred {
+            Ok(surface) => Ok(surface),
+            Err(error)
+                if preferred_flags.contains(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) =>
+            {
+                eprintln!(
+                    "DOCK_PACING mode=timer_fallback hresult={:#010X}",
+                    error.code().0 as u32
+                );
+                let fallback_flags = DXGI_SWAP_CHAIN_FLAG(0);
+                description.Flags = fallback_flags.0 as u32;
+                let swap_chain = self.create_swap_chain(factory, description)?;
+                Ok((swap_chain, fallback_flags, None))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn create_swap_chain(
+        &self,
+        factory: &IDXGIFactory2,
+        description: &DXGI_SWAP_CHAIN_DESC1,
+    ) -> Result<IDXGISwapChain1> {
+        // SAFETY: Category 8 (FFI boundary). The descriptor uses a documented
+        // flip-model composition combination and the device outlives the chain.
+        unsafe { factory.CreateSwapChainForComposition(&self._d3d, description, None) }
     }
 
     fn create_direct_attachment(
@@ -431,10 +489,12 @@ impl CompositionRenderer {
                 .SetDpi(surface.dpi.raw() as f32, surface.dpi.raw() as f32);
         }
         let mut icons = self.icons.borrow_mut();
+        let mut showcase_resources = self.showcase_resources.borrow_mut();
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
             &mut icons,
+            &mut showcase_resources,
             ShowcaseStyle::new(
                 role,
                 self.solid_material,
@@ -546,6 +606,11 @@ impl WindowSurface {
         SurfaceMetrics::new(self.width, self.height, self.dpi)
     }
 
+    #[must_use]
+    pub const fn frame_latency_waitable_object(&self) -> Option<HANDLE> {
+        self.frame_latency_waitable
+    }
+
     pub fn present(&self) -> Result<PresentOutcome> {
         present_swap_chain(&self.swap_chain, &self.device)
     }
@@ -588,13 +653,45 @@ impl WindowSurface {
     }
 }
 
+const fn swap_chain_flags_for_role(role: ShowcaseRole) -> DXGI_SWAP_CHAIN_FLAG {
+    if matches!(role, ShowcaseRole::Dock) {
+        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+    } else {
+        DXGI_SWAP_CHAIN_FLAG(0)
+    }
+}
+
+fn frame_latency_waitable(
+    swap_chain: &IDXGISwapChain1,
+    flags: DXGI_SWAP_CHAIN_FLAG,
+) -> Result<Option<HANDLE>> {
+    if !flags.contains(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) {
+        return Ok(None);
+    }
+    let paced_chain: IDXGISwapChain2 = swap_chain.cast()?;
+    // SAFETY: Category 8 (FFI boundary). The chain was created with the frame
+    // latency waitable flag and owns the returned synchronization handle.
+    unsafe { paced_chain.SetMaximumFrameLatency(1) }?;
+    // SAFETY: The same live waitable swap chain owns this borrowed handle. DXGI
+    // closes it with the swap chain, so callers must not close it.
+    let waitable = unsafe { paced_chain.GetFrameLatencyWaitableObject() };
+    if waitable.is_invalid() {
+        return Err(windows::core::Error::from_hresult(E_FAIL));
+    }
+    Ok(Some(waitable))
+}
+
 #[cfg(test)]
 mod tests {
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    };
+
     use crate::Dpi;
 
     use super::{
-        BackBufferCache, PresentOutcome, SurfaceMetrics, WindowSurface,
-        validate_initial_present_outcome,
+        BackBufferCache, PresentOutcome, ShowcaseRole, SurfaceMetrics, WindowSurface,
+        should_present_initial_frame, swap_chain_flags_for_role, validate_initial_present_outcome,
     };
 
     #[test]
@@ -654,10 +751,36 @@ mod tests {
     }
 
     #[test]
+    fn only_the_dock_requests_compositor_frame_pacing() {
+        assert_eq!(
+            swap_chain_flags_for_role(ShowcaseRole::Dock),
+            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+        );
+        for role in [
+            ShowcaseRole::Topbar,
+            ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
+            ShowcaseRole::Preview,
+            ShowcaseRole::Settings,
+        ] {
+            assert_eq!(swap_chain_flags_for_role(role), DXGI_SWAP_CHAIN_FLAG(0));
+        }
+    }
+
+    #[test]
     fn initial_frame_backpressure_never_installs_a_blank_surface() {
         let error = validate_initial_present_outcome(PresentOutcome::FrameSkipped)
             .expect_err("a skipped first frame must reject the surface");
 
         assert_eq!(error.code(), windows::Win32::Foundation::E_FAIL);
+    }
+
+    #[test]
+    fn hidden_transient_surfaces_defer_their_initial_present() {
+        assert!(should_present_initial_frame(ShowcaseRole::Topbar, false));
+        assert!(should_present_initial_frame(ShowcaseRole::Dock, false));
+        assert!(!should_present_initial_frame(ShowcaseRole::Popover, false));
+        assert!(!should_present_initial_frame(ShowcaseRole::Preview, false));
+        assert!(should_present_initial_frame(ShowcaseRole::Popover, true));
     }
 }

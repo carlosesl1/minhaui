@@ -35,6 +35,8 @@ fn preview_group_preserves_every_window_in_stable_order() -> Result<(), Box<dyn 
     // Given: one dock application owns three independently addressable windows.
     let mut controller = DockController::new(state()?, DockRuntimeConfig::default())?;
     controller.sync_running_windows_with_previews(&observed_windows()?)?;
+    assert!(controller.has_preview_windows_for_item(DockItemId::new(1)));
+    assert!(!controller.has_preview_windows_for_item(DockItemId::new(999)));
 
     // When: the application's preview group is requested.
     let group = controller.preview_windows_for_item(DockItemId::new(1));

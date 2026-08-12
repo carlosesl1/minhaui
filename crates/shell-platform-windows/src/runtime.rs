@@ -74,6 +74,7 @@ impl RuntimeOrchestrator {
             }
             PlatformEvent::AppBarPositionChanged => RuntimeAction::None,
             PlatformEvent::QuickSettingsRefresh(_)
+            | PlatformEvent::QuickSettingsWorkerCompleted(_)
             | PlatformEvent::MediaSessionsChanged(_)
             | PlatformEvent::MediaTransportCompleted(_)
             | PlatformEvent::NightLightCompleted(_)
@@ -109,6 +110,7 @@ impl RuntimeOrchestrator {
             | PlatformEvent::SyncWindows
             | PlatformEvent::ShellObservationLoaded(_)
             | PlatformEvent::BackgroundAppsLoaded(_)
+            | PlatformEvent::ShellMenuActivationCompleted(_)
             | PlatformEvent::ExternalMenuPopupStarted { .. }
             | PlatformEvent::ExternalMenuPopupEnded { .. } => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,

@@ -33,6 +33,8 @@ fn process_observation_deduplicates_ticks_and_unchanged_snapshots()
     let mut runtime = ShellObservationRuntime::with_source(source, 1_000, 1_000, move |result| {
         let _ = result_tx.send(result);
     })?;
+    let initial = result_rx.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(runtime.complete(initial), ShellObservationUpdate::Unchanged);
     assert!(!runtime.request_refresh(1_010));
     assert!(!runtime.request_refresh(1_999));
     assert!(runtime.request_refresh(2_000));
@@ -58,7 +60,7 @@ impl ShellObservationSource for ThreadRecordingSource {
 }
 
 #[test]
-fn scheduled_refresh_captures_on_the_owned_worker_instead_of_the_ui_thread()
+fn initial_and_scheduled_refresh_capture_on_the_owned_worker_instead_of_the_ui_thread()
 -> Result<(), Box<dyn std::error::Error>> {
     let ui_thread = std::thread::current().id();
     let (capture_tx, capture_rx) = mpsc::channel();
@@ -73,17 +75,22 @@ fn scheduled_refresh_captures_on_the_owned_worker_instead_of_the_ui_thread()
             let _ = result_tx.send(result);
         },
     )?;
+    let initial_worker_thread = capture_rx.recv_timeout(Duration::from_secs(1))?;
+    let initial_result = result_rx.recv_timeout(Duration::from_secs(1))?;
+    assert_ne!(
+        initial_worker_thread, ui_thread,
+        "startup discovery must not block the UI thread"
+    );
     assert_eq!(
-        capture_rx.recv_timeout(Duration::from_secs(1))?,
-        ui_thread,
-        "initial startup capture remains on the caller before the message loop"
+        runtime.complete(initial_result),
+        ShellObservationUpdate::Unchanged
     );
 
     assert!(runtime.request_refresh(2_000));
     let worker_thread = capture_rx.recv_timeout(Duration::from_secs(1))?;
     let result = result_rx.recv_timeout(Duration::from_secs(1))?;
 
-    assert_ne!(worker_thread, ui_thread);
+    assert_eq!(worker_thread, initial_worker_thread);
     assert_eq!(runtime.complete(result), ShellObservationUpdate::Unchanged);
     Ok(())
 }
@@ -97,7 +104,7 @@ struct SlowObservationSource {
 impl ShellObservationSource for SlowObservationSource {
     fn capture(&mut self, _now_ms: u64) -> windows::core::Result<ShellObservation> {
         let capture = self.captures.fetch_add(1, Ordering::AcqRel);
-        if capture == 1 {
+        if capture == 0 {
             let _ = self.slow_capture_started.send(());
             let (released, wake) = &*self.release_slow_capture;
             let mut released = released
@@ -135,9 +142,8 @@ fn result_is_stale_when_a_newer_refresh_was_requested_while_capture_was_running(
             let _ = result_tx.send(result);
         },
     )?;
-    assert!(runtime.request_refresh(2_000));
     started_rx.recv_timeout(Duration::from_secs(1))?;
-    assert!(runtime.request_refresh(3_000));
+    assert!(runtime.request_refresh(2_000));
     {
         let (released, wake) = &*release_slow_capture;
         *released
@@ -150,6 +156,6 @@ fn result_is_stale_when_a_newer_refresh_was_requested_while_capture_was_running(
     assert_eq!(runtime.complete(stale), ShellObservationUpdate::Stale);
     let latest = result_rx.recv_timeout(Duration::from_secs(1))?;
     assert_eq!(runtime.complete(latest), ShellObservationUpdate::Unchanged);
-    assert_eq!(captures.load(Ordering::Acquire), 3);
+    assert_eq!(captures.load(Ordering::Acquire), 2);
     Ok(())
 }

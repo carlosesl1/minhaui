@@ -6,7 +6,9 @@ use crate::{BackgroundAppId, TrayActivationId};
 
 /// An unobserved native activation is given one bounded opportunity to
 /// produce a menu popup before the caller opens its shell-owned fallback.
-pub(crate) const EXTERNAL_MENU_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const EXTERNAL_MENU_OBSERVATION_INTERVAL_MS: u32 = 200;
+pub(crate) const EXTERNAL_MENU_OBSERVATION_TIMEOUT: Duration =
+    Duration::from_millis(EXTERNAL_MENU_OBSERVATION_INTERVAL_MS as u64);
 
 /// Custom application menus do not always expose a popup-end event.  Once a
 /// popup has been observed, this watchdog releases the hold without sending
@@ -24,9 +26,9 @@ pub(crate) enum ExternalMenuPhase {
 pub(crate) enum ExternalMenuEffect {
     /// The row visual state or focus changed and the popover should redraw.
     Redraw,
-    /// Consume the one deactivation generated while handing focus to the
+    /// Keep the shell popover visible while focus belongs to the
     /// application-owned menu.
-    SuppressDismissOnce,
+    SuppressDismissal,
     /// The native popup was observed for this exact activation token.
     ActivationObserved { activation: TrayActivationId },
     /// No popup was observed in time. The owner records this protocol as
@@ -49,7 +51,6 @@ struct MenuHold {
     generation: u64,
     armed_at: Instant,
     observed_at: Option<Instant>,
-    suppress_dismissal: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,7 +166,6 @@ impl ExternalMenuCoordinator {
             generation,
             armed_at: now,
             observed_at: None,
-            suppress_dismissal: true,
         });
         effects.push(ExternalMenuEffect::Redraw);
         effects
@@ -252,27 +252,20 @@ impl ExternalMenuCoordinator {
         terminal_effects(hold.app)
     }
 
-    /// Consumes exactly one `WA_INACTIVE` dismissal allowance.  The hold is
-    /// retained; only the allowance is consumed so a later deactivation can
-    /// dismiss the shell popover normally.
+    /// Suppresses deactivation while the application-owned menu hand-off is
+    /// live. Win32 can emit both `WM_KILLFOCUS` and `WA_INACTIVE` for the same
+    /// focus transfer, so suppression lasts until the hold is released.
     pub(crate) fn on_wa_inactive(&mut self) -> Vec<ExternalMenuEffect> {
-        let hold = match self.state {
-            State::Armed(hold) | State::Observed(hold) if hold.suppress_dismissal => hold,
-            State::Idle | State::Armed(_) | State::Observed(_) => return Vec::new(),
-        };
-        let hold = MenuHold {
-            suppress_dismissal: false,
-            ..hold
-        };
-        self.state = match hold.observed_at {
-            Some(_) => State::Observed(hold),
-            None => State::Armed(hold),
-        };
-        vec![ExternalMenuEffect::SuppressDismissOnce]
+        match self.state {
+            State::Armed(_) | State::Observed(_) => {
+                vec![ExternalMenuEffect::SuppressDismissal]
+            }
+            State::Idle => Vec::new(),
+        }
     }
 
-    /// Releases an unobserved activation at one second, or an observed custom
-    /// menu at the 30-second watchdog deadline.
+    /// Releases an unobserved activation after the short compatibility retry
+    /// budget, or an observed custom menu at the 30-second watchdog deadline.
     pub(crate) fn tick(&mut self, now: Instant) -> Vec<ExternalMenuEffect> {
         match self.state {
             State::Armed(hold)
@@ -499,18 +492,24 @@ mod tests {
     }
 
     #[test]
-    fn only_one_wa_inactive_is_suppressed_while_hold_is_live() {
+    fn every_deactivation_is_suppressed_while_external_menu_hold_is_live() {
         let base = Instant::now();
         let mut coordinator = ExternalMenuCoordinator::new();
         coordinator.set_generation(GENERATION);
         coordinator.arm(APP, id(4), OWNER, GENERATION, at(base, 0));
         assert_eq!(
             coordinator.on_wa_inactive(),
-            vec![ExternalMenuEffect::SuppressDismissOnce]
+            vec![ExternalMenuEffect::SuppressDismissal]
         );
-        assert!(coordinator.on_wa_inactive().is_empty());
+        assert_eq!(
+            coordinator.on_wa_inactive(),
+            vec![ExternalMenuEffect::SuppressDismissal]
+        );
         coordinator.popup_start(OWNER, id(4), GENERATION, at(base, 1));
-        assert!(coordinator.on_wa_inactive().is_empty());
+        assert_eq!(
+            coordinator.on_wa_inactive(),
+            vec![ExternalMenuEffect::SuppressDismissal]
+        );
         coordinator.popup_end(OWNER, id(4), GENERATION, at(base, 2));
         assert!(coordinator.on_wa_inactive().is_empty());
     }
@@ -540,6 +539,32 @@ mod tests {
             ]
         );
         assert_eq!(coordinator.phase(), ExternalMenuPhase::Idle);
+    }
+
+    #[test]
+    fn unobserved_native_menu_retries_within_the_interaction_budget() {
+        let base = Instant::now();
+        let mut coordinator = ExternalMenuCoordinator::new();
+        coordinator.set_generation(GENERATION);
+        coordinator.arm(APP, id(50), OWNER, GENERATION, base);
+
+        assert!(
+            coordinator
+                .tick(base + Duration::from_millis(199))
+                .is_empty()
+        );
+        assert_eq!(
+            coordinator.tick(base + Duration::from_millis(200)),
+            vec![
+                ExternalMenuEffect::RetryNativeActivation {
+                    app: APP,
+                    activation: id(50),
+                },
+                ExternalMenuEffect::RestoreFocus(APP),
+                ExternalMenuEffect::Release,
+                ExternalMenuEffect::Redraw,
+            ]
+        );
     }
 
     #[test]

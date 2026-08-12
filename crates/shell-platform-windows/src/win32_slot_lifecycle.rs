@@ -19,6 +19,7 @@ pub(super) fn create_slot(
     features: SlotFeatures,
     config: &shell_config::ShellConfigV1,
     observation: &ShellObservation,
+    start_sync_timer: bool,
 ) -> Result<ShellSlot> {
     let text_scale = configured_text_scale();
     let topbar = TopbarWindow::create(
@@ -62,9 +63,10 @@ pub(super) fn create_slot(
         .sync_running_windows_with_previews(observation.windows())
         .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
     crate::win32_actions::apply_dock_actions(&actions, dock_controller.state())?;
-    dock.set_dock_width(
+    dock.set_dock_size(
         work_area,
         dock_controller.preferred_width_dip(),
+        dock_controller.config().dock_height_dip(),
         dock_controller.config(),
         false,
     )?;
@@ -90,9 +92,11 @@ pub(super) fn create_slot(
         topbar_controller,
         config.clone(),
     )?;
-    let sync_timer = TimerGuard::start_sync(dock.hwnd)?;
+    let sync_timer = start_sync_timer
+        .then(|| TimerGuard::start_sync(dock.hwnd))
+        .transpose()?;
     Ok(ShellSlot {
-        _sync_timer: sync_timer,
+        sync_timer,
         runtime,
         monitor: monitor.monitor(),
         topbar,
@@ -118,7 +122,7 @@ pub(super) fn reconcile_slots(
             "no display monitors were enumerated",
         ));
     }
-    print_monitor_placements(&monitors);
+    print_monitor_placements(&monitors, config);
     let current = slots.iter().map(|slot| slot.monitor).collect::<Vec<_>>();
     let actions = reconcile_monitor_slots(&current, &monitors);
     let mut old = std::mem::take(slots);
@@ -132,6 +136,7 @@ pub(super) fn reconcile_slots(
                 features,
                 config,
                 observation,
+                false,
             )?),
             SlotReconcileAction::Reuse(monitor) => {
                 if let Some(mut slot) = take_slot(&mut old, monitor) {
@@ -142,6 +147,11 @@ pub(super) fn reconcile_slots(
         }
     }
     drop(old);
+    if !next.iter().any(|slot| slot.sync_timer.is_some())
+        && let Some(slot) = next.first_mut()
+    {
+        slot.sync_timer = Some(TimerGuard::start_sync(slot.dock.hwnd)?);
+    }
     for slot in &next {
         slot.show_shells();
         slot.print_windows();

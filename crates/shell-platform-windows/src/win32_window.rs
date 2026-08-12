@@ -1,3 +1,5 @@
+use core::ffi::c_void;
+
 use shell_renderer::native::ShowcaseRole;
 use shell_renderer::{
     Dpi, PhysicalRect, PopoverSurfaceSize, ShellMetrics, context_menu_anchor_rect,
@@ -10,9 +12,10 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::Shell::DragAcceptFiles;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, HTTRANSPARENT,
-    IsWindowVisible, RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, UnregisterClassW, WINDOW_EX_STYLE,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowRect,
+    HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, RegisterClassExW, SW_HIDE,
+    SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SetForegroundWindow, SetWindowPos, ShowWindow, UnregisterClassW, WINDOW_EX_STYLE,
     WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -26,7 +29,7 @@ use crate::win32::{
 };
 use crate::win32_backdrop::apply_if_supported;
 use crate::win32_windowing::window_proc;
-use crate::{DockEdgeGeometry, DockPhysicalPlacement, DockRuntimeConfig};
+use crate::{DockEdgeGeometry, DockPhysicalPlacement, DockRuntimeConfig, NativeWindowId};
 
 const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.Window.v1");
 pub(super) const THUMBNAIL_HOST_CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.ThumbnailHost.v1");
@@ -110,12 +113,112 @@ pub(super) struct OwnedWindow {
     pub(super) rect: PhysicalRect,
     dpi: Dpi,
     dock_width_dip: f32,
+    dock_height_dip: f32,
     topbar_height_dip: f32,
     popover_width_dip: f32,
     popover_height_dip: f32,
     popover_anchor_x_dip: f32,
     backdrop_allowed: bool,
     backdrop_active: bool,
+}
+
+pub(super) struct ExternalMenuPopoverLayerGuard {
+    hwnd: HWND,
+}
+
+impl ExternalMenuPopoverLayerGuard {
+    pub(super) fn lower(popover: &OwnedWindow) -> Result<Self> {
+        set_external_menu_popover_layer(popover.hwnd, true)?;
+        Ok(Self { hwnd: popover.hwnd })
+    }
+}
+
+impl Drop for ExternalMenuPopoverLayerGuard {
+    fn drop(&mut self) {
+        let _ = set_external_menu_popover_layer(self.hwnd, false);
+    }
+}
+
+const fn external_menu_popover_is_topmost(active: bool) -> bool {
+    !active
+}
+
+fn set_external_menu_popover_layer(hwnd: HWND, active: bool) -> Result<()> {
+    let insert_after = if external_menu_popover_is_topmost(active) {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
+    // SAFETY: The owned popover HWND remains live for the guard lifetime. Only
+    // its z-order band changes; geometry and activation are preserved.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(insert_after),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    }
+}
+
+pub(super) fn place_external_menu(
+    window: NativeWindowId,
+    anchor: PhysicalRect,
+    work: PhysicalRect,
+) -> Result<()> {
+    let hwnd = HWND(window.value() as *mut c_void);
+    let mut native_rect = windows::Win32::Foundation::RECT::default();
+    // SAFETY: The menu HWND originates from EVENT_SYSTEM_MENUPOPUPSTART and is
+    // queried synchronously while that popup is live.
+    unsafe { GetWindowRect(hwnd, &mut native_rect) }?;
+    let rect = external_menu_placement(
+        native_rect.right.saturating_sub(native_rect.left).max(1),
+        native_rect.bottom.saturating_sub(native_rect.top).max(1),
+        anchor,
+        work,
+    );
+    // SAFETY: Only the live menu popup's position and z-order are adjusted. Its
+    // owner retains activation, sizing, command routing, and lifetime.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            rect.x,
+            rect.y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    }
+}
+
+fn external_menu_placement(
+    width: i32,
+    height: i32,
+    anchor: PhysicalRect,
+    work: PhysicalRect,
+) -> PhysicalRect {
+    const GAP: i32 = 8;
+
+    let width = width.max(1);
+    let height = height.max(1);
+    let max_x = work
+        .x
+        .saturating_add(work.width.saturating_sub(width).max(0));
+    let max_y = work
+        .y
+        .saturating_add(work.height.saturating_sub(height).max(0));
+    let left = anchor.x.saturating_sub(width).saturating_sub(GAP);
+    let right = anchor.x.saturating_add(anchor.width).saturating_add(GAP);
+    let x = if left >= work.x { left } else { right }.clamp(work.x, max_x);
+    let centered_y = anchor
+        .y
+        .saturating_add(anchor.height / 2)
+        .saturating_sub(height / 2);
+    PhysicalRect::new(x, centered_y.clamp(work.y, max_y), width, height)
 }
 
 impl OwnedWindow {
@@ -197,6 +300,7 @@ impl OwnedWindow {
             rect,
             dpi,
             dock_width_dip: 760.0,
+            dock_height_dip: ShellMetrics::default().dock_height_dip(),
             topbar_height_dip: 32.0,
             popover_width_dip: 244.0,
             popover_height_dip: 420.0,
@@ -210,7 +314,9 @@ impl OwnedWindow {
         // SAFETY: Category 8 (FFI boundary). The owned HWND is live while its
         // current effective DPI is queried for work-area placement.
         self.dpi = Dpi::from_raw(unsafe { GetDpiForWindow(self.hwnd) }.max(96));
-        let metrics = ShellMetrics::default().with_topbar_height(self.topbar_height_dip);
+        let metrics = ShellMetrics::default()
+            .with_topbar_height(self.topbar_height_dip)
+            .with_dock_height(self.dock_height_dip);
         let rect = match self.role {
             ShowcaseRole::Topbar => topbar_rect(work, self.dpi, metrics),
             ShowcaseRole::Dock => {
@@ -393,7 +499,9 @@ impl OwnedWindow {
         let normal = dock_showcase_rect(
             work,
             self.dpi,
-            ShellMetrics::default().with_dock_width(self.dock_width_dip),
+            ShellMetrics::default()
+                .with_dock_width(self.dock_width_dip)
+                .with_dock_height(self.dock_height_dip),
         );
         let monitor = crate::win32_windowing::window_monitor_bounds(self.hwnd)?;
         Ok(DockPhysicalPlacement::from_visibility_at_monitor_edge(
@@ -415,10 +523,11 @@ impl OwnedWindow {
         set_rect(self.hwnd, rect)
     }
 
-    pub(super) fn set_dock_width(
+    pub(super) fn set_dock_size(
         &mut self,
         work: PhysicalRect,
         width_dip: f32,
+        height_dip: f32,
         config: DockRuntimeConfig,
         hidden: bool,
     ) -> Result<()> {
@@ -426,6 +535,7 @@ impl OwnedWindow {
             return Ok(());
         }
         self.dock_width_dip = width_dip.max(1.0);
+        self.dock_height_dip = height_dip.max(1.0);
         let target = self.dock_visibility_target(work, config, hidden)?;
         self.place_dock_motion(target)
     }
@@ -453,7 +563,7 @@ impl OwnedWindow {
     pub(super) fn surface_physical_size(&self) -> (u32, u32) {
         if self.role == ShowcaseRole::Dock {
             let width = physical_from_dip(self.dock_width_dip, self.dpi);
-            let height = physical_from_dip(ShellMetrics::default().dock_height_dip(), self.dpi);
+            let height = physical_from_dip(self.dock_height_dip, self.dpi);
             return (width.max(1) as u32, height.max(1) as u32);
         }
         (
@@ -590,10 +700,10 @@ fn settings_rect(work: PhysicalRect, dpi: Dpi) -> PhysicalRect {
 
 #[cfg(test)]
 mod tests {
-    use shell_renderer::native::ShowcaseRole;
+    use shell_renderer::{PhysicalRect, native::ShowcaseRole};
     use windows::Win32::UI::WindowsAndMessaging::WS_EX_NOREDIRECTIONBITMAP;
 
-    use super::window_ex_style;
+    use super::{external_menu_placement, external_menu_popover_is_topmost, window_ex_style};
 
     #[test]
     fn custom_alpha_windows_use_no_redirection_bitmap() {
@@ -605,5 +715,22 @@ mod tests {
             let style = window_ex_style(role);
             assert_ne!(style.0 & WS_EX_NOREDIRECTIONBITMAP.0, 0);
         }
+    }
+
+    #[test]
+    fn external_native_menu_temporarily_sits_above_the_apps_popover() {
+        assert!(!external_menu_popover_is_topmost(true));
+        assert!(external_menu_popover_is_topmost(false));
+    }
+
+    #[test]
+    fn external_native_menu_is_placed_beside_the_clicked_popover_row() {
+        let work = PhysicalRect::new(0, 56, 2_560, 1_376);
+        let popover_edge_at_row = PhysicalRect::new(2_240, 220, 1, 1);
+
+        assert_eq!(
+            external_menu_placement(241, 134, popover_edge_at_row, work),
+            PhysicalRect::new(1_991, 153, 241, 134),
+        );
     }
 }

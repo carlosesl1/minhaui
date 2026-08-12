@@ -50,6 +50,11 @@ impl DockSettings {
     }
 
     #[must_use]
+    pub const fn magnification(&self) -> u16 {
+        self.magnification
+    }
+
+    #[must_use]
     pub const fn with_item_size(mut self, value: u16) -> Self {
         self.item_size = value;
         self
@@ -58,6 +63,18 @@ impl DockSettings {
     #[must_use]
     pub const fn with_spacing(mut self, value: u16) -> Self {
         self.spacing = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_alignment(mut self, value: DockAlignmentPreference) -> Self {
+        self.alignment = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_magnification(mut self, value: u16) -> Self {
+        self.magnification = value;
         self
     }
 

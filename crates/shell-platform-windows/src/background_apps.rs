@@ -167,6 +167,9 @@ pub(crate) fn build_background_apps(
         .take(MAX_NOTIFICATION_REGISTRATIONS)
         .filter_map(|registration| {
             let name = executable_name(&registration.executable)?;
+            if registry_fallback_is_excluded(&name) {
+                return None;
+            }
             let process = live.get(&name)?;
             seen.insert(name)
                 .then(|| BackgroundAppEntry::from_match(registration, process))
@@ -194,7 +197,10 @@ pub(crate) fn merge_background_apps(
     let mut native_paths = HashSet::new();
     let mut native_identities = HashSet::<NativeTrayKey>::new();
 
-    for entry in native {
+    for entry in native.iter().chain(fallback) {
+        if background_app_is_excluded(entry) {
+            continue;
+        }
         let identity = match entry.origin() {
             BackgroundAppOrigin::Native(identity) => identity,
             BackgroundAppOrigin::RegistryFallback => continue,
@@ -206,7 +212,10 @@ pub(crate) fn merge_background_apps(
     }
 
     let mut fallback_paths = HashSet::new();
-    for entry in fallback {
+    for entry in native.iter().chain(fallback) {
+        if background_app_is_excluded(entry) {
+            continue;
+        }
         if !matches!(entry.origin(), BackgroundAppOrigin::RegistryFallback) {
             continue;
         }
@@ -248,6 +257,53 @@ fn executable_name(path: &str) -> Option<String> {
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .map(str::to_ascii_lowercase)
+}
+
+fn registry_fallback_is_excluded(executable_name: &str) -> bool {
+    shell_component_is_excluded(executable_name)
+        || matches!(
+            executable_name,
+            "vivaldi.exe"
+                | "cmd.exe"
+                | "conhost.exe"
+                | "powershell.exe"
+                | "pwsh.exe"
+                | "cscript.exe"
+                | "wscript.exe"
+                | "mshta.exe"
+                | "rundll32.exe"
+                | "dllhost.exe"
+                | "node.exe"
+                | "python.exe"
+                | "pythonw.exe"
+                | "java.exe"
+                | "javaw.exe"
+        )
+}
+
+fn background_app_is_excluded(entry: &BackgroundAppEntry) -> bool {
+    let Some(executable_name) = executable_name(entry.executable()) else {
+        return true;
+    };
+    match entry.origin() {
+        BackgroundAppOrigin::Native(_) => shell_component_is_excluded(&executable_name),
+        BackgroundAppOrigin::RegistryFallback => registry_fallback_is_excluded(&executable_name),
+    }
+}
+
+fn shell_component_is_excluded(executable_name: &str) -> bool {
+    matches!(
+        executable_name,
+        "explorer.exe"
+            | "shell-app.exe"
+            | "obsidian_tray_bridge_host.exe"
+            | "shellexperiencehost.exe"
+            | "startmenuexperiencehost.exe"
+            | "searchhost.exe"
+            | "textinputhost.exe"
+            | "runtimebroker.exe"
+            | "backgroundtaskhost.exe"
+    )
 }
 
 fn executable_stem(path: &str) -> &str {
@@ -355,6 +411,55 @@ mod tests {
     }
 
     #[test]
+    fn registry_fallback_excludes_shell_browser_and_shared_script_hosts() {
+        let registrations = vec![
+            NotificationRegistration::new(r"C:\Windows\explorer.exe", ""),
+            NotificationRegistration::new(r"C:\Apps\Vivaldi\vivaldi.exe", ""),
+            NotificationRegistration::new(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "Obsidian Bridge Persistence QA",
+            ),
+            NotificationRegistration::new(r"C:\Apps\Realtek\RtkNGUI64.exe", "Realtek"),
+            NotificationRegistration::new(r"C:\Windows\System32\SecurityHealthSystray.exe", ""),
+        ];
+        let processes = vec![
+            RunningProcess::new(10, r"C:\Windows\explorer.exe", ""),
+            RunningProcess::new(11, r"C:\Apps\Vivaldi\vivaldi.exe", ""),
+            RunningProcess::new(
+                12,
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "",
+            ),
+            RunningProcess::new(13, r"C:\Apps\Realtek\RtkNGUI64.exe", ""),
+            RunningProcess::new(14, r"C:\Windows\System32\SecurityHealthSystray.exe", ""),
+        ];
+
+        assert_eq!(
+            build_background_apps(&registrations, &processes)
+                .iter()
+                .map(|entry| entry.label())
+                .collect::<Vec<_>>(),
+            ["Realtek", "SecurityHealthSystray"]
+        );
+    }
+
+    #[test]
+    fn native_merge_excludes_shell_owned_icons_without_hiding_real_apps() {
+        let native = vec![
+            native(7, 100, r"C:\Windows\explorer.exe", "Fone: 22%"),
+            native(8, 1, r"C:\Apps\AMD\RadeonSoftware.exe", "AMD Software"),
+        ];
+
+        assert_eq!(
+            merge_background_apps(&native, &[])
+                .iter()
+                .map(|entry| entry.label())
+                .collect::<Vec<_>>(),
+            ["AMD Software"]
+        );
+    }
+
+    #[test]
     fn tooltip_is_bounded_to_its_first_nonempty_line() {
         assert_eq!(
             safe_label(" Zoom - Signed in\r\nPrivate detail ", "Zoom.exe", "Zoom"),
@@ -405,6 +510,22 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].label(), "Discord native");
         assert!(matches!(merged[0].origin(), BackgroundAppOrigin::Native(_)));
+    }
+
+    #[test]
+    fn native_entries_from_a_secondary_capture_are_not_discarded() {
+        let toolbar = vec![native(7, 1, r"C:\Apps\Discord.exe", "Discord toolbar")];
+        let bridge = vec![native(8, 2, r"C:\Apps\RadeonSoftware.exe", "AMD Software")];
+
+        let merged = merge_background_apps(&toolbar, &bridge);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|entry| entry.label() == "AMD Software"));
+        assert!(
+            merged
+                .iter()
+                .all(|entry| matches!(entry.origin(), BackgroundAppOrigin::Native(_)))
+        );
     }
 
     #[test]

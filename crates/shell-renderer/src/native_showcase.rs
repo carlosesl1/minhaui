@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
-use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
+use windows::Win32::Graphics::Direct2D::{ID2D1DeviceContext, ID2D1SolidColorBrush};
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     IDWriteFactory, IDWriteTextFormat,
@@ -41,6 +44,180 @@ use crate::{
     DipRect, PopoverLayoutStyle, QUICK_SETTINGS_BODY_TOP, Rgba8, ShowcaseTokens, TopbarScene,
 };
 
+struct ReusableResourceMap<K, V> {
+    values: HashMap<K, V>,
+}
+
+impl<K, V> Default for ReusableResourceMap<K, V> {
+    fn default() -> Self {
+        Self {
+            values: HashMap::new(),
+        }
+    }
+}
+
+impl<K, V> ReusableResourceMap<K, V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    fn get_or_try_insert_with<E>(
+        &mut self,
+        key: K,
+        create: impl FnOnce() -> std::result::Result<V, E>,
+    ) -> std::result::Result<V, E> {
+        if let Some(value) = self.values.get(&key) {
+            return Ok(value.clone());
+        }
+        let value = create()?;
+        self.values.insert(key, value.clone());
+        Ok(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum TextFormatKind {
+    Text,
+    Detail,
+    QuickLabel,
+    QuickDetail,
+    QuickFooter,
+    Icon,
+    PopoverTitle,
+    BalancedPopoverLabel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TextFormatKey {
+    kind: TextFormatKind,
+    role: u8,
+    text_scale_bits: u32,
+}
+
+impl TextFormatKey {
+    fn new(kind: TextFormatKind, role: ShowcaseRole, text_scale: f32) -> Self {
+        let role = match role {
+            ShowcaseRole::Topbar => 0,
+            ShowcaseRole::Dock => 1,
+            ShowcaseRole::Popover => 2,
+            ShowcaseRole::AppMenu => 3,
+            ShowcaseRole::Preview => 4,
+            ShowcaseRole::Settings => 5,
+        };
+        let text_scale = if role == 0 {
+            if text_scale.is_finite() {
+                text_scale.clamp(1.0, 2.5)
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        Self {
+            kind,
+            role,
+            text_scale_bits: text_scale.to_bits(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ShowcaseResourceCache {
+    brushes: ReusableResourceMap<u32, ID2D1SolidColorBrush>,
+    formats: ReusableResourceMap<TextFormatKey, IDWriteTextFormat>,
+}
+
+impl ShowcaseResourceCache {
+    fn brush(
+        &mut self,
+        context: &ID2D1DeviceContext,
+        color: Rgba8,
+    ) -> Result<ID2D1SolidColorBrush> {
+        self.brushes
+            .get_or_try_insert_with(color_key(color), || create_brush(context, color))
+    }
+
+    fn text(
+        &mut self,
+        dwrite: &IDWriteFactory,
+        role: ShowcaseRole,
+        text_scale: f32,
+    ) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(TextFormatKind::Text, role, text_scale),
+            || create_text_format(dwrite, role, text_scale),
+        )
+    }
+
+    fn detail(
+        &mut self,
+        dwrite: &IDWriteFactory,
+        role: ShowcaseRole,
+        text_scale: f32,
+    ) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(TextFormatKind::Detail, role, text_scale),
+            || create_detail_format(dwrite, role, text_scale),
+        )
+    }
+
+    fn quick_label(&mut self, dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(TextFormatKind::QuickLabel, ShowcaseRole::Popover, 1.0),
+            || create_quick_settings_label_format(dwrite),
+        )
+    }
+
+    fn quick_detail(&mut self, dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(TextFormatKind::QuickDetail, ShowcaseRole::Popover, 1.0),
+            || create_quick_settings_detail_format(dwrite),
+        )
+    }
+
+    fn quick_footer(&mut self, dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(TextFormatKind::QuickFooter, ShowcaseRole::Popover, 1.0),
+            || {
+                let format = create_quick_settings_detail_format(dwrite)?;
+                // SAFETY: This cache entry is dedicated to centered footer text
+                // and remains immutable after its one-time initialization.
+                unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
+                Ok(format)
+            },
+        )
+    }
+
+    fn icon(&mut self, dwrite: &IDWriteFactory, role: ShowcaseRole) -> Result<IDWriteTextFormat> {
+        self.formats
+            .get_or_try_insert_with(TextFormatKey::new(TextFormatKind::Icon, role, 1.0), || {
+                create_icon_format(dwrite, role)
+            })
+    }
+
+    fn popover_title(&mut self, dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(TextFormatKind::PopoverTitle, ShowcaseRole::Popover, 1.0),
+            || create_popover_title_format(dwrite),
+        )
+    }
+
+    fn balanced_popover_label(&mut self, dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+        self.formats.get_or_try_insert_with(
+            TextFormatKey::new(
+                TextFormatKind::BalancedPopoverLabel,
+                ShowcaseRole::Popover,
+                1.0,
+            ),
+            || create_balanced_apps_label_format(dwrite),
+        )
+    }
+}
+
+const fn color_key(color: Rgba8) -> u32 {
+    u32::from_be_bytes([color.r, color.g, color.b, color.a])
+}
+
 pub(crate) struct ShowcaseStyle<'a> {
     role: ShowcaseRole,
     solid_material: bool,
@@ -67,10 +244,15 @@ impl<'a> ShowcaseStyle<'a> {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the native draw boundary receives independent device, cache, style, geometry and scene resources"
+)]
 pub(crate) fn draw_showcase(
     context: &ID2D1DeviceContext,
     dwrite: &IDWriteFactory,
     icons: &mut NativeIconCache,
+    resources: &mut ShowcaseResourceCache,
     style: ShowcaseStyle<'_>,
     surface: DipRect,
     scenes: ShellScenes<'_>,
@@ -96,32 +278,32 @@ pub(crate) fn draw_showcase(
     } else {
         tokens.surface_base
     };
-    let base = create_brush(context, base_color)?;
-    let panel_base = create_brush(context, panel_base_color(solid_material))?;
-    let panel_luminance = create_brush(context, panel_luminance_color(solid_material))?;
-    let panel_veil = create_brush(context, panel_veil_color(solid_material))?;
-    let panel_reflection = create_brush(context, panel_reflection_color(solid_material))?;
-    let raised = create_brush(context, tokens.surface_raised)?;
-    let hover = create_brush(context, tokens.surface_hover)?;
-    let pressed = create_brush(context, tokens.surface_pressed)?;
-    let selected = create_brush(context, tokens.surface_selected)?;
-    let dock_luminance = create_brush(context, tokens.dock_luminance)?;
-    let dock_veil = create_brush(context, tokens.dock_veil)?;
-    let dock_reflection = create_brush(context, tokens.dock_reflection)?;
-    let topbar_tint = create_brush(context, tokens.topbar_tint)?;
-    let primary = create_brush(context, tokens.text_primary)?;
-    let secondary = create_brush(context, tokens.text_secondary)?;
+    let base = resources.brush(context, base_color)?;
+    let panel_base = resources.brush(context, panel_base_color(solid_material))?;
+    let panel_luminance = resources.brush(context, panel_luminance_color(solid_material))?;
+    let panel_veil = resources.brush(context, panel_veil_color(solid_material))?;
+    let panel_reflection = resources.brush(context, panel_reflection_color(solid_material))?;
+    let raised = resources.brush(context, tokens.surface_raised)?;
+    let hover = resources.brush(context, tokens.surface_hover)?;
+    let pressed = resources.brush(context, tokens.surface_pressed)?;
+    let selected = resources.brush(context, tokens.surface_selected)?;
+    let dock_luminance = resources.brush(context, tokens.dock_luminance)?;
+    let dock_veil = resources.brush(context, tokens.dock_veil)?;
+    let dock_reflection = resources.brush(context, tokens.dock_reflection)?;
+    let topbar_tint = resources.brush(context, tokens.topbar_tint)?;
+    let primary = resources.brush(context, tokens.text_primary)?;
+    let secondary = resources.brush(context, tokens.text_secondary)?;
     let contrast_shadow = &topbar_tint;
-    let disabled = create_brush(context, tokens.text_disabled)?;
-    let accent = create_brush(context, tokens.accent)?;
-    let focus = create_brush(context, tokens.focus_outer)?;
-    let rim_outer = create_brush(context, tokens.rim_outer)?;
+    let disabled = resources.brush(context, tokens.text_disabled)?;
+    let accent = resources.brush(context, tokens.accent)?;
+    let focus = resources.brush(context, tokens.focus_outer)?;
+    let rim_outer = resources.brush(context, tokens.rim_outer)?;
     let panel_rim = if solid_material {
-        create_brush(context, tokens.dock_luminance)?
+        resources.brush(context, tokens.dock_luminance)?
     } else {
-        create_brush(context, Rgba8::new(0x00, 0x00, 0x00, 0x20))?
+        resources.brush(context, Rgba8::new(0x00, 0x00, 0x00, 0x20))?
     };
-    let panel_hover = create_brush(
+    let panel_hover = resources.brush(
         context,
         if solid_material {
             tokens.surface_hover
@@ -129,7 +311,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x00, 0x00, 0x00, 0x14)
         },
     )?;
-    let panel_raised = create_brush(
+    let panel_raised = resources.brush(
         context,
         if solid_material {
             tokens.surface_raised
@@ -137,7 +319,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x00, 0x00, 0x00, 0x0C)
         },
     )?;
-    let panel_divider = create_brush(
+    let panel_divider = resources.brush(
         context,
         if solid_material {
             tokens.rim_inner
@@ -145,7 +327,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x00, 0x00, 0x00, 0x24)
         },
     )?;
-    let panel_focus = create_brush(
+    let panel_focus = resources.brush(
         context,
         if solid_material {
             tokens.surface_selected
@@ -153,7 +335,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x0A, 0x64, 0xD8, 0x26)
         },
     )?;
-    let panel_notch = create_brush(
+    let panel_notch = resources.brush(
         context,
         if solid_material {
             tokens.surface_base
@@ -161,7 +343,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0xD9, 0xD9, 0xD9, 0xBA)
         },
     )?;
-    let panel_primary = create_brush(
+    let panel_primary = resources.brush(
         context,
         if solid_material {
             tokens.text_primary
@@ -169,7 +351,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x1A, 0x1A, 0x1A, 0xFF)
         },
     )?;
-    let panel_secondary = create_brush(
+    let panel_secondary = resources.brush(
         context,
         if solid_material {
             tokens.text_secondary
@@ -177,7 +359,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x45, 0x45, 0x48, 0xFF)
         },
     )?;
-    let panel_accent = create_brush(
+    let panel_accent = resources.brush(
         context,
         if solid_material {
             tokens.accent
@@ -185,7 +367,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x0A, 0x64, 0xD8, 0xFF)
         },
     )?;
-    let panel_error = create_brush(
+    let panel_error = resources.brush(
         context,
         if solid_material {
             tokens.error
@@ -193,7 +375,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0xB4, 0x23, 0x18, 0xFF)
         },
     )?;
-    let quick_section = create_brush(
+    let quick_section = resources.brush(
         context,
         if solid_material {
             tokens.surface_raised
@@ -201,7 +383,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0xFF, 0xFF, 0xFF, 0x1E)
         },
     )?;
-    let quick_tile = create_brush(
+    let quick_tile = resources.brush(
         context,
         if solid_material {
             tokens.surface_raised
@@ -209,7 +391,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0xFF, 0xFF, 0xFF, 0x2A)
         },
     )?;
-    let quick_hover = create_brush(
+    let quick_hover = resources.brush(
         context,
         if solid_material {
             tokens.surface_hover
@@ -217,7 +399,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0xFF, 0xFF, 0xFF, 0x46)
         },
     )?;
-    let quick_pressed = create_brush(
+    let quick_pressed = resources.brush(
         context,
         if solid_material {
             tokens.surface_pressed
@@ -225,7 +407,7 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x00, 0x00, 0x00, 0x18)
         },
     )?;
-    let quick_selected = create_brush(
+    let quick_selected = resources.brush(
         context,
         if solid_material {
             tokens.surface_selected
@@ -233,28 +415,25 @@ pub(crate) fn draw_showcase(
             Rgba8::new(0x0A, 0x64, 0xD8, 0x30)
         },
     )?;
-    let quick_on_accent = create_brush(context, Rgba8::new(0xFF, 0xFF, 0xFF, 0xF2))?;
-    let rim_inner = create_brush(context, tokens.rim_inner)?;
-    let warning = create_brush(context, tokens.warning)?;
-    let error = create_brush(context, tokens.error)?;
+    let quick_on_accent = resources.brush(context, Rgba8::new(0xFF, 0xFF, 0xFF, 0xF2))?;
+    let rim_inner = resources.brush(context, tokens.rim_inner)?;
+    let warning = resources.brush(context, tokens.warning)?;
+    let error = resources.brush(context, tokens.error)?;
     let text_scale = scenes.topbar.map_or(1.0, TopbarScene::text_scale);
-    let text_format = create_text_format(dwrite, role, text_scale)?;
+    let text_format = resources.text(dwrite, role, text_scale)?;
     let balanced_label_format = if scenes
         .popover
         .is_some_and(|scene| scene.layout_style() == PopoverLayoutStyle::BalancedApps)
     {
-        Some(create_balanced_apps_label_format(dwrite)?)
+        Some(resources.balanced_popover_label(dwrite)?)
     } else {
         None
     };
-    let detail_format = create_detail_format(dwrite, role, text_scale)?;
-    let quick_label_format = create_quick_settings_label_format(dwrite)?;
-    let quick_detail_format = create_quick_settings_detail_format(dwrite)?;
-    let quick_footer_format = create_quick_settings_detail_format(dwrite)?;
-    // SAFETY: Category 8 (FFI boundary). This dedicated format remains live
-    // throughout the draw call and is not shared with leading-aligned details.
-    unsafe { quick_footer_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
-    let icon_format = create_icon_format(dwrite, role)?;
+    let detail_format = resources.detail(dwrite, role, text_scale)?;
+    let quick_label_format = resources.quick_label(dwrite)?;
+    let quick_detail_format = resources.quick_detail(dwrite)?;
+    let quick_footer_format = resources.quick_footer(dwrite)?;
+    let icon_format = resources.icon(dwrite, role)?;
     let formats = ShowcaseFormats {
         text: &text_format,
         icon: &icon_format,
@@ -404,19 +583,19 @@ pub(crate) fn draw_showcase(
     } else if matches!(role, ShowcaseRole::Popover | ShowcaseRole::AppMenu) {
         if let Some(scene) = scenes.context_menu {
             let menu_shadows = SHADOW_ALPHA_PROFILE
-                .map(|alpha| create_brush(context, Rgba8::new(0, 0, 0, alpha)))
+                .map(|alpha| resources.brush(context, Rgba8::new(0, 0, 0, alpha)))
                 .into_iter()
                 .collect::<Result<Vec<_>>>()?;
-            let menu_rim = create_brush(context, Rgba8::new(219, 219, 219, 168))?;
-            let menu_body = create_brush(context, Rgba8::new(217, 217, 217, MENU_BODY_ALPHA))?;
+            let menu_rim = resources.brush(context, Rgba8::new(219, 219, 219, 168))?;
+            let menu_body = resources.brush(context, Rgba8::new(217, 217, 217, MENU_BODY_ALPHA))?;
             let menu_insets = INSET_ALPHA_PROFILE
-                .map(|alpha| create_brush(context, Rgba8::new(13, 13, 13, alpha)))
+                .map(|alpha| resources.brush(context, Rgba8::new(13, 13, 13, alpha)))
                 .into_iter()
                 .collect::<Result<Vec<_>>>()?;
-            let menu_hover = create_brush(context, Rgba8::new(111, 99, 84, 56))?;
-            let menu_primary = create_brush(context, Rgba8::new(18, 18, 18, 255))?;
-            let menu_disabled = create_brush(context, Rgba8::new(112, 105, 96, 150))?;
-            let menu_separator = create_brush(context, Rgba8::new(90, 84, 76, 54))?;
+            let menu_hover = resources.brush(context, Rgba8::new(111, 99, 84, 56))?;
+            let menu_primary = resources.brush(context, Rgba8::new(18, 18, 18, 255))?;
+            let menu_disabled = resources.brush(context, Rgba8::new(112, 105, 96, 150))?;
+            let menu_separator = resources.brush(context, Rgba8::new(90, 84, 76, 54))?;
             draw_context_menu(
                 context,
                 &text_format,
@@ -466,7 +645,7 @@ pub(crate) fn draw_showcase(
         } else if role == ShowcaseRole::Popover
             && let Some(scene) = scenes.popover
         {
-            let title_format = create_popover_title_format(dwrite)?;
+            let title_format = resources.popover_title(dwrite)?;
             draw_functional_popover(
                 context,
                 icons,
@@ -495,13 +674,13 @@ pub(crate) fn draw_showcase(
         }
     } else if role == ShowcaseRole::Preview {
         if let Some(scene) = scenes.preview {
-            let preview_card = create_brush(context, PREVIEW_CARD_FILL)?;
-            let preview_hover_rim = create_brush(context, PREVIEW_HOVER_RIM)?;
-            let preview_close = create_brush(context, PREVIEW_CLOSE_FILL)?;
-            let preview_close_rim = create_brush(context, PREVIEW_CLOSE_RIM)?;
-            let preview_close_hover = create_brush(context, PREVIEW_CLOSE_HOVER_FILL)?;
-            let preview_close_hover_rim = create_brush(context, PREVIEW_CLOSE_HOVER_RIM)?;
-            let preview_close_hover_glyph = create_brush(context, PREVIEW_CLOSE_HOVER_GLYPH)?;
+            let preview_card = resources.brush(context, PREVIEW_CARD_FILL)?;
+            let preview_hover_rim = resources.brush(context, PREVIEW_HOVER_RIM)?;
+            let preview_close = resources.brush(context, PREVIEW_CLOSE_FILL)?;
+            let preview_close_rim = resources.brush(context, PREVIEW_CLOSE_RIM)?;
+            let preview_close_hover = resources.brush(context, PREVIEW_CLOSE_HOVER_FILL)?;
+            let preview_close_hover_rim = resources.brush(context, PREVIEW_CLOSE_HOVER_RIM)?;
+            let preview_close_hover_glyph = resources.brush(context, PREVIEW_CLOSE_HOVER_GLYPH)?;
             draw_window_preview(
                 context,
                 formats,
@@ -591,4 +770,34 @@ fn create_balanced_apps_label_format(dwrite: &IDWriteFactory) -> Result<IDWriteT
     // dedicated BalancedApps label format.
     unsafe { format.SetTrimming(&trimming, &ellipsis) }?;
     Ok(format)
+}
+
+#[cfg(test)]
+mod resource_cache_tests {
+    use std::cell::Cell;
+
+    use super::ReusableResourceMap;
+
+    #[test]
+    fn repeated_render_resource_requests_reuse_the_first_created_value() {
+        let creations = Cell::new(0);
+        let mut resources = ReusableResourceMap::default();
+
+        let first = resources
+            .get_or_try_insert_with("dock-brush", || {
+                creations.set(creations.get() + 1);
+                Ok::<_, ()>(41_u32)
+            })
+            .unwrap();
+        let second = resources
+            .get_or_try_insert_with("dock-brush", || {
+                creations.set(creations.get() + 1);
+                Ok::<_, ()>(99_u32)
+            })
+            .unwrap();
+
+        assert_eq!(first, 41);
+        assert_eq!(second, 41);
+        assert_eq!(creations.get(), 1);
+    }
 }

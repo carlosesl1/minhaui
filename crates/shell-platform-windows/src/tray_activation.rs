@@ -8,6 +8,9 @@ pub(crate) const WM_CONTEXTMENU: u32 = 0x007b;
 pub(crate) const WM_RBUTTONDOWN: u32 = 0x0204;
 /// `WM_RBUTTONUP`, as defined by Win32's window-message contract.
 pub(crate) const WM_RBUTTONUP: u32 = 0x0205;
+/// Private identity marker for a recovered tray callback that requires the
+/// context event in the first activation attempt.
+pub(crate) const CONTEXT_FIRST_VERSION: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrayScreenPoint {
@@ -38,7 +41,7 @@ impl From<(i32, i32)> for TrayScreenPoint {
     }
 }
 
-/// The three native callback protocols supported by the shell.
+/// The native callback protocols supported by the shell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrayActivationStrategy {
     VersionAware,
@@ -541,6 +544,14 @@ fn strategy_messages(
                 WM_RBUTTONUP,
             ),
         ],
+        TrayActivationStrategy::Combined if request.version == CONTEXT_FIRST_VERSION => {
+            vec![TrayMessage::modern_pointer_with_callback(
+                request.callback_message,
+                request.icon_id,
+                request.point,
+                WM_CONTEXTMENU,
+            )]
+        }
         TrayActivationStrategy::Combined => vec![
             TrayMessage::legacy_with_callback(
                 request.callback_message,
@@ -562,7 +573,13 @@ fn strategy_messages(
 }
 
 fn strategy_order(version: u32) -> [TrayActivationStrategy; 3] {
-    if version == 0 || version >= 4 {
+    if version == CONTEXT_FIRST_VERSION {
+        [
+            TrayActivationStrategy::Combined,
+            TrayActivationStrategy::Legacy,
+            TrayActivationStrategy::VersionAware,
+        ]
+    } else if version == 0 || version >= 4 {
         [
             TrayActivationStrategy::VersionAware,
             TrayActivationStrategy::Legacy,
@@ -707,6 +724,42 @@ mod tests {
                     WM_RBUTTONUP,
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn recovered_callback_posts_context_on_the_first_attempt() {
+        let mut coordinator = TrayActivationCoordinator::new();
+        let mut sink = RecordingSink {
+            accept: true,
+            ..RecordingSink::default()
+        };
+
+        let result = coordinator.begin(
+            TrayActivationRequest::new(
+                "SecurityHealthSystray.exe",
+                NativeWindowId::new(7),
+                100,
+                0x0460,
+                CONTEXT_FIRST_VERSION,
+                TrayScreenPoint::new(-32769, 32768),
+            ),
+            &mut sink,
+        );
+
+        assert_eq!(result.status(), TrayActivationStatus::Posted);
+        assert_eq!(result.strategy(), Some(TrayActivationStrategy::Combined));
+        assert_eq!(
+            sink.posted,
+            [(
+                NativeWindowId::new(7),
+                TrayMessage::modern_pointer_with_callback(
+                    0x0460,
+                    100,
+                    TrayScreenPoint::new(-32769, 32768),
+                    WM_CONTEXTMENU,
+                ),
+            )]
         );
     }
 

@@ -1,5 +1,4 @@
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
-use windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_FLAG;
 use windows::core::Result;
 
 use super::{
@@ -31,7 +30,7 @@ impl CompositionRenderer {
                 width,
                 height,
                 DXGI_FORMAT_UNKNOWN,
-                DXGI_SWAP_CHAIN_FLAG(0),
+                surface.swap_chain_flags,
             )?;
         }
         surface.width = width;

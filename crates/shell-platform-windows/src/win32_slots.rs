@@ -12,13 +12,13 @@ use crate::win32_shell_observation::{
 use crate::win32_slot_lifecycle::{create_slot, reconcile_slots};
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{OwnedWindow, WindowClass, print_window};
+use crate::win32_windowing::DockFrameWaitable;
 use crate::{
-    DockRuntimeConfig, MonitorPlacementInput, NativeEventTarget, NativeWindowId, NativeWindowSlot,
-    PlatformEvent,
+    MonitorPlacementInput, NativeEventTarget, NativeWindowId, NativeWindowSlot, PlatformEvent,
 };
 
 pub(super) struct ShellSlot {
-    pub(super) _sync_timer: TimerGuard,
+    pub(super) sync_timer: Option<TimerGuard>,
     pub(super) runtime: RuntimeSurfaces,
     pub(super) monitor: MonitorId,
     pub(super) topbar: TopbarWindow,
@@ -88,6 +88,16 @@ impl ShellSlot {
         self.topbar.hwnd
     }
 
+    pub(super) fn dock_hwnd(&self) -> windows::Win32::Foundation::HWND {
+        self.dock.hwnd
+    }
+
+    fn collect_dock_frame_waitable(&self, waitables: &mut Vec<DockFrameWaitable>) {
+        if let Some(handle) = self.runtime.dock_frame_waitable() {
+            waitables.push(DockFrameWaitable::new(handle, self.dock.hwnd));
+        }
+    }
+
     pub(super) fn reregister_topbar(&mut self) -> Result<()> {
         self.topbar.reregister()
     }
@@ -147,6 +157,17 @@ impl ShellSlot {
     }
 }
 
+pub(super) fn collect_dock_frame_waitables(
+    slots: &[ShellSlot],
+    waitables: &mut Vec<DockFrameWaitable>,
+) {
+    waitables.clear();
+    waitables.reserve(slots.len());
+    for slot in slots {
+        slot.collect_dock_frame_waitable(waitables);
+    }
+}
+
 pub(super) fn create_slots(
     class: &WindowClass,
     monitors: &[MonitorPlacementInput],
@@ -155,8 +176,15 @@ pub(super) fn create_slots(
     observation: &ShellObservation,
 ) -> Result<Vec<ShellSlot>> {
     let mut slots = Vec::new();
-    for monitor in monitors {
-        slots.push(create_slot(class, *monitor, features, config, observation)?);
+    for (index, monitor) in monitors.iter().enumerate() {
+        slots.push(create_slot(
+            class,
+            *monitor,
+            features,
+            config,
+            observation,
+            index == 0,
+        )?);
     }
     Ok(slots)
 }
@@ -260,11 +288,14 @@ fn apply_shell_observation_result(
     Ok(true)
 }
 
-pub(super) fn print_monitor_placements(monitors: &[MonitorPlacementInput]) {
+pub(super) fn print_monitor_placements(
+    monitors: &[MonitorPlacementInput],
+    config: &shell_config::ShellConfigV1,
+) {
     let fullscreen = Vec::new();
     for placement in crate::plan_monitor_placements(
         monitors,
-        DockRuntimeConfig::default(),
+        crate::win32_sample_state::dock_runtime_config(config),
         fullscreen.as_slice(),
     ) {
         let dock = placement.dock().rect();

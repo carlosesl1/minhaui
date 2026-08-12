@@ -61,23 +61,33 @@ fn first_hover_opens_within_the_responsive_dwell_budget() {
 }
 
 #[test]
-fn visible_preview_switches_dock_targets_immediately() {
+fn visible_preview_coalesces_rapid_target_changes_before_one_update() {
     // Given: the preview for the first dock item is already visible.
     let mut controller = PreviewController::new(false);
     controller.open_from_keyboard(DockItemId::new(1), 10);
 
-    // When: the pointer moves directly to another eligible dock item.
-    let effects = controller.dock_target_changed(Some(DockItemId::new(2)), 20);
+    // When: the pointer crosses two eligible items inside the short switch dwell.
+    let first = controller.dock_target_changed(Some(DockItemId::new(2)), 20);
+    let second = controller.dock_target_changed(Some(DockItemId::new(3)), 50);
 
-    // Then: content updates without another dwell or hide cycle.
+    // Then: no synchronous native update runs for either transient target.
+    assert!(first.is_empty());
+    assert!(second.is_empty());
+    assert_eq!(controller.visible_item(), Some(DockItemId::new(1)));
+    assert!(controller.tick(129).is_empty());
+
+    // When: the pointer remains on the final item for the full 80 ms dwell.
+    let effects = controller.tick(130);
+
+    // Then: exactly the final target is updated once.
     assert_eq!(
         effects,
         vec![PreviewEffect::Update {
-            item: DockItemId::new(2),
+            item: DockItemId::new(3),
             page: 0,
         }]
     );
-    assert_eq!(controller.visible_item(), Some(DockItemId::new(2)));
+    assert_eq!(controller.visible_item(), Some(DockItemId::new(3)));
 }
 
 #[test]

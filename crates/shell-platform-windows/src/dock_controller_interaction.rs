@@ -331,6 +331,7 @@ impl DockController {
                     },
                 )?;
                 self.state = transition.state;
+                self.invalidate_model_caches();
                 effects.extend(transition.effects);
                 return Ok(effects.into_iter().map(QueuedDockAction::Effect).collect());
             }
@@ -351,6 +352,7 @@ impl DockController {
                     },
                 )?;
                 self.state = transition.state;
+                self.invalidate_model_caches();
                 effects.extend(transition.effects);
                 return Ok(effects.into_iter().map(QueuedDockAction::Effect).collect());
             }
@@ -366,6 +368,7 @@ impl DockController {
                 },
             )?;
             self.state = transition.state;
+            self.invalidate_model_caches();
             return Ok(transition
                 .effects
                 .into_iter()
@@ -536,20 +539,14 @@ impl DockController {
     }
 
     pub(crate) fn scene_for_layout(&self, layout: &[DockLayoutEntry]) -> shell_renderer::DockScene {
-        let mut icon_sources = self.icon_sources.borrow_mut();
-        shell_renderer::DockScene::new(
+        shell_renderer::DockScene::from_shared_items(
             self.config.layout(),
-            crate::dock_visuals::visual_items(
-                &self.state,
-                layout,
-                &self.launch_targets,
-                &mut icon_sources,
-            ),
+            self.visual_items_for_layout(layout),
         )
     }
 
     fn hit_layout_entry(&self, point: DipPoint) -> Option<DockLayoutEntry> {
-        let id = self.layout().hit_test(point)?;
+        let id = self.hit_visual(point)?;
         self.state
             .dock_layout()
             .iter()
@@ -745,10 +742,20 @@ impl DockController {
     }
 
     fn hit_app(&self, point: DipPoint) -> Option<DockItemId> {
-        self.layout()
-            .hit_test(point)
+        self.hit_visual(point)
             .map(DockItemId::new)
             .filter(|id| self.is_dock_item(*id))
+    }
+
+    fn hit_visual(&self, point: DipPoint) -> Option<u64> {
+        let cache_missing = self.hit_layout.borrow().is_none();
+        if cache_missing {
+            self.hit_layout.replace(Some(self.layout()));
+        }
+        self.hit_layout
+            .borrow()
+            .as_ref()
+            .and_then(|layout| layout.hit_test(point))
     }
 
     fn set_hovered_state(&mut self, hovered_item: Option<DockItemId>, hover_strength: f32) {
@@ -809,6 +816,7 @@ impl DockController {
     fn activate(&mut self, item: DockItemId) -> Result<Vec<QueuedDockAction>, DockControllerError> {
         let transition = reduce(&self.state, ShellEvent::ActivateDockItem(item))?;
         self.state = transition.state;
+        self.invalidate_model_caches();
         Ok(transition
             .effects
             .into_iter()

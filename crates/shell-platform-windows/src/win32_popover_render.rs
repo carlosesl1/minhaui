@@ -22,6 +22,95 @@ const POPOVER_SURFACE_ROLE: ShowcaseRole = ShowcaseRole::Popover;
 
 impl RuntimeSurfaces {
     #[allow(clippy::too_many_arguments)]
+    pub(super) fn complete_quick_settings_worker(
+        &mut self,
+        result: crate::quick_settings_worker::QuickSettingsWorkerResult,
+        topbar: &OwnedWindow,
+        dock: &mut OwnedWindow,
+        popover: &mut OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &mut OwnedWindow,
+    ) -> Result<bool> {
+        let (generation, payload) = result.into_parts();
+        if generation != self.quick_settings_generation
+            && matches!(
+                &payload,
+                crate::quick_settings_worker::QuickSettingsWorkerPayload::Action(_)
+            )
+        {
+            return Ok(true);
+        }
+        let mut reflow = false;
+        match payload {
+            crate::quick_settings_worker::QuickSettingsWorkerPayload::Refreshed {
+                capabilities,
+                audio,
+            } => {
+                self.settings_controller
+                    .set_supported_quick_controls(capabilities.supported_kinds());
+                self.quick_settings_controller
+                    .replace_capabilities(capabilities);
+                if let Some(audio) = audio {
+                    self.quick_settings_audio_cache = audio.clone();
+                    self.quick_settings_controller.replace_audio_panel(audio);
+                }
+                reflow = true;
+            }
+            crate::quick_settings_worker::QuickSettingsWorkerPayload::Action(action) => {
+                match action {
+                    crate::quick_settings_worker::QuickSettingsWorkerAction::Applied(control) => {
+                        self.quick_settings_controller
+                            .apply_capability_update(control);
+                    }
+                    crate::quick_settings_worker::QuickSettingsWorkerAction::AudioChanged(
+                        snapshot,
+                    ) => {
+                        self.quick_settings_audio_cache = snapshot.clone();
+                        self.quick_settings_controller.replace_audio_panel(snapshot);
+                        reflow = true;
+                    }
+                    crate::quick_settings_worker::QuickSettingsWorkerAction::OpenSystemRoute(
+                        route,
+                    ) => {
+                        let result = crate::win32_system_actions::apply(
+                            &PopoverAction::OpenSystemRoute(route),
+                        );
+                        let succeeded = result.is_ok();
+                        record_system_action("quick_settings.open_system_route", result);
+                        if succeeded {
+                            self.quick_settings_controller.dismiss();
+                            self.clear_active_topbar_module();
+                            popover.hide();
+                            return Ok(true);
+                        }
+                        self.quick_settings_controller
+                            .set_error("Could not open Windows settings");
+                    }
+                    crate::quick_settings_worker::QuickSettingsWorkerAction::NoChange => {}
+                    crate::quick_settings_worker::QuickSettingsWorkerAction::Failed(error) => {
+                        crate::diagnostics::record(
+                            crate::diagnostics::DiagnosticModule::AppLifecycle,
+                            crate::diagnostics::LogLevel::Error,
+                            "quick_settings_action_failed",
+                            &[("error", &error)],
+                        );
+                        self.quick_settings_controller
+                            .set_error("Windows could not apply that setting");
+                    }
+                }
+            }
+        }
+        if self.quick_settings_controller.is_open() {
+            if reflow {
+                let work = crate::win32_windowing::window_work_area(popover.hwnd)?;
+                self.place_active_overlay(work, topbar, dock, popover)?;
+            }
+            self.redraw_popover(topbar, dock, popover, preview, settings)?;
+        }
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_topbar_actions(
         &mut self,
         actions: &[QueuedTopbarAction],
@@ -73,9 +162,8 @@ impl RuntimeSurfaces {
                                     .send(crate::media_session_types::MediaWorkerCommand::Refresh);
                             }
                         }
-                        let capabilities =
-                            crate::win32_quick_settings_capabilities::read_capabilities();
-                        let audio = crate::win32_audio_panel::read().unwrap_or_default();
+                        let capabilities = self.quick_settings_controller.capabilities().clone();
+                        let audio = self.quick_settings_audio_cache.clone();
                         if *kind == Popover::Volume {
                             self.quick_settings_controller
                                 .open_audio(capabilities, audio);
@@ -106,10 +194,21 @@ impl RuntimeSurfaces {
                             },
                         )?;
                         popover.show_activating();
+                        self.quick_settings_generation =
+                            self.quick_settings_worker.request_refresh(
+                                true,
+                                crate::win32_event_queue::native_window_id(topbar.hwnd),
+                            );
                         continue;
                     }
                     let background_generation = if *kind == Popover::BackgroundApps {
-                        Some(self.popover_controller.begin_loading(*kind))
+                        let cached = self.background_apps_cache_ready.then(|| {
+                            crate::popover_adapters::background_app_items(&self.background_apps)
+                        });
+                        Some(
+                            self.popover_controller
+                                .begin_background_apps_refresh(cached),
+                        )
                     } else {
                         self.popover_controller
                             .open_with_snapshot(
@@ -583,6 +682,14 @@ impl RuntimeSurfaces {
                         | QuickSettingsIntent::OpenSoundSettings => None,
                         QuickSettingsIntent::EditControls | QuickSettingsIntent::Dismiss => None,
                     };
+                    if crate::quick_settings_worker::runs_on_worker(intent) {
+                        self.quick_settings_generation = self.quick_settings_worker.request_action(
+                            *intent,
+                            capability.cloned(),
+                            crate::win32_event_queue::native_window_id(topbar.hwnd),
+                        );
+                        continue;
+                    }
                     match crate::win32_quick_settings_actions::apply_quick_settings_intent(
                         intent,
                         capability,
@@ -592,10 +699,13 @@ impl RuntimeSurfaces {
                             redraw_popover = true;
                         }
                         crate::win32_quick_settings_actions::QuickSettingsActionResult::AudioChanged(snapshot) => {
+                            self.quick_settings_audio_cache = snapshot.clone();
                             self.quick_settings_controller.replace_audio_panel(snapshot);
-                            self.quick_settings_controller.replace_capabilities(
-                                crate::win32_quick_settings_capabilities::read_capabilities(),
-                            );
+                            self.quick_settings_generation =
+                                self.quick_settings_worker.request_refresh(
+                                    false,
+                                    crate::win32_event_queue::native_window_id(topbar.hwnd),
+                                );
                             redraw_popover = true;
                             reflow_popover = true;
                         }

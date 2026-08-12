@@ -117,11 +117,22 @@ pub(super) fn open_background_app_location(
 pub(super) fn capture_background_apps(
     generation: u64,
 ) -> Result<Vec<BackgroundAppEntry>, BackgroundAppsError> {
-    capture_background_apps_with(generation, capture_native_tray_apps, || {
+    let fallback_capture = (|| {
         let registrations = capture_notification_registrations()?;
         let processes = capture_running_processes()?;
         Ok(build_background_apps(&registrations, &processes))
-    })
+    })();
+
+    capture_background_apps_with(
+        generation,
+        |generation| {
+            let mut native = capture_native_tray_apps(generation);
+            let bridge = crate::win32_tray_bridge::capture_tray_bridge_apps(generation);
+            native.entries = merge_background_apps(native.entries, bridge);
+            native
+        },
+        || fallback_capture,
+    )
 }
 
 fn capture_background_apps_with(
@@ -323,7 +334,7 @@ fn session_id(process_id: u32) -> Option<u32> {
         .map(|()| session)
 }
 
-fn process_image_path(process_id: u32) -> Option<String> {
+pub(super) fn process_image_path(process_id: u32) -> Option<String> {
     // SAFETY: Category 8 (FFI boundary). Limited query access reads only the image
     // path and the returned handle transfers to `OwnedHandle`.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
@@ -398,6 +409,10 @@ mod tests {
         )
     }
 
+    fn fallback_entry_for(process_id: u32, label: &str, executable: &str) -> BackgroundAppEntry {
+        BackgroundAppEntry::registry_fallback(process_id, label, executable, executable)
+    }
+
     fn native_entry(generation: u64) -> BackgroundAppEntry {
         let identity =
             NativeTrayIdentity::new(NativeWindowId::new(7), 42, 9, 0x8001, 0, None, generation)
@@ -456,6 +471,36 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].label(), "Discord native");
         assert!(matches!(result[0].origin(), BackgroundAppOrigin::Native(_)));
+    }
+
+    #[test]
+    fn live_capture_preserves_unobserved_tray_only_registry_fallbacks() {
+        let generation = 93;
+        let defender = fallback_entry_for(
+            71,
+            "Segurança do Windows",
+            r"C:\Windows\System32\SecurityHealthSystray.exe",
+        );
+        let live_defender = defender.clone();
+        let result = capture_background_apps_with(
+            generation,
+            |_| NativeTrayCapture {
+                entries: vec![native_entry(generation), live_defender],
+                outcome: NativeTrayCaptureOutcome::Partial(NativeTrayCaptureError::HostUnavailable),
+            },
+            || {
+                Ok(vec![
+                    defender,
+                    fallback_entry_for(72, "Realtek", r"C:\Apps\Realtek\RtkNGUI64.exe"),
+                ])
+            },
+        )
+        .expect("live capture");
+
+        assert_eq!(
+            result.iter().map(|entry| entry.label()).collect::<Vec<_>>(),
+            ["Discord native", "Realtek", "Segurança do Windows"]
+        );
     }
 
     #[test]

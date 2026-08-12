@@ -82,6 +82,33 @@ fn positions_each_monitor_independently_with_signed_coordinates_and_dpi() {
 }
 
 #[test]
+fn maximum_dock_size_expands_each_monitor_surface_at_its_own_dpi() {
+    let monitors = [
+        MonitorPlacementInput::new(
+            MonitorId::new(1),
+            PhysicalRect::new(0, 0, 1920, 1080),
+            PhysicalRect::new(0, 0, 1920, 1040),
+            Dpi::from_raw(96),
+        ),
+        MonitorPlacementInput::new(
+            MonitorId::new(2),
+            PhysicalRect::new(1920, 0, 2560, 1440),
+            PhysicalRect::new(1920, 0, 2560, 1400),
+            Dpi::from_raw(144),
+        ),
+    ];
+    let config = DockRuntimeConfig::default()
+        .with_item_size(72.0)
+        .with_padding(29.0)
+        .with_magnified_item_size(100.8);
+
+    let placements = plan_monitor_placements(&monitors, config, &[]);
+
+    assert_eq!(placements[0].dock().rect().height, 112);
+    assert_eq!(placements[1].dock().rect().height, 168);
+}
+
+#[test]
 fn fullscreen_policy_suppresses_only_the_covered_monitor() {
     // Given: two monitors and a fullscreen window on the secondary monitor.
     let monitors = [

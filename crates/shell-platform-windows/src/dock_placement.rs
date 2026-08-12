@@ -75,10 +75,6 @@ impl MonitorPlacementInput {
     }
 
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "retained as a complete value-object accessor for monitor adapters"
-    )]
     pub const fn work_area(self) -> PhysicalRect {
         self.work_area
     }
@@ -203,8 +199,11 @@ pub fn plan_monitor_placements(
     monitors
         .iter()
         .map(|monitor| {
-            let normal =
-                dock_showcase_rect(monitor.work_area, monitor.dpi, ShellMetrics::default());
+            let normal = dock_showcase_rect(
+                monitor.work_area,
+                monitor.dpi,
+                ShellMetrics::default().with_dock_height(config.dock_height_dip()),
+            );
             MonitorShellPlacement {
                 monitor: monitor.monitor,
                 dock: DockPhysicalPlacement::from_visibility(

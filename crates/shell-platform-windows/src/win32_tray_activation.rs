@@ -6,17 +6,16 @@ use std::time::Duration;
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-    TreeScope_Descendants, UIA_InvokePatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope_Descendants,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, FindWindowW, GetCursorPos, GetWindowThreadProcessId, IsWindow,
-    PostMessageW, SetCursorPos,
+    AllowSetForegroundWindow, EnumChildWindows, FindWindowW, GetClassNameW, GetCursorPos,
+    GetWindowThreadProcessId, IsWindow, PostMessageW, SetCursorPos,
 };
-use windows::core::{Error, Result as WindowsResult, w};
+use windows::core::{BOOL, Error, Result as WindowsResult, w};
 
 use crate::native_tray::NativeTrayIdentity;
 use crate::{
@@ -154,57 +153,121 @@ pub(crate) fn validate_native_tray_identity(
     Ok(owner_process_id)
 }
 
-pub(crate) fn activate_windows_shell_app_context_menu(
+pub(crate) fn shell_menu_owner_process_id() -> Option<u32> {
+    // SAFETY: Looks up the system-owned shell tray window by a static class
+    // name before querying its scalar owner PID.
+    let shell_window = unsafe { FindWindowW(w!("Shell_TrayWnd"), None) }.ok()?;
+    let mut process_id = 0_u32;
+    // SAFETY: The shell HWND is used only for this synchronous ownership query.
+    let thread_id = unsafe { GetWindowThreadProcessId(shell_window, Some(&mut process_id)) };
+    (thread_id != 0 && process_id != 0).then_some(process_id)
+}
+
+pub(crate) fn activate_windows_shell_app_context_menu_if_current(
     label: &str,
     executable: &str,
-) -> WindowsResult<bool> {
-    // SAFETY: The UI thread initializes COM before constructing RuntimeSurfaces.
+    is_current: &dyn Fn() -> bool,
+) -> WindowsResult<crate::shell_menu_worker::ShellMenuActivationOutcome> {
+    use crate::shell_menu_worker::ShellMenuActivationOutcome;
+
+    if !is_current() {
+        return Ok(ShellMenuActivationOutcome::Superseded);
+    }
+    // SAFETY: The owned shell-menu worker initializes COM before this call.
     // UI Automation is used only to read Explorer-owned element metadata.
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }?;
     // SAFETY: Looks up a system-owned top-level window by a static class name.
     let shell_window = unsafe { FindWindowW(w!("Shell_TrayWnd"), None) }?;
+    let shell_root = shell_automation_root(shell_window);
 
     let taskbar_targets =
-        collect_shell_targets(&automation, shell_window, ShellAppTargetKind::TaskbarButton)?;
+        collect_shell_targets(&automation, shell_root, ShellAppTargetKind::TaskbarButton)?;
     if let Some(target) = select_shell_app_target(&taskbar_targets, label, executable) {
-        return right_click_shell_target(target.point).map(|()| true);
+        if !is_current() {
+            return Ok(ShellMenuActivationOutcome::Superseded);
+        }
+        record_shell_menu_target("taskbar", target.point);
+        return right_click_shell_target(target.point)
+            .map(|()| ShellMenuActivationOutcome::Activated);
     }
 
-    // SAFETY: Looks up a system-owned top-level window by a static class name.
-    let overflow_window =
-        match unsafe { FindWindowW(w!("TopLevelWindowForOverflowXamlIsland"), None) } {
-            Ok(window) => window,
-            Err(_) => {
-                if !open_notification_overflow(&automation, shell_window)? {
-                    return Ok(false);
-                }
-                let mut found = None;
-                for _ in 0..20 {
-                    // SAFETY: Looks up a system-owned top-level window by a static class name.
-                    let window =
-                        unsafe { FindWindowW(w!("TopLevelWindowForOverflowXamlIsland"), None) };
-                    if let Ok(window) = window {
-                        found = Some(window);
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                let Some(window) = found else {
-                    return Ok(false);
-                };
-                window
-            }
-        };
-    let notification_targets = collect_shell_targets(
+    let visible_notification_targets = collect_shell_targets(
         &automation,
-        overflow_window,
+        shell_root,
         ShellAppTargetKind::NotificationIcon,
     )?;
-    let Some(target) = select_shell_app_target(&notification_targets, label, executable) else {
-        return Ok(false);
+    if let Some(target) = select_shell_app_target(&visible_notification_targets, label, executable)
+    {
+        if !is_current() {
+            return Ok(ShellMenuActivationOutcome::Superseded);
+        }
+        record_shell_menu_target("notification", target.point);
+        return right_click_shell_target(target.point)
+            .map(|()| ShellMenuActivationOutcome::Activated);
+    }
+
+    Ok(ShellMenuActivationOutcome::Unavailable)
+}
+
+fn record_shell_menu_target(kind: &'static str, point: TrayScreenPoint) {
+    if !crate::diagnostics::enabled(crate::diagnostics::DiagnosticModule::AppLifecycle) {
+        return;
+    }
+    let x = point.x().to_string();
+    let y = point.y().to_string();
+    crate::diagnostics::record(
+        crate::diagnostics::DiagnosticModule::AppLifecycle,
+        crate::diagnostics::LogLevel::Info,
+        "background_app_shell_menu.target",
+        &[("kind", kind), ("x", &x), ("y", &y)],
+    );
+}
+
+fn shell_automation_root(shell_window: HWND) -> HWND {
+    shell_automation_root_with(shell_window, find_shell_xaml_host)
+}
+
+fn shell_automation_root_with(
+    shell_window: HWND,
+    find_xaml_host: impl FnOnce(HWND) -> Option<HWND>,
+) -> HWND {
+    find_xaml_host(shell_window).unwrap_or(shell_window)
+}
+
+fn find_shell_xaml_host(shell_window: HWND) -> Option<HWND> {
+    let mut search = ShellXamlHostSearch::default();
+    // SAFETY: The search storage remains live for the complete synchronous
+    // enumeration and the callback restores this exact pointer type.
+    let _ = unsafe {
+        EnumChildWindows(
+            Some(shell_window),
+            Some(enum_shell_xaml_host),
+            LPARAM(&raw mut search as isize),
+        )
     };
-    right_click_shell_target(target.point).map(|()| true)
+    search.window
+}
+
+#[derive(Default)]
+struct ShellXamlHostSearch {
+    window: Option<HWND>,
+}
+
+unsafe extern "system" fn enum_shell_xaml_host(window: HWND, parameter: LPARAM) -> BOOL {
+    // SAFETY: The parameter points to the live stack search owned by the
+    // synchronous EnumChildWindows call above.
+    let search = unsafe { &mut *(parameter.0 as *mut ShellXamlHostSearch) };
+    let mut class_name = [0_u16; 64];
+    // SAFETY: The child HWND came from EnumChildWindows and the fixed buffer is
+    // valid writable storage for the duration of this call.
+    let copied = unsafe { GetClassNameW(window, &mut class_name) };
+    let class_name = String::from_utf16_lossy(&class_name[..copied.max(0) as usize]);
+    if class_name == "Windows.UI.Composition.DesktopWindowContentBridge" {
+        search.window = Some(window);
+        return false.into();
+    }
+    true.into()
 }
 
 fn collect_shell_targets(
@@ -267,51 +330,6 @@ fn element_matches_kind(element: &IUIAutomationElement, kind: ShellAppTargetKind
         ShellAppTargetKind::TaskbarButton => class_name == "Taskbar.TaskListButtonAutomationPeer",
         ShellAppTargetKind::NotificationIcon => automation_id == "NotifyItemIcon",
     }
-}
-
-fn open_notification_overflow(
-    automation: &IUIAutomation,
-    shell_window: HWND,
-) -> WindowsResult<bool> {
-    // SAFETY: Reads the current Explorer taskbar accessibility subtree and
-    // invokes only the narrow hidden-icons button pattern.
-    let root = unsafe { automation.ElementFromHandle(shell_window) }?;
-    // SAFETY: Creates a condition owned by this UI Automation instance.
-    let condition = unsafe { automation.CreateTrueCondition() }?;
-    // SAFETY: Reads descendants from the live UI Automation element.
-    let elements = unsafe { root.FindAll(TreeScope_Descendants, &condition) }?;
-    // SAFETY: Reads the size of the UI Automation array returned above.
-    let length = unsafe { elements.Length() }?.clamp(0, 512);
-    for index in 0..length {
-        // SAFETY: Index is bounded by the array length returned above.
-        let Ok(element) = (unsafe { elements.GetElement(index) }) else {
-            continue;
-        };
-        // SAFETY: Reads an immutable property from the live UI Automation element.
-        let automation_id = unsafe { element.CurrentAutomationId() }
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        // SAFETY: Reads an immutable property from the live UI Automation element.
-        let class_name = unsafe { element.CurrentClassName() }
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        // SAFETY: Reads an immutable property from the live UI Automation element.
-        let Ok(rect) = (unsafe { element.CurrentBoundingRectangle() }) else {
-            continue;
-        };
-        if automation_id == "SystemTrayIcon"
-            && class_name == "SystemTray.NormalButton"
-            && rect.right - rect.left <= 36
-        {
-            // SAFETY: Requests the invoke interface from the verified overflow button.
-            let pattern: IUIAutomationInvokePattern =
-                unsafe { element.GetCurrentPatternAs(UIA_InvokePatternId) }?;
-            // SAFETY: Invokes only the verified Windows hidden-icons button.
-            unsafe { pattern.Invoke() }?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn right_click_shell_target(point: TrayScreenPoint) -> WindowsResult<()> {
@@ -453,7 +471,7 @@ mod tests {
 
     use super::{
         NativeTrayActivationError, NativeTrayOps, ShellAppTarget, ShellAppTargetKind,
-        activate_native_tray_context_menu, select_shell_app_target,
+        activate_native_tray_context_menu, select_shell_app_target, shell_automation_root_with,
     };
     use crate::native_tray::NativeTrayIdentity;
     use crate::{
@@ -781,6 +799,28 @@ mod tests {
             )
             .map(|target| target.point),
             Some(TrayScreenPoint::new(40, 40))
+        );
+    }
+
+    #[test]
+    fn windows_11_xaml_host_is_preferred_as_the_shell_automation_root() {
+        use windows::Win32::Foundation::HWND;
+
+        let shell = HWND(0x10_usize as *mut core::ffi::c_void);
+        let xaml = HWND(0x20_usize as *mut core::ffi::c_void);
+
+        assert_eq!(shell_automation_root_with(shell, |_| Some(xaml)), xaml);
+        assert_eq!(shell_automation_root_with(shell, |_| None), shell);
+    }
+
+    #[test]
+    fn shell_fallback_never_opens_the_hidden_notification_overflow() {
+        let source = include_str!("win32_tray_activation.rs");
+        let forbidden_call = ["open_notification", "_overflow("].concat();
+
+        assert!(
+            !source.contains(&forbidden_call),
+            "opening Explorer's hidden-icons surface necessarily composes a visible frame"
         );
     }
 }

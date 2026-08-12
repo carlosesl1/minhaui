@@ -92,6 +92,30 @@ potencialmente lento. Cada solicitação recebe uma geração, resultados anteri
 depender do lifetime de um HWND. Não possui controllers, janelas nativas ou
 estado visual.
 
+## Tray Bridge
+
+Adapter Windows process-wide que observa registros `Shell_NotifyIcon` recebidos
+exclusivamente pela thread do `Shell_TrayWnd`. Um host nativo pequeno permanece
+ativo durante a sessão, instala a DLL somente no Explorer e mantém um snapshot
+limitado em memória compartilhada, independente do lifetime da UI. O payload
+fica sob `%LOCALAPPDATA%\ObsidianGlass\TrayBridge` e o host é registrado no
+início da sessão para observar os primeiros `NIM_ADD` antes dos aplicativos de
+bandeja. O worker de aplicativos em segundo plano consome o snapshot fora da
+thread da UI e o converte para Native Tray Identity. O Tray Bridge não faz
+polling enquanto o Explorer está vivo, não injeta código nos aplicativos
+observados e preserva, durante a troca do Explorer ou atualização do host,
+somente registros cujo `HWND` proprietário continue válido. Registros removidos
+ou pertencentes a janelas encerradas são descartados. O Adapter deve retornar
+ao caminho documentado existente quando o host, o Explorer ou o protocolo não
+forem compatíveis. O catálogo não promove ícones internos do shell nem registros
+de fallback associados apenas a hosts compartilhados de scripts ou runtimes;
+esses hosts só são aceitos quando existe uma identidade nativa ativa. O Adapter
+nunca deve abrir a superfície de ícones ocultos para descobrir um callback
+ausente, pois isso produz um frame visível do Explorer. Quando um popup nativo
+é observado para a ativação atual, sua janela é posicionada junto à linha
+acionada e limitada à área útil do monitor, independentemente de onde o
+aplicativo proprietário criou inicialmente o menu.
+
 ## Dock Edge Probe
 
 Timer adaptativo do Dock Runtime usado para revelar ou ocultar a dock. Sua

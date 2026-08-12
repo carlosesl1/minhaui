@@ -24,7 +24,7 @@ use windows::core::{Interface, PCWSTR, Result};
 pub(crate) struct NativeIconCache {
     context: ID2D1DeviceContext,
     wic: IWICImagingFactory,
-    bitmaps: HashMap<String, CachedIcon>,
+    bitmaps: DomainIconEntries<CachedIcon>,
     encoded_bitmaps: HashMap<u64, ID2D1Bitmap1>,
 }
 
@@ -35,6 +35,52 @@ enum CachedIcon {
 
 const MISSING_ICON_RETRY: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeIconDomain {
+    Shared,
+    Dock,
+}
+
+struct DomainIconEntries<T> {
+    shared: HashMap<String, T>,
+    dock: HashMap<String, T>,
+}
+
+impl<T> Default for DomainIconEntries<T> {
+    fn default() -> Self {
+        Self {
+            shared: HashMap::new(),
+            dock: HashMap::new(),
+        }
+    }
+}
+
+impl<T> DomainIconEntries<T> {
+    fn get(&self, domain: NativeIconDomain, source: &str) -> Option<&T> {
+        match domain {
+            NativeIconDomain::Shared => self.shared.get(source),
+            NativeIconDomain::Dock => self.dock.get(source),
+        }
+    }
+
+    fn map_mut(&mut self, domain: NativeIconDomain) -> &mut HashMap<String, T> {
+        match domain {
+            NativeIconDomain::Shared => &mut self.shared,
+            NativeIconDomain::Dock => &mut self.dock,
+        }
+    }
+}
+
+fn retain_domain_entries<T>(
+    entries: &mut DomainIconEntries<T>,
+    domain: NativeIconDomain,
+    mut is_active: impl FnMut(&str) -> bool,
+) {
+    entries
+        .map_mut(domain)
+        .retain(|source, _| is_active(source.as_str()));
+}
+
 impl NativeIconCache {
     pub(crate) fn new(context: &ID2D1DeviceContext) -> Result<Self> {
         // SAFETY: Category 8 (FFI boundary). COM is initialized on the UI thread;
@@ -44,13 +90,26 @@ impl NativeIconCache {
         Ok(Self {
             context: context.clone(),
             wic,
-            bitmaps: HashMap::new(),
+            bitmaps: DomainIconEntries::default(),
             encoded_bitmaps: HashMap::new(),
         })
     }
 
     pub(crate) fn draw(&mut self, source: &str, destination: D2D_RECT_F) -> bool {
-        let Some(bitmap) = self.bitmap_for(source) else {
+        self.draw_in_domain(NativeIconDomain::Shared, source, destination)
+    }
+
+    pub(crate) fn draw_dock(&mut self, source: &str, destination: D2D_RECT_F) -> bool {
+        self.draw_in_domain(NativeIconDomain::Dock, source, destination)
+    }
+
+    fn draw_in_domain(
+        &mut self,
+        domain: NativeIconDomain,
+        source: &str,
+        destination: D2D_RECT_F,
+    ) -> bool {
+        let Some(bitmap) = self.bitmap_for(domain, source) else {
             return false;
         };
         // SAFETY: Category 8 (FFI boundary). The cached bitmap belongs to this
@@ -69,7 +128,7 @@ impl NativeIconCache {
     }
 
     pub(crate) fn draw_contained(&mut self, source: &str, optical_bounds: D2D_RECT_F) -> bool {
-        let Some(bitmap) = self.bitmap_for(source) else {
+        let Some(bitmap) = self.bitmap_for(NativeIconDomain::Shared, source) else {
             return false;
         };
         // SAFETY: The cached bitmap belongs to this device context and the
@@ -93,9 +152,8 @@ impl NativeIconCache {
         true
     }
 
-    pub(crate) fn retain(&mut self, active_sources: &[&str]) {
-        self.bitmaps
-            .retain(|source, _| active_sources.contains(&source.as_str()));
+    pub(crate) fn retain_dock(&mut self, is_active: impl FnMut(&str) -> bool) {
+        retain_domain_entries(&mut self.bitmaps, NativeIconDomain::Dock, is_active);
     }
 
     pub(crate) fn draw_encoded(
@@ -132,8 +190,8 @@ impl NativeIconCache {
             .retain(|generation, _| active_generations.contains(generation));
     }
 
-    fn bitmap_for(&mut self, source: &str) -> Option<ID2D1Bitmap1> {
-        let reload = match self.bitmaps.get(source) {
+    fn bitmap_for(&mut self, domain: NativeIconDomain, source: &str) -> Option<ID2D1Bitmap1> {
+        let reload = match self.bitmaps.get(domain, source) {
             Some(CachedIcon::Bitmap(_)) => false,
             Some(CachedIcon::Missing(attempted_at)) => attempted_at.elapsed() >= MISSING_ICON_RETRY,
             None => true,
@@ -142,9 +200,9 @@ impl NativeIconCache {
             let icon = self
                 .load(source)
                 .map_or_else(|_| CachedIcon::Missing(Instant::now()), CachedIcon::Bitmap);
-            self.bitmaps.insert(source.to_owned(), icon);
+            self.bitmaps.map_mut(domain).insert(source.to_owned(), icon);
         }
-        match self.bitmaps.get(source) {
+        match self.bitmaps.get(domain, source) {
             Some(CachedIcon::Bitmap(bitmap)) => Some(bitmap.clone()),
             Some(CachedIcon::Missing(_)) | None => None,
         }
@@ -322,7 +380,7 @@ impl Drop for IconHandle {
 mod tests {
     use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 
-    use super::aspect_fit_rect;
+    use super::{DomainIconEntries, NativeIconDomain, aspect_fit_rect, retain_domain_entries};
 
     const OPTICAL_BOX: D2D_RECT_F = D2D_RECT_F {
         left: 0.0,
@@ -330,6 +388,28 @@ mod tests {
         right: 28.0,
         bottom: 28.0,
     };
+
+    #[test]
+    fn retaining_dock_icons_preserves_shared_icons() {
+        let mut entries = DomainIconEntries::default();
+        entries
+            .map_mut(NativeIconDomain::Shared)
+            .insert("popover".to_owned(), 1);
+        entries
+            .map_mut(NativeIconDomain::Dock)
+            .insert("active".to_owned(), 2);
+        entries
+            .map_mut(NativeIconDomain::Dock)
+            .insert("stale".to_owned(), 3);
+
+        retain_domain_entries(&mut entries, NativeIconDomain::Dock, |source| {
+            source == "active"
+        });
+
+        assert_eq!(entries.get(NativeIconDomain::Shared, "popover"), Some(&1));
+        assert_eq!(entries.get(NativeIconDomain::Dock, "active"), Some(&2));
+        assert_eq!(entries.get(NativeIconDomain::Dock, "stale"), None);
+    }
 
     #[test]
     fn aspect_fit_keeps_square_source_centered_in_optical_box() {

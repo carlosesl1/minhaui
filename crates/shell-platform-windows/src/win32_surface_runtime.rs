@@ -2,11 +2,12 @@ use shell_renderer::native::{
     CompositionRenderer, DeviceKind, PresentOutcome, ShellScenes, ShowcaseRole, SurfaceMetrics,
     SurfaceVisibilityAnimation, WindowSurface, is_recoverable_hresult,
 };
-use windows::Win32::Foundation::{E_INVALIDARG, E_UNEXPECTED, HWND};
+use windows::Win32::Foundation::{E_INVALIDARG, E_UNEXPECTED, HANDLE, HWND};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SurfaceUpdate {
     Presented,
+    FrameSkipped,
     RebuildAllRequired,
 }
 
@@ -32,9 +33,8 @@ fn normalize_present_result(
     result: windows::core::Result<PresentOutcome>,
 ) -> windows::core::Result<SurfaceUpdate> {
     match result {
-        Ok(PresentOutcome::Presented | PresentOutcome::FrameSkipped) => {
-            Ok(SurfaceUpdate::Presented)
-        }
+        Ok(PresentOutcome::Presented) => Ok(SurfaceUpdate::Presented),
+        Ok(PresentOutcome::FrameSkipped) => Ok(SurfaceUpdate::FrameSkipped),
         Ok(PresentOutcome::DeviceLost(_)) => Ok(SurfaceUpdate::RebuildAllRequired),
         Ok(PresentOutcome::Failed(code)) if is_recoverable_hresult(code) => {
             Ok(SurfaceUpdate::RebuildAllRequired)
@@ -122,6 +122,7 @@ pub(super) trait SurfaceAdapter {
         scenes: ShellScenes<'_>,
     ) -> windows::core::Result<PresentOutcome>;
     fn metrics(surface: &Self::Surface) -> SurfaceMetrics;
+    fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE>;
     fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()>;
     fn animate_entrance(surface: &Self::Surface, reduced_motion: bool)
     -> windows::core::Result<()>;
@@ -186,6 +187,10 @@ impl SurfaceAdapter for DirectCompositionAdapter {
 
     fn metrics(surface: &Self::Surface) -> SurfaceMetrics {
         surface.metrics()
+    }
+
+    fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE> {
+        surface.frame_latency_waitable_object()
     }
 
     fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()> {
@@ -319,6 +324,13 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
 
     pub(super) fn size(&self, role: ShowcaseRole) -> Option<(u32, u32)> {
         self.metrics(role).map(|metrics| metrics.size())
+    }
+
+    pub(super) fn frame_latency_waitable_object(&self, role: ShowcaseRole) -> Option<HANDLE> {
+        self.resources
+            .as_ref()
+            .and_then(|resources| resources.surfaces.as_ref())
+            .and_then(|surfaces| A::frame_latency_waitable_object(surfaces.surface(role)))
     }
 
     pub(super) fn redraw(
@@ -520,7 +532,7 @@ mod tests {
         SurfaceVisibilityAnimation, device_loss_hresult,
     };
     use shell_renderer::{ContextMenuEntry, ContextMenuScene};
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HANDLE, HWND};
     use windows::core::HRESULT;
 
     use super::{
@@ -788,6 +800,11 @@ mod tests {
             surface.metrics
         }
 
+        fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE> {
+            (surface.role == ShowcaseRole::Dock)
+                .then_some(HANDLE(std::ptr::dangling_mut::<core::ffi::c_void>()))
+        }
+
         fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()> {
             let mut state = recording();
             state
@@ -950,10 +967,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_exposes_frame_pacing_only_for_the_dock_surface() {
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+
+        assert!(
+            runtime
+                .frame_latency_waitable_object(ShowcaseRole::Dock)
+                .is_some()
+        );
+        for role in ROLES.into_iter().filter(|role| *role != ShowcaseRole::Dock) {
+            assert!(runtime.frame_latency_waitable_object(role).is_none());
+        }
+    }
+
+    #[test]
     fn presentation_results_have_one_recovery_policy() {
         assert_eq!(
             normalize_present_result(Ok(PresentOutcome::Presented)).unwrap(),
             SurfaceUpdate::Presented
+        );
+        assert_eq!(
+            normalize_present_result(Ok(PresentOutcome::FrameSkipped)).unwrap(),
+            SurfaceUpdate::FrameSkipped
         );
         assert_eq!(
             normalize_present_result(Ok(PresentOutcome::DeviceLost(DeviceLossKind::Reset)))

@@ -1,5 +1,7 @@
 use crate::background_apps::BackgroundAppEntry;
 use crate::win32_background_apps::{BackgroundAppsError, capture_background_apps};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(windows)]
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, WPARAM};
@@ -85,10 +87,10 @@ impl BackgroundAppsWorker {
         let worker = LatestRequestWorker::spawn(
             "background-apps",
             move |request: BackgroundAppsRequest| {
-                deliver(
-                    load_request(&source, request.generation),
-                    request.wake_window,
-                );
+                let started = std::time::Instant::now();
+                let result = load_request(&source, request.generation);
+                record_slow_scan(started.elapsed());
+                deliver(result, request.wake_window);
             },
         )?;
         Ok(Self { worker })
@@ -100,19 +102,49 @@ impl BackgroundAppsWorker {
             wake_window,
         });
     }
+
+    pub(crate) fn request_initial(&self, generation: u64, wake_window: NativeWindowId) {
+        static INITIAL_REQUESTED: AtomicBool = AtomicBool::new(false);
+        if INITIAL_REQUESTED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.request(generation, wake_window);
+        }
+    }
+}
+
+fn record_slow_scan(elapsed: std::time::Duration) {
+    if elapsed < std::time::Duration::from_millis(16) {
+        return;
+    }
+    let elapsed_us = elapsed.as_micros().to_string();
+    crate::diagnostics::record(
+        crate::diagnostics::DiagnosticModule::AppLifecycle,
+        crate::diagnostics::LogLevel::Info,
+        "performance.background_apps_scan",
+        &[("elapsed_us", &elapsed_us)],
+    );
 }
 
 #[cfg(windows)]
 impl BackgroundAppsWorker {
     pub(super) fn new() -> windows::core::Result<Self> {
         Self::with_source(NativeBackgroundAppsSource, |result, wake_window| {
-            let event = RoutedPlatformEvent::window_id(
-                wake_window,
-                PlatformEvent::BackgroundAppsLoaded(result),
-            );
+            let event = RoutedPlatformEvent::broadcast(PlatformEvent::BackgroundAppsLoaded(result));
             let _ = queue_event_with_wake(event, || wake_owner_window(wake_window));
         })
         .map_err(|error| windows::core::Error::new(E_FAIL, error.to_string()))
+    }
+
+    pub(super) fn shared() -> windows::core::Result<Arc<Self>> {
+        static INSTANCE: OnceLock<Arc<BackgroundAppsWorker>> = OnceLock::new();
+        if let Some(worker) = INSTANCE.get() {
+            return Ok(Arc::clone(worker));
+        }
+        let worker = Arc::new(Self::new()?);
+        let _ = INSTANCE.set(Arc::clone(&worker));
+        Ok(INSTANCE.get().map_or(worker, Arc::clone))
     }
 }
 
@@ -278,5 +310,13 @@ mod tests {
             Err(mpsc::RecvTimeoutError::Disconnected),
             "dropping the owner must join the worker and release its sink"
         );
+    }
+
+    #[test]
+    fn native_worker_is_shared_across_monitor_slots() {
+        let first = BackgroundAppsWorker::shared().expect("shared worker should start");
+        let second = BackgroundAppsWorker::shared().expect("shared worker should be reused");
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 }

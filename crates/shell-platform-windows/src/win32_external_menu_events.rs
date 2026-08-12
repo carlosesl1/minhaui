@@ -3,6 +3,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_MENUPOPUPEND, EVENT_SYSTEM_MENUPOPUPSTART, GetForegroundWindow,
     GetWindowThreadProcessId, IsWindow, PostMessageW, WINEVENT_OUTOFCONTEXT,
@@ -62,11 +65,11 @@ trait SharedHookOps {
     fn uninstall_hook(&self, hook: isize);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct HookRegistration {
     id: u64,
     wake_window: NativeWindowId,
-    owner_process_id: u32,
+    owner_process_ids: Box<[u32]>,
 }
 
 #[derive(Debug, Default)]
@@ -83,7 +86,21 @@ impl HookRegistry {
         wake_window: NativeWindowId,
         owner_process_id: u32,
     ) -> Result<u64, ExternalMenuHookError> {
-        if wake_window.value() == 0 || owner_process_id == 0 {
+        self.register_for_owner_pids(ops, wake_window, &[owner_process_id])
+    }
+
+    fn register_for_owner_pids(
+        &mut self,
+        ops: &dyn SharedHookOps,
+        wake_window: NativeWindowId,
+        owner_process_ids: &[u32],
+    ) -> Result<u64, ExternalMenuHookError> {
+        let owner_process_ids = owner_process_ids
+            .iter()
+            .copied()
+            .filter(|owner_process_id| *owner_process_id != 0)
+            .collect::<Vec<_>>();
+        if wake_window.value() == 0 || owner_process_ids.is_empty() {
             return Err(ExternalMenuHookError::InvalidRegistration);
         }
         let id = self
@@ -100,7 +117,7 @@ impl HookRegistry {
         self.registrations.push(HookRegistration {
             id,
             wake_window,
-            owner_process_id,
+            owner_process_ids: owner_process_ids.into_boxed_slice(),
         });
         Ok(id)
     }
@@ -122,13 +139,14 @@ impl HookRegistry {
         event: u32,
         window: NativeWindowId,
         owner_process_id: u32,
+        dismissed_by_pointer: bool,
     ) -> Option<PlatformEvent> {
         if window.value() == 0
             || owner_process_id == 0
             || !self
                 .registrations
                 .iter()
-                .any(|registration| registration.owner_process_id == owner_process_id)
+                .any(|registration| registration.matches_owner_process_id(owner_process_id))
         {
             return None;
         }
@@ -140,6 +158,7 @@ impl HookRegistry {
             ExternalMenuEventKind::Ended => Some(PlatformEvent::ExternalMenuPopupEnded {
                 window,
                 owner_process_id,
+                dismissed_by_pointer,
             }),
         }
     }
@@ -150,16 +169,26 @@ impl HookRegistry {
         mut wake: impl FnMut(NativeWindowId) -> bool,
     ) -> bool {
         for registration in &self.registrations {
-            if registration.owner_process_id == owner_process_id && wake(registration.wake_window) {
+            if registration.matches_owner_process_id(owner_process_id)
+                && wake(registration.wake_window)
+            {
                 return true;
             }
         }
         for registration in &self.registrations {
-            if registration.owner_process_id != owner_process_id && wake(registration.wake_window) {
+            if !registration.matches_owner_process_id(owner_process_id)
+                && wake(registration.wake_window)
+            {
                 return true;
             }
         }
         false
+    }
+}
+
+impl HookRegistration {
+    fn matches_owner_process_id(&self, owner_process_id: u32) -> bool {
+        self.owner_process_ids.contains(&owner_process_id)
     }
 }
 
@@ -182,6 +211,18 @@ impl ExternalMenuEventRegistration {
         owner_process_id: u32,
     ) -> Result<Self, ExternalMenuHookError> {
         let id = shared_registry().register(&Win32SharedHookOps, wake_window, owner_process_id)?;
+        Ok(Self { id })
+    }
+
+    pub(crate) fn register_for_owner_pids(
+        wake_window: NativeWindowId,
+        owner_process_ids: &[u32],
+    ) -> Result<Self, ExternalMenuHookError> {
+        let id = shared_registry().register_for_owner_pids(
+            &Win32SharedHookOps,
+            wake_window,
+            owner_process_ids,
+        )?;
         Ok(Self { id })
     }
 }
@@ -252,13 +293,27 @@ fn handle_win_event(event: u32, hwnd: HWND) {
     let Some(owner_process_id) = window_owner_process_id(hwnd) else {
         return;
     };
+    let dismissed_by_pointer =
+        event == EVENT_SYSTEM_MENUPOPUPEND && external_menu_pointer_button_is_down();
     let registry = shared_registry();
-    let Some(event) = registry.platform_event(event, window, owner_process_id) else {
+    let Some(event) =
+        registry.platform_event(event, window, owner_process_id, dismissed_by_pointer)
+    else {
         return;
     };
     let _ = queue_event_with_wake(RoutedPlatformEvent::broadcast(event), || {
         registry.wake_for_owner_pid(owner_process_id, post_wake)
     });
+}
+
+fn external_menu_pointer_button_is_down() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+        .into_iter()
+        .any(|button| {
+            // SAFETY: Category 8 (FFI boundary). The query accepts a scalar
+            // virtual-key value and does not retain or dereference memory.
+            unsafe { GetAsyncKeyState(i32::from(button.0)) < 0 }
+        })
 }
 
 fn window_owner_process_id(hwnd: HWND) -> Option<u32> {
@@ -326,22 +381,41 @@ mod tests {
         let event_window = NativeWindowId::new(901);
 
         assert_eq!(
-            registry.platform_event(EVENT_SYSTEM_MENUPOPUPSTART, event_window, 77),
+            registry.platform_event(EVENT_SYSTEM_MENUPOPUPSTART, event_window, 77, false),
             Some(PlatformEvent::ExternalMenuPopupStarted {
                 window: event_window,
                 owner_process_id: 77,
             })
         );
         assert_eq!(
-            registry.platform_event(EVENT_SYSTEM_MENUPOPUPEND, event_window, 77),
+            registry.platform_event(EVENT_SYSTEM_MENUPOPUPEND, event_window, 77, true),
             Some(PlatformEvent::ExternalMenuPopupEnded {
                 window: event_window,
                 owner_process_id: 77,
+                dismissed_by_pointer: true,
             })
         );
         assert_eq!(
-            registry.platform_event(EVENT_SYSTEM_MENUPOPUPSTART, event_window, 78),
+            registry.platform_event(EVENT_SYSTEM_MENUPOPUPSTART, event_window, 78, false),
             None
+        );
+    }
+
+    #[test]
+    fn accepts_any_registered_owner_pid_alias_for_shell_owned_popups() {
+        let ops = FakeSharedHookOps::default();
+        let mut registry = HookRegistry::default();
+        registry
+            .register_for_owner_pids(&ops, NativeWindowId::new(11), &[77, 88])
+            .expect("fake hook installs");
+        let event_window = NativeWindowId::new(902);
+
+        assert_eq!(
+            registry.platform_event(EVENT_SYSTEM_MENUPOPUPSTART, event_window, 88, false),
+            Some(PlatformEvent::ExternalMenuPopupStarted {
+                window: event_window,
+                owner_process_id: 88,
+            })
         );
     }
 

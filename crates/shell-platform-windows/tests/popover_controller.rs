@@ -26,6 +26,21 @@ fn background_apps_loading_ignores_stale_results_and_scrolls_focus_into_view() {
 }
 
 #[test]
+fn background_apps_reopen_renders_cached_rows_while_refresh_runs() {
+    let mut controller = PopoverController::new();
+    let initial = controller.begin_loading(Popover::BackgroundApps);
+    assert!(controller.complete_background_apps(initial, Ok(background_app_items(3))));
+    controller.dismiss();
+
+    let refresh = controller.begin_background_apps_refresh(Some(background_app_items(3)));
+
+    let scene = controller.scene().expect("cached apps scene");
+    assert_eq!(scene.state(), PopoverContentState::Ready);
+    assert_eq!(scene.rows().len(), 3);
+    assert_eq!(controller.load_generation(), refresh);
+}
+
+#[test]
 fn background_app_activation_emits_stable_id() {
     let mut controller = PopoverController::new();
     let generation = controller.begin_loading(Popover::BackgroundApps);

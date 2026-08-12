@@ -266,8 +266,20 @@ mod quick_settings_controller;
     reason = "adaptive control intents are consumed by the native owner incrementally"
 )]
 mod quick_settings_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the quick-settings worker initializes COM and posts only a wake message"
+)]
+mod quick_settings_worker;
 mod runtime;
 mod settings_controller;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the shell-menu worker initializes COM and posts a wake message"
+)]
+mod shell_menu_worker;
 mod topbar_controller;
 mod topbar_types;
 #[allow(
@@ -275,6 +287,7 @@ mod topbar_types;
     reason = "pure tray activation coordination is consumed by the native adapter incrementally"
 )]
 mod tray_activation;
+mod tray_bridge_catalog;
 #[allow(
     dead_code,
     reason = "bounded Explorer tray decoding is consumed by the native source incrementally"
@@ -298,10 +311,22 @@ mod win32_media_sessions;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
+    reason = "Explorer taskbar discovery and visibility calls are isolated here"
+)]
+mod win32_taskbar_visibility;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
     dead_code,
     reason = "validated Win32 tray callback forwarding is isolated and wired incrementally"
 )]
 mod win32_tray_activation;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Explorer hook installation and shared-memory reads are isolated here"
+)]
+mod win32_tray_bridge;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
@@ -405,6 +430,7 @@ pub(crate) enum PlatformEvent {
     DisplayChanged,
     PowerResumed,
     QuickSettingsRefresh(RefreshScope),
+    QuickSettingsWorkerCompleted(quick_settings_worker::QuickSettingsWorkerResult),
     MediaSessionsChanged(
         Result<media_session_types::MediaSessionSnapshot, media_session_types::MediaSessionError>,
     ),
@@ -455,6 +481,7 @@ pub(crate) enum PlatformEvent {
     SyncWindows,
     ShellObservationLoaded(win32_shell_observation::ShellObservationLoadResult),
     BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),
+    ShellMenuActivationCompleted(shell_menu_worker::ShellMenuActivationResult),
     ExternalMenuPopupStarted {
         window: NativeWindowId,
         owner_process_id: u32,
@@ -462,6 +489,7 @@ pub(crate) enum PlatformEvent {
     ExternalMenuPopupEnded {
         window: NativeWindowId,
         owner_process_id: u32,
+        dismissed_by_pointer: bool,
     },
     QaExitRequested,
     CloseRequested,

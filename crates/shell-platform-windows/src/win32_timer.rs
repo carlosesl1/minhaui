@@ -2,6 +2,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use windows::core::Result;
 
+use crate::external_menu_coordinator::EXTERNAL_MENU_OBSERVATION_INTERVAL_MS;
 use crate::win32::{
     DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, EXTERNAL_MENU_TIMER_ID, PREVIEW_TIMER_ID,
     SYNC_TIMER_ID, TIMER_ID,
@@ -36,7 +37,11 @@ impl TimerGuard {
     }
 
     pub(super) fn start_external_menu(hwnd: HWND) -> Result<Self> {
-        Self::start_id(hwnd, EXTERNAL_MENU_TIMER_ID, 1_000)
+        Self::start_id(
+            hwnd,
+            EXTERNAL_MENU_TIMER_ID,
+            EXTERNAL_MENU_OBSERVATION_INTERVAL_MS,
+        )
     }
 
     fn start_id(hwnd: HWND, id: usize, milliseconds: u32) -> Result<Self> {
@@ -81,7 +86,7 @@ mod tests {
     use super::DOCK_ANIMATION_INTERVAL_MS;
 
     #[test]
-    fn dock_animation_timer_matches_the_frame_budget() {
+    fn dock_animation_fallback_timer_matches_the_sixty_hz_frame_budget() {
         assert_eq!(DOCK_ANIMATION_INTERVAL_MS, 16);
     }
 }
