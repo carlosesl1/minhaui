@@ -27,6 +27,10 @@ Extrair incrementalmente um Module interno `NativeSurfaceRuntime` que:
 - oferece Interface por Surface Role para build, rebuild, present, resize,
   opacity e animation;
 - normaliza apresentação em Presented, RebuildAllRequired ou erro definitivo;
+- cria cada superfície com apresentação imediata (`sync_interval = 0`), sem
+  aguardar v-sync, e só instala o conjunto depois que o primeiro frame existe;
+- usa `DXGI_PRESENT_DO_NOT_WAIT` em redraw/resize; backpressure descarta o frame
+  recorrente em vez de bloquear a thread da UI;
 - descarta superfícies antes do renderer;
 - constrói um conjunto novo de forma transacional;
 - tenta novamente uma única vez após falha recuperável de build;
@@ -53,6 +57,9 @@ do Native Surface Runtime termina.
 - Surface Frames temporários precisam respeitar lifetimes das cenas.
 - Recording Adapter adiciona uma Interface interna que deve permanecer menor que
   a Implementação nativa.
+- A criação ainda executa um `Present` imediato por Surface Role, mas não
+  serializa até cinco esperas por v-sync e nunca aceita uma superfície pronta
+  sem primeiro frame.
 - O coordenador ainda produzirá cenas completas durante rebuild até os próximos
   runtimes serem extraídos.
 
@@ -76,6 +83,9 @@ dependência do runtime gráfico sobre controllers.
 ## Verificação
 
 - Testes com recording Adapter.
+- Testes da política de apresentação provam `sync_interval = 0` na criação e
+  `DXGI_PRESENT_DO_NOT_WAIT` nos frames recorrentes; um `FrameSkipped` inicial
+  não é aceito como build bem-sucedido.
 - Busca estrutural prova ausência dos seis campos antigos em RuntimeSurfaces.
 - Nenhum helper de apresentação recebe `&mut RuntimeSurfaces`.
 - Gates determinísticos definidos em `docs/architecture/delivery.md`.

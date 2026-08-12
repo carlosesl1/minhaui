@@ -5,22 +5,26 @@ use windows::core::Result;
 
 use crate::win32_appbar::TopbarWindow;
 use crate::win32_event_queue::{RoutedPlatformEvent, native_window_id};
-use crate::win32_owner::{RuntimeSurfaces, SurfaceWindows};
+use crate::win32_owner::{RuntimeSurfaces, ShellObservationWindows, SurfaceWindows};
+use crate::win32_shell_observation::{
+    ShellObservation, ShellObservationLoadResult, ShellObservationRuntime, ShellObservationUpdate,
+};
 use crate::win32_slot_lifecycle::{create_slot, reconcile_slots};
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{OwnedWindow, WindowClass, print_window};
+use crate::win32_windowing::DockFrameWaitable;
 use crate::{
-    DockRuntimeConfig, MonitorPlacementInput, NativeEventTarget, NativeRouteDecision,
-    NativeWindowSlot, PlatformEvent, route_native_event_to_slot,
+    MonitorPlacementInput, NativeEventTarget, NativeWindowId, NativeWindowSlot, PlatformEvent,
 };
 
 pub(super) struct ShellSlot {
-    pub(super) _sync_timer: TimerGuard,
+    pub(super) sync_timer: Option<TimerGuard>,
     pub(super) runtime: RuntimeSurfaces,
     pub(super) monitor: MonitorId,
     pub(super) topbar: TopbarWindow,
     pub(super) dock: OwnedWindow,
     pub(super) popover: OwnedWindow,
+    pub(super) app_menu: OwnedWindow,
     pub(super) preview: OwnedWindow,
     pub(super) settings: OwnedWindow,
 }
@@ -28,9 +32,10 @@ pub(super) struct ShellSlot {
 #[derive(Clone, Copy)]
 pub(super) struct SlotFeatures {
     pub(super) force_warp: bool,
-    pub(super) safe_mode: bool,
+    pub(super) solid_material: bool,
     pub(super) backdrop_enabled: bool,
     pub(super) reduced_motion: bool,
+    pub(super) liquid_glass: bool,
 }
 
 impl ShellSlot {
@@ -46,8 +51,22 @@ impl ShellSlot {
             &mut self.topbar,
             &mut self.dock,
             &mut self.popover,
+            &mut self.app_menu,
             &mut self.preview,
             &mut self.settings,
+        )
+    }
+
+    pub(super) fn apply_observation(&mut self, observation: &ShellObservation) -> Result<bool> {
+        self.runtime.apply_shell_observation(
+            observation,
+            ShellObservationWindows {
+                topbar: &mut self.topbar,
+                dock: &mut self.dock,
+                popover: &mut self.popover,
+                preview: &mut self.preview,
+                settings: &mut self.settings,
+            },
         )
     }
 
@@ -55,6 +74,7 @@ impl ShellSlot {
         print_window(&self.topbar, self.runtime.device_kind());
         print_window(&self.dock, self.runtime.device_kind());
         print_window(&self.popover, self.runtime.device_kind());
+        print_window(&self.app_menu, self.runtime.device_kind());
         print_window(&self.preview, self.runtime.device_kind());
         print_window(&self.settings, self.runtime.device_kind());
     }
@@ -66,6 +86,16 @@ impl ShellSlot {
 
     pub(super) fn topbar_hwnd(&self) -> windows::Win32::Foundation::HWND {
         self.topbar.hwnd
+    }
+
+    pub(super) fn dock_hwnd(&self) -> windows::Win32::Foundation::HWND {
+        self.dock.hwnd
+    }
+
+    fn collect_dock_frame_waitable(&self, waitables: &mut Vec<DockFrameWaitable>) {
+        if let Some(handle) = self.runtime.dock_frame_waitable() {
+            waitables.push(DockFrameWaitable::new(handle, self.dock.hwnd));
+        }
     }
 
     pub(super) fn reregister_topbar(&mut self) -> Result<()> {
@@ -80,7 +110,12 @@ impl ShellSlot {
             native_window_id(self.popover.hwnd),
             native_window_id(self.settings.hwnd),
             native_window_id(self.preview.hwnd),
+            native_window_id(self.app_menu.hwnd),
         )
+    }
+
+    fn owns_window(&self, window: NativeWindowId) -> bool {
+        self.route().contains(window)
     }
 
     pub(super) fn reconcile_monitor(&mut self, monitor: MonitorPlacementInput) -> Result<()> {
@@ -108,13 +143,28 @@ impl ShellSlot {
         }
         self.settings.reposition(work_area)?;
         self.preview.reposition(work_area)?;
-        self.runtime.rebuild_native_surfaces(SurfaceWindows {
-            topbar: &self.topbar,
-            dock: &self.dock,
-            popover: &self.popover,
-            preview: &self.preview,
-            settings: &self.settings,
-        })
+        self.app_menu.reposition(work_area)?;
+        self.runtime.rebuild_native_surfaces_with_app_menu(
+            SurfaceWindows {
+                topbar: &self.topbar,
+                dock: &self.dock,
+                popover: &self.popover,
+                preview: &self.preview,
+                settings: &self.settings,
+            },
+            &self.app_menu,
+        )
+    }
+}
+
+pub(super) fn collect_dock_frame_waitables(
+    slots: &[ShellSlot],
+    waitables: &mut Vec<DockFrameWaitable>,
+) {
+    waitables.clear();
+    waitables.reserve(slots.len());
+    for slot in slots {
+        slot.collect_dock_frame_waitable(waitables);
     }
 }
 
@@ -122,10 +172,19 @@ pub(super) fn create_slots(
     class: &WindowClass,
     monitors: &[MonitorPlacementInput],
     features: SlotFeatures,
+    config: &shell_config::ShellConfigV1,
+    observation: &ShellObservation,
 ) -> Result<Vec<ShellSlot>> {
     let mut slots = Vec::new();
-    for monitor in monitors {
-        slots.push(create_slot(class, *monitor, features)?);
+    for (index, monitor) in monitors.iter().enumerate() {
+        slots.push(create_slot(
+            class,
+            *monitor,
+            features,
+            config,
+            observation,
+            index == 0,
+        )?);
     }
     Ok(slots)
 }
@@ -133,33 +192,60 @@ pub(super) fn create_slots(
 pub(super) fn dispatch_event(
     class: &WindowClass,
     features: SlotFeatures,
+    config: &shell_config::ShellConfigV1,
+    observation_runtime: &mut ShellObservationRuntime,
     slots: &mut Vec<ShellSlot>,
     event: RoutedPlatformEvent,
 ) -> Result<bool> {
+    if matches!(event.event(), PlatformEvent::SyncWindows) {
+        observation_runtime.request_refresh(crate::win32_owner::now_ms());
+        return Ok(true);
+    }
+    if matches!(event.event(), PlatformEvent::ShellObservationLoaded(_)) {
+        let PlatformEvent::ShellObservationLoaded(result) = event.into_event() else {
+            unreachable!("matched shell observation event");
+        };
+        return apply_shell_observation_result(observation_runtime, slots, result);
+    }
+    let observation = observation_runtime.current();
     match event.target() {
-        NativeEventTarget::Broadcast => {
-            handle_broadcast_event(class, features, slots, event.into_event())
+        NativeEventTarget::Broadcast => handle_broadcast_event(
+            class,
+            features,
+            config,
+            observation,
+            slots,
+            event.into_event(),
+        ),
+        NativeEventTarget::Window(_) => {
+            dispatch_window_event(class, features, config, observation, slots, event)
         }
-        NativeEventTarget::Window(_) => dispatch_window_event(class, features, slots, event),
     }
 }
 
 pub(super) fn handle_broadcast_event(
     class: &WindowClass,
     features: SlotFeatures,
+    config: &shell_config::ShellConfigV1,
+    observation: &ShellObservation,
     slots: &mut Vec<ShellSlot>,
     event: PlatformEvent,
 ) -> Result<bool> {
     match event {
         PlatformEvent::DisplayChanged => {
-            reconcile_slots(class, slots, features)?;
+            reconcile_slots(class, slots, features, config, observation)?;
             Ok(true)
         }
         PlatformEvent::TaskbarCreated => {
             for slot in slots.iter_mut() {
                 slot.reregister_topbar()?;
             }
-            reconcile_slots(class, slots, features)?;
+            reconcile_slots(class, slots, features, config, observation)?;
+            for slot in slots.iter_mut() {
+                if !slot.handle_event(PlatformEvent::TaskbarCreated)? {
+                    return Ok(false);
+                }
+            }
             Ok(true)
         }
         PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => Ok(false),
@@ -174,11 +260,42 @@ pub(super) fn handle_broadcast_event(
     }
 }
 
-pub(super) fn print_monitor_placements(monitors: &[MonitorPlacementInput]) {
+fn apply_shell_observation_result(
+    runtime: &mut ShellObservationRuntime,
+    slots: &mut [ShellSlot],
+    result: ShellObservationLoadResult,
+) -> Result<bool> {
+    match runtime.complete(result) {
+        ShellObservationUpdate::Unchanged | ShellObservationUpdate::Stale => return Ok(true),
+        ShellObservationUpdate::Failed(code) => {
+            let code = format!("0x{:08X}", code.0 as u32);
+            crate::diagnostics::record(
+                crate::diagnostics::DiagnosticModule::AppLifecycle,
+                crate::diagnostics::LogLevel::Error,
+                "shell.observation.failed",
+                &[("hresult", &code)],
+            );
+            return Ok(true);
+        }
+        ShellObservationUpdate::Changed => {}
+    }
+    let observation = runtime.current();
+    for slot in slots {
+        if !slot.apply_observation(observation)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(super) fn print_monitor_placements(
+    monitors: &[MonitorPlacementInput],
+    config: &shell_config::ShellConfigV1,
+) {
     let fullscreen = Vec::new();
     for placement in crate::plan_monitor_placements(
         monitors,
-        DockRuntimeConfig::default(),
+        crate::win32_sample_state::dock_runtime_config(config),
         fullscreen.as_slice(),
     ) {
         let dock = placement.dock().rect();
@@ -198,18 +315,23 @@ pub(super) fn print_monitor_placements(monitors: &[MonitorPlacementInput]) {
 fn dispatch_window_event(
     class: &WindowClass,
     features: SlotFeatures,
+    config: &shell_config::ShellConfigV1,
+    observation: &ShellObservation,
     slots: &mut Vec<ShellSlot>,
     event: RoutedPlatformEvent,
 ) -> Result<bool> {
-    let routes = slots.iter().map(ShellSlot::route).collect::<Vec<_>>();
-    match route_native_event_to_slot(&routes, event.target()) {
-        NativeRouteDecision::Slot(monitor) => slots
+    match event.target() {
+        NativeEventTarget::Window(window) => slots
             .iter_mut()
-            .find(|slot| slot.monitor == monitor)
+            .find(|slot| slot.owns_window(window))
             .map_or(Ok(true), |slot| slot.handle_event(event.into_event())),
-        NativeRouteDecision::Broadcast => {
-            handle_broadcast_event(class, features, slots, event.into_event())
-        }
-        NativeRouteDecision::UnknownWindow => Ok(true),
+        NativeEventTarget::Broadcast => handle_broadcast_event(
+            class,
+            features,
+            config,
+            observation,
+            slots,
+            event.into_event(),
+        ),
     }
 }

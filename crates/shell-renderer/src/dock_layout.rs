@@ -282,7 +282,7 @@ pub fn dock_scene_max_width(scene: &DockScene) -> f32 {
         .iter()
         .filter(|visual| visual.kind() == DockItemVisualKind::App)
         .count();
-    let maximum = config.magnified_item_size().min(config.item_size() * 1.22);
+    let maximum = config.magnified_item_size().max(config.item_size());
     let maximum_growth = (maximum - config.item_size()).max(0.0);
     dock_scene_width(scene) + maximum_growth * app_count.min(2) as f32
 }
@@ -333,7 +333,7 @@ fn visual_size(
     let radius = (config.item_size() + config.spacing()) * 2.0;
     let distance = (pointer_x - center_x(resting_bounds)).abs();
     let influence = raised_cosine(distance, radius);
-    let maximum = config.magnified_item_size().min(config.item_size() * 1.22);
+    let maximum = config.magnified_item_size().max(config.item_size());
     config.item_size()
         + (maximum - config.item_size()) * influence * smoothstep(scene.hover_strength())
 }

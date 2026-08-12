@@ -93,6 +93,20 @@ impl DockController {
     }
 
     #[must_use]
+    pub fn has_preview_windows_for_item(&self, item: DockItemId) -> bool {
+        let Some(app) = self
+            .state
+            .dock_items()
+            .iter()
+            .find(|entry| entry.id() == item)
+            .map(DockItem::app)
+        else {
+            return false;
+        };
+        self.previews.values().any(|window| window.matches_app(app))
+    }
+
+    #[must_use]
     pub fn preview_windows_for_item(&self, item: DockItemId) -> Vec<&PreviewWindowState> {
         let Some(app) = self
             .state

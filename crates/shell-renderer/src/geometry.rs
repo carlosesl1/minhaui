@@ -112,6 +112,12 @@ impl ShellMetrics {
     }
 
     #[must_use]
+    pub const fn with_dock_height(mut self, height_dip: f32) -> Self {
+        self.dock_height_dip = height_dip;
+        self
+    }
+
+    #[must_use]
     pub const fn dock_height_dip(self) -> f32 {
         self.dock_height_dip
     }

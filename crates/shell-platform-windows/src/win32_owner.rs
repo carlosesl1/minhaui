@@ -5,54 +5,138 @@ use std::time::{Duration, Instant};
 use shell_renderer::native::{
     DeviceKind, ShellScenes, ShowcaseRole, SurfaceMetrics, SurfaceVisibilityAnimation,
 };
-use shell_renderer::{PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene};
+use shell_renderer::{
+    DipPoint, Dpi, PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene,
+    context_menu_height_for_entries, layout_popover_scene, physical_from_dip, popover_surface_size,
+};
+use windows::Win32::Foundation::HANDLE;
 use windows::core::Result;
 
+use crate::dock_edge_detection::dock_edge_probe_mode;
 use crate::win32_actions::apply_dock_actions;
-use crate::win32_discovery::{WindowIdentityCache, discover_running_windows};
 use crate::win32_dock_render::{DockRenderBaseline, DockRenderWindows, dip_surface};
 use crate::win32_fullscreen_sync::FullscreenSyncWindows;
 use crate::win32_pointer::{DockCursorLocation, dock_cursor_location};
 use crate::win32_preview::DwmPreviewThumbnail;
 use crate::win32_preview_interaction::PreviewHit;
-use crate::win32_preview_qa::seed_restricted_preview_for_qa;
 use crate::win32_preview_render::{PreviewPresentation, PreviewRenderWindows};
 use crate::win32_sample_state::density_for_width;
+use crate::win32_shell_observation::ShellObservation;
 use crate::win32_surface_runtime::{
     NativeSurfaceOptions, SurfaceBuildPlan, SurfaceFrame, SurfaceTarget, SurfaceUpdate,
-    Win32NativeSurfaceRuntime, runtime_device_kind,
+    Win32NativeSurfaceRuntime, present_app_menu_frame, runtime_device_kind,
 };
 use crate::win32_timer::TimerGuard;
-use crate::win32_topbar_status::TopbarStatusReader;
-use crate::win32_window::OwnedWindow;
+use crate::win32_window::{ExternalMenuPopoverLayerGuard, OwnedWindow};
 use crate::win32_windowing::{window_monitor_bounds, window_work_area};
 use crate::{
-    DefaultPopoverDataProvider, DockContextMenuController, DockController, DockVisibilityMotion,
-    PlatformEvent, PopoverController, PreviewController, PreviewEffect, PreviewEntranceMotion,
-    PreviewPhase, RuntimeAction, RuntimeOrchestrator, SettingsController, TopbarController,
+    BackgroundAppMenuCommand, BackgroundAppMenuController, DefaultPopoverDataProvider,
+    DockContextMenuController, DockController, DockVisibilityMotion, ExternalMenuCoordinator,
+    ExternalMenuEffect, PlatformEvent, PopoverController, PreviewController, PreviewEffect,
+    PreviewEntranceMotion, PreviewPhase, QueuedBackgroundAppMenuAction, QuickSettingsController,
+    RuntimeAction, RuntimeOrchestrator, SettingsController, TopbarController,
+    TrayActivationCoordinator, TrayActivationStatus, TrayScreenPoint,
 };
 
 const EDGE_REVEAL_GRACE: Duration = Duration::from_millis(450);
+const EXTERNAL_MENU_FOCUS_RESTORE_GRACE: Duration = Duration::from_millis(450);
+const SHELL_MENU_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const SHELL_MENU_WATCHDOG: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShellMenuHandoff {
+    app: crate::BackgroundAppId,
+    owner_process_ids: Box<[u32]>,
+    observed_owner_pid: Option<u32>,
+    generation: u64,
+    started_at: Instant,
+}
+
+impl ShellMenuHandoff {
+    fn new(
+        app: crate::BackgroundAppId,
+        owner_process_ids: &[u32],
+        generation: u64,
+        started_at: Instant,
+    ) -> Self {
+        let owner_process_ids = owner_process_ids
+            .iter()
+            .copied()
+            .filter(|owner_process_id| *owner_process_id != 0)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            app,
+            owner_process_ids,
+            observed_owner_pid: None,
+            generation,
+            started_at,
+        }
+    }
+
+    fn observe(&mut self, owner_pid: u32, generation: u64) -> Option<crate::BackgroundAppId> {
+        if !self.owner_process_ids.contains(&owner_pid) || self.generation != generation {
+            return None;
+        }
+        self.observed_owner_pid = Some(owner_pid);
+        Some(self.app)
+    }
+
+    fn ended(&self, owner_pid: u32, generation: u64) -> Option<crate::BackgroundAppId> {
+        (self.observed_owner_pid == Some(owner_pid) && self.generation == generation)
+            .then_some(self.app)
+    }
+
+    fn expired(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.started_at)
+            >= if self.observed_owner_pid.is_some() {
+                SHELL_MENU_WATCHDOG
+            } else {
+                SHELL_MENU_REQUEST_TIMEOUT
+            }
+    }
+}
 
 pub(super) struct RuntimeSurfaces {
     pub(super) reduced_motion: bool,
+    pub(super) background_apps_worker:
+        std::sync::Arc<crate::background_apps_worker::BackgroundAppsWorker>,
+    shell_menu_worker: crate::shell_menu_worker::ShellMenuWorker,
+    pub(super) quick_settings_worker:
+        std::sync::Arc<crate::quick_settings_worker::QuickSettingsWorker>,
+    pub(super) quick_settings_generation: u64,
+    pub(super) quick_settings_audio_cache: crate::AudioPanelSnapshot,
     pub(super) surface_runtime: Win32NativeSurfaceRuntime,
     pub(super) fullscreen_suppressed: bool,
     orchestration: RuntimeOrchestrator,
     pub(super) dock_controller: DockController,
     pub(super) topbar_controller: TopbarController,
     pub(super) popover_controller: PopoverController,
+    pub(super) quick_settings_controller: QuickSettingsController,
+    pub(super) media_session_worker: Option<crate::media_session_worker::MediaSessionWorker>,
     pub(super) context_menu_controller: DockContextMenuController,
+    pub(super) background_app_menu_controller: BackgroundAppMenuController,
+    pub(super) tray_activation_coordinator: TrayActivationCoordinator,
+    pub(super) external_menu_coordinator: ExternalMenuCoordinator,
+    external_menu_hook: Option<crate::win32_external_menu_events::ExternalMenuEventRegistration>,
+    external_menu_timer: Option<TimerGuard>,
+    external_menu_popover_layer: Option<ExternalMenuPopoverLayerGuard>,
+    shell_menu_handoff: Option<ShellMenuHandoff>,
+    external_menu_focus_restore_deadline: Option<Instant>,
+    background_app_context_point: Option<shell_renderer::DipPoint>,
+    app_menu_endpoint: SurfaceEndpoint,
     pub(super) settings_controller: SettingsController,
     pub(super) popover_provider: DefaultPopoverDataProvider<crate::OfflineWeatherProvider>,
-    pub(super) topbar_status: TopbarStatusReader,
-    pub(super) last_topbar_poll_ms: u64,
-    window_identity_cache: WindowIdentityCache,
+    dock_animation_active: bool,
     dock_animation_timer: Option<TimerGuard>,
     dock_edge_probe_timer: Option<TimerGuard>,
     edge_reveal_active: bool,
     edge_reveal_grace_deadline: Option<Instant>,
     last_dock_animation_frame: Option<Instant>,
+    pending_dock_pointer: Option<crate::DockPointerSample>,
+    dock_pointer_moves_received: u64,
+    dock_pointer_moves_consumed: u64,
+    pub(super) pending_dock_redraw: bool,
     pub(super) dock_visibility_motion: Option<DockVisibilityMotion>,
     pub(super) dock_visibility_opacity: f32,
     preview_controller: PreviewController,
@@ -62,6 +146,19 @@ pub(super) struct RuntimeSurfaces {
     pub(super) preview_scene: Option<WindowPreviewScene>,
     pub(super) preview_layout: Option<WindowPreviewPanelLayout>,
     preview_pressed_hit: Option<PreviewHit>,
+    pub(super) active_topbar_anchor: Option<crate::TopbarOverlayAnchor>,
+    pub(super) background_apps: Vec<crate::background_apps::BackgroundAppEntry>,
+    pub(super) background_apps_cache_ready: bool,
+    background_apps_catalog_generation: u64,
+    pub(super) latest_observed_windows: Vec<crate::ObservedWindow>,
+}
+
+impl Drop for RuntimeSurfaces {
+    fn drop(&mut self) {
+        let _ = self.external_menu_coordinator.shutdown();
+        self.cancel_pending_tray_activation();
+        self.release_external_menu_handles();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -73,42 +170,161 @@ pub(super) struct SurfaceWindows<'a> {
     pub(super) settings: &'a OwnedWindow,
 }
 
+pub(super) struct ShellObservationWindows<'a> {
+    pub(super) topbar: &'a mut OwnedWindow,
+    pub(super) dock: &'a mut OwnedWindow,
+    pub(super) popover: &'a mut OwnedWindow,
+    pub(super) preview: &'a mut OwnedWindow,
+    pub(super) settings: &'a mut OwnedWindow,
+}
+
 pub(super) struct RuntimeOptions {
     pub(super) force_warp: bool,
     pub(super) solid_material: bool,
     pub(super) reduced_motion: bool,
+    pub(super) liquid_glass: bool,
+}
+
+fn focused_background_app_anchor(
+    scene: &shell_renderer::PopoverScene,
+    surface: shell_renderer::DipRect,
+    origin: PhysicalRect,
+    dpi: Dpi,
+) -> Option<PhysicalRect> {
+    let focused = scene.focused()?;
+    let layout = layout_popover_scene(scene, surface);
+    let row = layout.rows().iter().find(|row| row.index() == focused)?;
+    let bounds = row.bounds();
+    Some(PhysicalRect::new(
+        origin.x + physical_from_dip(bounds.x + bounds.width, dpi),
+        origin.y + physical_from_dip(bounds.y + bounds.height / 2.0, dpi),
+        1,
+        1,
+    ))
+}
+
+const fn native_activation_generation(
+    identity: crate::native_tray::NativeTrayIdentity,
+    catalog_generation: u64,
+) -> Option<u64> {
+    if identity.is_current(catalog_generation) {
+        Some(catalog_generation)
+    } else {
+        None
+    }
+}
+
+const fn suppress_external_menu_dismissal(
+    phase: crate::ExternalMenuPhase,
+    handoff_in_progress: bool,
+) -> bool {
+    handoff_in_progress || !matches!(phase, crate::ExternalMenuPhase::Idle)
+}
+
+fn external_menu_focus_restore_is_active(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| now <= deadline)
+}
+
+fn should_dismiss_after_external_menu_end(
+    dismissed_by_pointer_hint: bool,
+    foreground: Option<(crate::NativeWindowId, u32)>,
+    menu_owner_pid: u32,
+    shell_windows: &[crate::NativeWindowId],
+) -> bool {
+    let Some((foreground_window, foreground_process_id)) = foreground else {
+        return dismissed_by_pointer_hint;
+    };
+    if shell_windows.contains(&foreground_window) {
+        return false;
+    }
+    foreground_process_id != menu_owner_pid
+}
+
+fn shell_menu_owner_process_ids(app_owner_pid: u32) -> Box<[u32]> {
+    let mut owner_process_ids = vec![app_owner_pid];
+    if let Some(shell_owner_pid) = crate::win32_tray_activation::shell_menu_owner_process_id()
+        && !owner_process_ids.contains(&shell_owner_pid)
+    {
+        owner_process_ids.push(shell_owner_pid);
+    }
+    owner_process_ids.into_boxed_slice()
+}
+
+const fn dock_pointer_waits_for_frame(
+    phase: crate::DockPointerPhase,
+    reduced_motion: bool,
+) -> bool {
+    !reduced_motion
+        && matches!(
+            phase,
+            crate::DockPointerPhase::Moved | crate::DockPointerPhase::Dragged
+        )
+}
+
+const fn dock_frame_waitable_is_active(
+    animation_active: bool,
+    fallback_timer_active: bool,
+    waitable_available: bool,
+) -> bool {
+    animation_active && !fallback_timer_active && waitable_available
 }
 
 impl RuntimeSurfaces {
     pub(super) fn new(
         options: RuntimeOptions,
         windows: SurfaceWindows<'_>,
+        app_menu: &OwnedWindow,
         dock_controller: DockController,
         topbar_controller: TopbarController,
-        window_identity_cache: WindowIdentityCache,
+        config: shell_config::ShellConfigV1,
     ) -> Result<Self> {
+        let quick_settings_preferences = config.quick_settings().clone();
         let mut runtime = Self {
             reduced_motion: options.reduced_motion,
+            background_apps_worker: crate::background_apps_worker::BackgroundAppsWorker::shared()?,
+            shell_menu_worker: crate::shell_menu_worker::ShellMenuWorker::new()?,
+            quick_settings_worker: crate::quick_settings_worker::QuickSettingsWorker::shared()?,
+            quick_settings_generation: 0,
+            quick_settings_audio_cache: crate::AudioPanelSnapshot::default(),
             surface_runtime: Win32NativeSurfaceRuntime::new(NativeSurfaceOptions {
                 force_warp: options.force_warp,
                 solid_material: options.solid_material,
+                liquid_glass: options.liquid_glass,
+                reduced_motion: options.reduced_motion,
             }),
             fullscreen_suppressed: false,
             orchestration: RuntimeOrchestrator::new(),
             dock_controller,
             topbar_controller,
             popover_controller: PopoverController::new(),
+            quick_settings_controller: QuickSettingsController::new(
+                quick_settings_preferences,
+                crate::QuickSettingsCapabilities::default(),
+            ),
+            media_session_worker: None,
             context_menu_controller: DockContextMenuController::new(),
-            settings_controller: SettingsController::new(shell_config::ShellConfigV1::default()),
+            background_app_menu_controller: BackgroundAppMenuController::new(),
+            tray_activation_coordinator: TrayActivationCoordinator::new(),
+            external_menu_coordinator: ExternalMenuCoordinator::new(),
+            external_menu_hook: None,
+            external_menu_timer: None,
+            external_menu_popover_layer: None,
+            shell_menu_handoff: None,
+            external_menu_focus_restore_deadline: None,
+            background_app_context_point: None,
+            app_menu_endpoint: surface_endpoint(app_menu),
+            settings_controller: SettingsController::new(config),
             popover_provider: DefaultPopoverDataProvider::offline(),
-            topbar_status: TopbarStatusReader::default(),
-            last_topbar_poll_ms: 0,
-            window_identity_cache,
+            dock_animation_active: false,
             dock_animation_timer: None,
             dock_edge_probe_timer: None,
             edge_reveal_active: false,
             edge_reveal_grace_deadline: None,
             last_dock_animation_frame: None,
+            pending_dock_pointer: None,
+            dock_pointer_moves_received: 0,
+            dock_pointer_moves_consumed: 0,
+            pending_dock_redraw: false,
             dock_visibility_motion: None,
             dock_visibility_opacity: 1.0,
             preview_controller: PreviewController::new(options.reduced_motion),
@@ -118,8 +334,20 @@ impl RuntimeSurfaces {
             preview_scene: None,
             preview_layout: None,
             preview_pressed_hit: None,
+            active_topbar_anchor: None,
+            background_apps: Vec::new(),
+            background_apps_cache_ready: false,
+            background_apps_catalog_generation: 0,
+            latest_observed_windows: Vec::new(),
         };
         runtime.rebuild_native_surfaces(windows)?;
+        runtime.background_apps_worker.request_initial(
+            runtime.popover_controller.load_generation(),
+            crate::win32_event_queue::native_window_id(windows.topbar.hwnd),
+        );
+        runtime.quick_settings_generation = runtime.quick_settings_worker.request_initial_refresh(
+            crate::win32_event_queue::native_window_id(windows.topbar.hwnd),
+        );
         Ok(runtime)
     }
 
@@ -134,11 +362,198 @@ impl RuntimeSurfaces {
         topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
         popover: &mut OwnedWindow,
+        app_menu: &mut OwnedWindow,
         preview: &mut OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<bool> {
+        let event = match event {
+            PlatformEvent::QuickSettingsWorkerCompleted(result) => {
+                return self.complete_quick_settings_worker(
+                    result, topbar, dock, popover, preview, settings,
+                );
+            }
+            PlatformEvent::ShellMenuActivationCompleted(result) => {
+                if !self.shell_menu_worker.is_current(&result) {
+                    return Ok(true);
+                }
+                let (_request, app, generation, point, outcome) = result.into_parts();
+                if generation != self.popover_controller.load_generation()
+                    || self.popover_controller.active_kind()
+                        != Some(shell_core::Popover::BackgroundApps)
+                {
+                    self.cleanup_external_menu_state();
+                    return Ok(true);
+                }
+                match outcome {
+                    crate::shell_menu_worker::ShellMenuActivationOutcome::Activated => {}
+                    crate::shell_menu_worker::ShellMenuActivationOutcome::Superseded => {
+                        self.cleanup_external_menu_state();
+                    }
+                    crate::shell_menu_worker::ShellMenuActivationOutcome::Unavailable
+                    | crate::shell_menu_worker::ShellMenuActivationOutcome::Failed => {
+                        self.cleanup_external_menu_state();
+                        self.show_shell_owned_background_menu(
+                            app, false, point, popover, app_menu, topbar, dock, preview, settings,
+                        )?;
+                    }
+                }
+                return Ok(true);
+            }
+            PlatformEvent::BackgroundAppsLoaded(result) => {
+                let (generation, captured) = result.into_parts();
+                let captured_ok = captured.is_ok();
+                let (items, catalog) = match captured {
+                    Ok(entries) => (
+                        Ok(crate::popover_adapters::background_app_items(&entries)),
+                        entries,
+                    ),
+                    Err(error) => (
+                        Err(crate::PopoverDataError::Adapter(error.code())),
+                        Vec::new(),
+                    ),
+                };
+                if self
+                    .popover_controller
+                    .complete_background_apps(generation, items)
+                {
+                    let generation_effects =
+                        self.external_menu_coordinator.set_generation(generation);
+                    if !generation_effects.is_empty() {
+                        self.cleanup_external_menu_state();
+                    }
+                    self.background_apps = catalog;
+                    self.background_apps_cache_ready = captured_ok;
+                    if captured_ok {
+                        self.background_apps_catalog_generation = generation;
+                    }
+                    if let Some(anchor) = self.active_topbar_anchor {
+                        let work = window_work_area(topbar.hwnd)?;
+                        if let Some(scene) = self.popover_controller.scene() {
+                            popover.place_popover(
+                                work,
+                                self.topbar_anchor_rect(topbar, anchor),
+                                popover_surface_size(&scene),
+                            )?;
+                        }
+                    }
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                } else if captured_ok
+                    && self.popover_controller.active_kind()
+                        != Some(shell_core::Popover::BackgroundApps)
+                {
+                    self.background_apps = catalog;
+                    self.background_apps_cache_ready = true;
+                    self.background_apps_catalog_generation = generation;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::MediaSessionsChanged(result) => {
+                let reflow = match result {
+                    Ok(snapshot) => self
+                        .quick_settings_controller
+                        .apply_media_snapshot(snapshot),
+                    Err(error) => {
+                        crate::diagnostics::record(
+                            crate::diagnostics::DiagnosticModule::AppLifecycle,
+                            crate::diagnostics::LogLevel::Error,
+                            "media_sessions_failed",
+                            &[("error", &error.to_string())],
+                        );
+                        self.quick_settings_controller.apply_media_snapshot(
+                            crate::media_session_types::MediaSessionSnapshot::default(),
+                        )
+                    }
+                };
+                if self.quick_settings_controller.is_open() {
+                    if reflow {
+                        let work = window_work_area(topbar.hwnd)?;
+                        self.place_active_overlay(work, topbar, dock, popover)?;
+                    }
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::MediaTransportCompleted(result) => {
+                if self
+                    .quick_settings_controller
+                    .complete_media_transport(result)
+                    && self.quick_settings_controller.is_open()
+                {
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                if let Some(worker) = self.media_session_worker.as_ref() {
+                    worker.send(crate::media_session_types::MediaWorkerCommand::Refresh);
+                }
+                return Ok(true);
+            }
+            PlatformEvent::NightLightCompleted(result) => {
+                let actions = self
+                    .quick_settings_controller
+                    .complete_night_light(result.request, result.result);
+                if self.quick_settings_controller.is_open() {
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::BrightnessCompleted(result) => {
+                let actions = self
+                    .quick_settings_controller
+                    .complete_brightness(result.request, result.result);
+                if self.quick_settings_controller.is_open() {
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                }
+                return Ok(true);
+            }
+            event => event,
+        };
+        if matches!(event, PlatformEvent::TaskbarCreated) {
+            self.external_menu_coordinator.explorer_restart();
+            self.cleanup_external_menu_state();
+            self.background_apps.clear();
+            self.background_apps_cache_ready = false;
+            if self.popover_controller.active_kind() == Some(shell_core::Popover::BackgroundApps) {
+                let generation = self
+                    .popover_controller
+                    .begin_loading(shell_core::Popover::BackgroundApps);
+                self.background_apps_worker.request(
+                    generation,
+                    crate::win32_event_queue::native_window_id(topbar.hwnd),
+                );
+                self.redraw_popover(topbar, dock, popover, preview, settings)?;
+            } else {
+                self.background_apps_worker.request(
+                    self.popover_controller.load_generation(),
+                    crate::win32_event_queue::native_window_id(topbar.hwnd),
+                );
+            }
+        }
         match &event {
             PlatformEvent::DismissTransientOverlays => {
+                let now = Instant::now();
+                let focus_restore_grace = external_menu_focus_restore_is_active(
+                    self.external_menu_focus_restore_deadline,
+                    now,
+                );
+                if !focus_restore_grace {
+                    self.external_menu_focus_restore_deadline = None;
+                }
+                if suppress_external_menu_dismissal(
+                    self.external_menu_coordinator.phase(),
+                    self.external_menu_popover_layer.is_some() || focus_restore_grace,
+                ) {
+                    let _ = self.external_menu_coordinator.on_wa_inactive();
+                    return Ok(true);
+                }
+                if self.background_app_menu_controller.is_active() {
+                    return Ok(true);
+                }
+                self.cleanup_external_menu_state();
+                self.background_app_menu_controller.dismiss();
+                app_menu.hide();
                 self.dismiss_transient_overlays(topbar, dock, popover, preview, settings)?;
                 let effects = self.preview_controller.dismiss(now_ms());
                 self.apply_preview_effects(&effects, topbar, dock, popover, preview, settings)?;
@@ -146,54 +561,40 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::DockPointer(sample) => {
-                self.edge_reveal_active = false;
-                self.edge_reveal_grace_deadline = None;
-                if sample.phase == crate::DockPointerPhase::Pressed {
-                    settings.hide();
+                let high_frequency_motion = matches!(
+                    sample.phase,
+                    crate::DockPointerPhase::Moved | crate::DockPointerPhase::Dragged
+                );
+                if high_frequency_motion {
+                    self.dock_pointer_moves_received =
+                        self.dock_pointer_moves_received.saturating_add(1);
                 }
-                let before = self.dock_controller.state().clone();
-                let visual_before = self.dock_controller.visual_generation();
-                let actions = self
-                    .dock_controller
-                    .handle_pointer(*sample)
-                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
-                if !apply_dock_actions(&actions, self.dock_controller.state())? {
-                    return Ok(false);
+                if dock_pointer_waits_for_frame(sample.phase, self.reduced_motion) {
+                    self.edge_reveal_active = false;
+                    self.edge_reveal_grace_deadline = None;
+                    self.pending_dock_pointer = Some(*sample);
+                    self.ensure_dock_animation_clock(dock)?;
+                    return Ok(true);
                 }
-                self.render_dock_change(
-                    DockRenderBaseline::new(&before, visual_before),
-                    &actions,
-                    DockRenderWindows {
-                        topbar,
-                        dock,
-                        popover,
-                        preview,
-                        settings,
-                    },
+                self.pending_dock_pointer = None;
+                if high_frequency_motion {
+                    self.dock_pointer_moves_consumed =
+                        self.dock_pointer_moves_consumed.saturating_add(1);
+                }
+                let keep_running = self.process_dock_pointer_sample(
+                    *sample, None, topbar, dock, popover, preview, settings,
                 )?;
-                self.sync_dock_animation(dock)?;
-                let target = self.dock_controller.hovered_item().filter(|item| {
-                    !self
-                        .dock_controller
-                        .preview_windows_for_item(*item)
-                        .is_empty()
-                });
-                let preview_effects = self
-                    .preview_controller
-                    .dock_target_changed(target, now_ms());
-                self.apply_preview_effects(
-                    &preview_effects,
-                    topbar,
-                    dock,
-                    popover,
-                    preview,
-                    settings,
-                )?;
-                self.sync_preview_timer(dock)?;
-                return Ok(true);
+                if matches!(
+                    sample.phase,
+                    crate::DockPointerPhase::Exited | crate::DockPointerPhase::Cancelled
+                ) {
+                    self.record_dock_pointer_batch();
+                }
+                return Ok(keep_running);
             }
             PlatformEvent::DockEdgeProbe => {
                 let Some(location) = dock_cursor_location(dock.hwnd, dock.rect) else {
+                    self.sync_dock_edge_probe(dock)?;
                     return Ok(true);
                 };
                 if !self.dock_controller.state().dock().is_revealed()
@@ -223,6 +624,7 @@ impl RuntimeSurfaces {
                             settings,
                         },
                     )?;
+                    self.sync_dock_edge_probe(dock)?;
                     return Ok(true);
                 }
                 let grace_elapsed = self
@@ -257,8 +659,8 @@ impl RuntimeSurfaces {
                             settings,
                         },
                     )?;
-                    self.sync_dock_edge_probe(dock)?;
                 }
+                self.sync_dock_edge_probe(dock)?;
                 return Ok(true);
             }
             PlatformEvent::PreviewTimer => {
@@ -353,22 +755,73 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::DockAnimationFrame => {
+                if !self.dock_animation_active {
+                    return Ok(true);
+                }
+                if let Some(sample) = self.pending_dock_pointer.take() {
+                    self.dock_pointer_moves_consumed =
+                        self.dock_pointer_moves_consumed.saturating_add(1);
+                    let now = Instant::now();
+                    let delta_seconds = self
+                        .last_dock_animation_frame
+                        .replace(now)
+                        .map_or(1.0 / 120.0, |previous| {
+                            now.saturating_duration_since(previous).as_secs_f32()
+                        });
+                    let keep_running = self.process_dock_pointer_sample(
+                        sample,
+                        Some(delta_seconds),
+                        topbar,
+                        dock,
+                        popover,
+                        preview,
+                        settings,
+                    )?;
+                    if !keep_running {
+                        return Ok(false);
+                    }
+                    if self.dock_animations_idle() && !self.pending_dock_redraw {
+                        self.stop_dock_animation_clock();
+                    }
+                    return Ok(true);
+                }
                 if self.reduced_motion {
                     self.dock_controller.snap_animation_to_target();
                     self.cancel_dock_visibility_motion();
-                    self.dock_animation_timer = None;
-                    self.last_dock_animation_frame = None;
+                    if self.pending_dock_redraw {
+                        self.pending_dock_redraw = false;
+                        self.redraw_dock(SurfaceWindows {
+                            topbar,
+                            dock: &*dock,
+                            popover,
+                            preview,
+                            settings,
+                        })?;
+                    }
+                    if !self.pending_dock_redraw {
+                        self.stop_dock_animation_clock();
+                    }
                     return Ok(true);
                 }
-                if self.dock_animation_timer.is_none() {
+                if self.pending_dock_redraw && self.dock_animations_idle() {
+                    self.pending_dock_redraw = false;
+                    self.redraw_dock(SurfaceWindows {
+                        topbar,
+                        dock: &*dock,
+                        popover,
+                        preview,
+                        settings,
+                    })?;
+                    if !self.pending_dock_redraw {
+                        self.stop_dock_animation_clock();
+                    }
                     return Ok(true);
                 }
                 if self.dock_animations_idle() {
-                    self.dock_animation_timer = None;
-                    self.last_dock_animation_frame = None;
+                    self.stop_dock_animation_clock();
                     return Ok(true);
                 }
-                let before = self.dock_controller.state().clone();
+                let dock_visibility_before = self.dock_controller.state().dock();
                 let visual_before = self.dock_controller.visual_generation();
                 let now = Instant::now();
                 let delta_seconds = self
@@ -392,7 +845,7 @@ impl RuntimeSurfaces {
                     },
                 )?;
                 self.render_dock_change(
-                    DockRenderBaseline::new(&before, visual_before),
+                    DockRenderBaseline::visual_only(dock_visibility_before, visual_before),
                     &[],
                     DockRenderWindows {
                         topbar,
@@ -403,18 +856,15 @@ impl RuntimeSurfaces {
                     },
                 )?;
                 if self.dock_animations_idle() {
-                    self.dock_animation_timer = None;
-                    self.last_dock_animation_frame = None;
+                    self.stop_dock_animation_clock();
                 }
+                self.sync_dock_edge_probe(dock)?;
                 return Ok(true);
             }
             PlatformEvent::DockKey(key) => {
                 if matches!(key, crate::DockKey::Preview)
                     && let Some(item) = self.dock_controller.focused_item()
-                    && !self
-                        .dock_controller
-                        .preview_windows_for_item(item)
-                        .is_empty()
+                    && self.dock_controller.has_preview_windows_for_item(item)
                 {
                     let effects = self.preview_controller.open_from_keyboard(item, now_ms());
                     self.apply_preview_effects(&effects, topbar, dock, popover, preview, settings)?;
@@ -526,8 +976,44 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     );
                 }
+                if self.quick_settings_controller.is_open() {
+                    if let Some(key) = quick_settings_key(*key) {
+                        let actions = self.quick_settings_controller.handle_key(key);
+                        self.apply_quick_settings_actions(
+                            &actions, topbar, dock, popover, preview, settings,
+                        )?;
+                    }
+                    return Ok(true);
+                }
                 let actions = self.popover_controller.handle_key(*key);
-                self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
+                self.apply_popover_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                )?;
+                return Ok(true);
+            }
+            PlatformEvent::PopoverPointerPressed(point) => {
+                if self.quick_settings_controller.is_open() {
+                    let actions = self
+                        .quick_settings_controller
+                        .pointer_press(*point, crate::win32_dock_render::dip_surface(popover));
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::PopoverContextPressed(point) => {
+                self.background_app_context_point = None;
+                let actions = self.popover_controller.handle_pointer_context_pressed(
+                    *point,
+                    crate::win32_dock_render::dip_surface(popover),
+                );
+                if !actions.is_empty() {
+                    self.background_app_context_point = Some(*point);
+                }
+                self.apply_popover_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                )?;
                 return Ok(true);
             }
             PlatformEvent::PopoverPointer(point) => {
@@ -540,10 +1026,22 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     );
                 }
+                if self.quick_settings_controller.is_open() {
+                    let surface = crate::win32_dock_render::dip_surface(popover);
+                    let actions = self
+                        .quick_settings_controller
+                        .pointer_release(*point, surface);
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                    return Ok(true);
+                }
                 let actions = self
                     .popover_controller
                     .handle_pointer(*point, crate::win32_dock_render::dip_surface(popover));
-                self.apply_popover_actions(&actions, topbar, dock, popover, preview, settings)?;
+                self.apply_popover_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                )?;
                 return Ok(true);
             }
             PlatformEvent::PopoverPointerMoved(point) => {
@@ -556,13 +1054,276 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     );
                 }
+                if self.quick_settings_controller.is_open() {
+                    let actions = self
+                        .quick_settings_controller
+                        .pointer_move(*point, crate::win32_dock_render::dip_surface(popover));
+                    self.apply_quick_settings_actions(
+                        &actions, topbar, dock, popover, preview, settings,
+                    )?;
+                    return Ok(true);
+                }
+                let actions = self
+                    .popover_controller
+                    .handle_pointer_move(*point, crate::win32_dock_render::dip_surface(popover));
+                self.apply_popover_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                )?;
                 return Ok(true);
+            }
+            PlatformEvent::PopoverContextRequested(point) => {
+                self.background_app_context_point = None;
+                let actions = self
+                    .popover_controller
+                    .handle_pointer_context(*point, crate::win32_dock_render::dip_surface(popover));
+                if !actions.is_empty() {
+                    self.background_app_context_point = Some(*point);
+                }
+                self.apply_popover_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                )?;
+                return Ok(true);
+            }
+            PlatformEvent::PopoverScroll(rows) => {
+                if !self.context_menu_controller.is_active() {
+                    if self.quick_settings_controller.is_open() {
+                        let actions = self.quick_settings_controller.scroll(*rows);
+                        self.apply_quick_settings_actions(
+                            &actions, topbar, dock, popover, preview, settings,
+                        )?;
+                        return Ok(true);
+                    }
+                    let actions = self.popover_controller.handle_scroll(*rows);
+                    self.apply_popover_actions(
+                        &actions, topbar, dock, popover, app_menu, preview, settings,
+                    )?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::ExternalMenuTimer => {
+                let now = Instant::now();
+                let generation = self.popover_controller.load_generation();
+                if let Some(handoff) = self.shell_menu_handoff.as_ref() {
+                    if handoff.generation != generation || handoff.expired(now) {
+                        let app = handoff.app;
+                        let mut redraw = self.cleanup_external_menu_state();
+                        redraw |= !self.popover_controller.restore_focus(app).is_empty();
+                        popover.restore_focus();
+                        if redraw {
+                            self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                        }
+                    } else if let Some(timer) = self.external_menu_timer.as_mut()
+                        && handoff.observed_owner_pid.is_some()
+                    {
+                        timer.rearm(1_000)?;
+                    }
+                    return Ok(true);
+                }
+                if self.external_menu_coordinator.phase() == crate::ExternalMenuPhase::Armed
+                    && let (Some(activation), Some(owner_pid)) = (
+                        self.external_menu_coordinator.activation(),
+                        self.external_menu_coordinator.owner_pid(),
+                    )
+                    && let Some(foreground) =
+                        crate::win32_external_menu_events::foreground_window_owner()
+                    && foreground.window.value() != 0
+                    && foreground.process_id == owner_pid
+                {
+                    let effects = self.external_menu_coordinator.foreground_window_observed(
+                        foreground.process_id,
+                        activation,
+                        generation,
+                        now,
+                    );
+                    if !effects.is_empty() {
+                        return self.apply_external_menu_effects(
+                            &effects, topbar, dock, popover, app_menu, preview, settings,
+                        );
+                    }
+                }
+                if self.external_menu_coordinator.phase() == crate::ExternalMenuPhase::Observed
+                    && let Some(owner_pid) = self.external_menu_coordinator.owner_pid()
+                    && crate::win32_external_menu_events::foreground_window_owner()
+                        .is_none_or(|foreground| foreground.process_id != owner_pid)
+                {
+                    let effects = self.external_menu_coordinator.owner_exit(owner_pid);
+                    if !effects.is_empty() {
+                        return self.apply_external_menu_effects(
+                            &effects, topbar, dock, popover, app_menu, preview, settings,
+                        );
+                    }
+                }
+                let effects = self.external_menu_coordinator.tick(now);
+                return self.apply_external_menu_effects(
+                    &effects, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::ExternalMenuPopupStarted {
+                window,
+                owner_process_id,
+            } => {
+                if window.value() == 0 {
+                    return Ok(true);
+                }
+                let generation = self.popover_controller.load_generation();
+                let shell_app = self
+                    .shell_menu_handoff
+                    .as_mut()
+                    .and_then(|handoff| handoff.observe(*owner_process_id, generation));
+                if let Some(app) = shell_app {
+                    let row_anchor =
+                        self.background_app_anchor(popover, self.background_app_context_point);
+                    let menu_anchor =
+                        PhysicalRect::new(popover.rect.x, row_anchor.y, 1, row_anchor.height);
+                    let work = window_work_area(topbar.hwnd)?;
+                    let _ = crate::win32_window::place_external_menu(*window, menu_anchor, work);
+                    self.popover_controller.mark_external_active(app);
+                    if let Some(timer) = self.external_menu_timer.as_mut() {
+                        timer.rearm(1_000)?;
+                    }
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                    return Ok(true);
+                }
+                let Some(activation) = self.external_menu_coordinator.activation() else {
+                    return Ok(true);
+                };
+                let effects = self.external_menu_coordinator.popup_start(
+                    *owner_process_id,
+                    activation,
+                    generation,
+                    Instant::now(),
+                );
+                if effects.is_empty() {
+                    return Ok(true);
+                }
+                let row_anchor =
+                    self.background_app_anchor(popover, self.background_app_context_point);
+                let menu_anchor =
+                    PhysicalRect::new(popover.rect.x, row_anchor.y, 1, row_anchor.height);
+                let work = window_work_area(topbar.hwnd)?;
+                let _ = crate::win32_window::place_external_menu(*window, menu_anchor, work);
+                return self.apply_external_menu_effects(
+                    &effects, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::ExternalMenuPopupEnded {
+                window,
+                owner_process_id,
+                dismissed_by_pointer,
+            } => {
+                let generation = self.popover_controller.load_generation();
+                let foreground = crate::win32_external_menu_events::foreground_window_owner()
+                    .map(|foreground| (foreground.window, foreground.process_id));
+                let shell_windows = [
+                    crate::win32_event_queue::native_window_id(topbar.hwnd),
+                    crate::win32_event_queue::native_window_id(dock.hwnd),
+                    crate::win32_event_queue::native_window_id(popover.hwnd),
+                    crate::win32_event_queue::native_window_id(app_menu.hwnd),
+                    crate::win32_event_queue::native_window_id(preview.hwnd),
+                    crate::win32_event_queue::native_window_id(settings.hwnd),
+                ];
+                if let Some(app) = self
+                    .shell_menu_handoff
+                    .as_ref()
+                    .and_then(|handoff| handoff.ended(*owner_process_id, generation))
+                {
+                    if should_dismiss_after_external_menu_end(
+                        *dismissed_by_pointer,
+                        foreground,
+                        *owner_process_id,
+                        &shell_windows,
+                    ) {
+                        return self.dismiss_after_external_pointer_end(
+                            topbar, dock, popover, app_menu, preview, settings,
+                        );
+                    }
+                    let mut redraw = self.cleanup_external_menu_state();
+                    self.external_menu_focus_restore_deadline =
+                        Some(Instant::now() + EXTERNAL_MENU_FOCUS_RESTORE_GRACE);
+                    redraw |= !self.popover_controller.restore_focus(app).is_empty();
+                    popover.restore_focus();
+                    if redraw {
+                        self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                    }
+                    return Ok(true);
+                }
+                let Some(activation) = self.external_menu_coordinator.activation() else {
+                    return Ok(true);
+                };
+                if window.value() == 0 {
+                    return Ok(true);
+                }
+                let effects = self.external_menu_coordinator.popup_end(
+                    *owner_process_id,
+                    activation,
+                    generation,
+                    Instant::now(),
+                );
+                if !effects.is_empty()
+                    && should_dismiss_after_external_menu_end(
+                        *dismissed_by_pointer,
+                        foreground,
+                        *owner_process_id,
+                        &shell_windows,
+                    )
+                {
+                    return self.dismiss_after_external_pointer_end(
+                        topbar, dock, popover, app_menu, preview, settings,
+                    );
+                }
+                if effects
+                    .iter()
+                    .any(|effect| matches!(effect, ExternalMenuEffect::RestoreFocus(_)))
+                {
+                    self.external_menu_focus_restore_deadline =
+                        Some(Instant::now() + EXTERNAL_MENU_FOCUS_RESTORE_GRACE);
+                }
+                return self.apply_external_menu_effects(
+                    &effects, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuKey(key) => {
+                let actions = self.background_app_menu_controller.handle_key(*key);
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuPointerMoved(point) => {
+                let actions = self
+                    .background_app_menu_controller
+                    .handle_pointer_move(*point, crate::win32_dock_render::dip_surface(app_menu));
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuPointerReleased(point) => {
+                let actions = self.background_app_menu_controller.handle_pointer_release(
+                    *point,
+                    crate::win32_dock_render::dip_surface(app_menu),
+                );
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
+            }
+            PlatformEvent::AppMenuDismissed => {
+                let actions = self.background_app_menu_controller.dismiss();
+                return self.apply_background_app_menu_actions(
+                    &actions, topbar, dock, popover, app_menu, preview, settings,
+                );
             }
             PlatformEvent::SettingsKey(key) => {
                 let actions = self
                     .settings_controller
                     .handle_key(*key)
                     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+                if actions.contains(&crate::QueuedSettingsAction::ApplyQuickSettings) {
+                    let config = self.settings_controller.apply().map_err(|error| {
+                        windows::core::Error::new(invalid_arg(), error.to_string())
+                    })?;
+                    crate::win32_config::persist_config(&config)?;
+                    self.quick_settings_controller
+                        .set_preferences(config.quick_settings().clone());
+                }
                 if actions.contains(&crate::QueuedSettingsAction::Dismiss) {
                     settings.hide();
                 }
@@ -570,51 +1331,28 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::SyncWindows => {
-                self.refresh_topbar_status(topbar, dock, popover, preview, settings)?;
-                let before = self.dock_controller.state().clone();
-                let visual_before = self.dock_controller.visual_generation();
-                let mut observed = discover_running_windows(
-                    &[
-                        topbar.hwnd,
-                        dock.hwnd,
-                        popover.hwnd,
-                        preview.hwnd,
-                        settings.hwnd,
-                    ],
-                    true,
-                    &mut self.window_identity_cache,
-                )?;
-                seed_restricted_preview_for_qa(&mut observed)?;
-                self.sync_fullscreen_suppression(
-                    &observed,
-                    FullscreenSyncWindows {
-                        topbar,
-                        dock,
-                        popover,
-                        preview,
-                        settings,
-                    },
-                )?;
-                let actions = self
-                    .dock_controller
-                    .sync_running_windows_with_previews(&observed)
-                    .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
-                if !apply_dock_actions(&actions, self.dock_controller.state())? {
-                    return Ok(false);
-                }
-                self.render_dock_change(
-                    DockRenderBaseline::new(&before, visual_before),
-                    &actions,
-                    DockRenderWindows {
-                        topbar,
-                        dock,
-                        popover,
-                        preview,
-                        settings,
-                    },
-                )?;
-                self.refit_window_previews(preview);
                 return Ok(true);
+            }
+            PlatformEvent::ShellObservationLoaded(_) => {
+                unreachable!("handled by the process observation runtime")
+            }
+            PlatformEvent::QuickSettingsRefresh(_) => {
+                self.quick_settings_generation = self.quick_settings_worker.request_refresh(
+                    self.quick_settings_controller.is_open(),
+                    crate::win32_event_queue::native_window_id(topbar.hwnd),
+                );
+                return Ok(true);
+            }
+            PlatformEvent::QuickSettingsWorkerCompleted(_)
+            | PlatformEvent::BackgroundAppsLoaded(_)
+            | PlatformEvent::ShellMenuActivationCompleted(_) => {
+                unreachable!("handled before routing")
+            }
+            PlatformEvent::MediaSessionsChanged(_) | PlatformEvent::MediaTransportCompleted(_) => {
+                unreachable!("handled before routing")
+            }
+            PlatformEvent::NightLightCompleted(_) | PlatformEvent::BrightnessCompleted(_) => {
+                unreachable!("handled before routing")
             }
             PlatformEvent::TaskbarCreated
             | PlatformEvent::AppBarPositionChanged
@@ -647,6 +1385,8 @@ impl RuntimeSurfaces {
                 );
                 self.snap_dock_visibility(dock, work, config, hidden)?;
                 self.place_active_overlay(work, topbar, dock, popover)?;
+                app_menu.reposition(work)?;
+                self.app_menu_endpoint = surface_endpoint(app_menu);
                 self.rebuild_native_surfaces(SurfaceWindows {
                     topbar,
                     dock,
@@ -666,6 +1406,8 @@ impl RuntimeSurfaces {
                 );
                 self.snap_dock_visibility(dock, work, config, hidden)?;
                 popover.refresh_rect()?;
+                app_menu.refresh_rect()?;
+                self.app_menu_endpoint = surface_endpoint(app_menu);
                 preview.refresh_rect()?;
                 settings.refresh_rect()?;
                 self.rebuild_native_surfaces(SurfaceWindows {
@@ -680,20 +1422,220 @@ impl RuntimeSurfaces {
         Ok(true)
     }
 
+    pub(super) fn apply_shell_observation(
+        &mut self,
+        observation: &ShellObservation,
+        windows: ShellObservationWindows<'_>,
+    ) -> Result<bool> {
+        let ShellObservationWindows {
+            topbar,
+            dock,
+            popover,
+            preview,
+            settings,
+        } = windows;
+        self.latest_observed_windows = observation.windows().to_vec();
+        self.apply_topbar_snapshot(
+            observation.topbar(),
+            SurfaceWindows {
+                topbar,
+                dock,
+                popover,
+                preview,
+                settings,
+            },
+        )?;
+        self.sync_fullscreen_suppression(
+            observation.windows(),
+            FullscreenSyncWindows {
+                topbar,
+                dock,
+                popover,
+                preview,
+                settings,
+            },
+        )?;
+        let before = self.dock_controller.state().clone();
+        let visual_before = self.dock_controller.visual_generation();
+        let actions = self
+            .dock_controller
+            .sync_running_windows_with_previews(observation.windows())
+            .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+        if !apply_dock_actions(&actions, self.dock_controller.state())? {
+            return Ok(false);
+        }
+        self.render_dock_change(
+            DockRenderBaseline::new(&before, visual_before),
+            &actions,
+            DockRenderWindows {
+                topbar,
+                dock,
+                popover,
+                preview,
+                settings,
+            },
+        )?;
+        self.refit_window_previews(preview);
+        Ok(true)
+    }
+
     pub(super) fn sync_dock_animation(&mut self, dock: &OwnedWindow) -> Result<()> {
         if self.reduced_motion {
             self.dock_controller.snap_animation_to_target();
-            self.dock_animation_timer = None;
-            self.last_dock_animation_frame = None;
-        } else if self.dock_animations_idle() {
-            self.dock_animation_timer = None;
-            self.last_dock_animation_frame = None;
-        } else if self.dock_animation_timer.is_none() {
-            self.dock_animation_timer = Some(TimerGuard::start_dock_animation(dock.hwnd)?);
-            self.last_dock_animation_frame = Some(Instant::now());
+            if self.pending_dock_redraw {
+                self.ensure_dock_animation_clock(dock)?;
+            } else {
+                self.stop_dock_animation_clock();
+            }
+        } else if self.dock_animations_idle() && !self.pending_dock_redraw {
+            self.stop_dock_animation_clock();
+        } else {
+            self.ensure_dock_animation_clock(dock)?;
         }
         self.sync_dock_edge_probe(dock)?;
         Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "pointer-frame processing needs the complete native dock slot"
+    )]
+    fn process_dock_pointer_sample(
+        &mut self,
+        sample: crate::DockPointerSample,
+        frame_delta_seconds: Option<f32>,
+        topbar: &OwnedWindow,
+        dock: &mut OwnedWindow,
+        popover: &OwnedWindow,
+        preview: &mut OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<bool> {
+        self.edge_reveal_active = false;
+        self.edge_reveal_grace_deadline = None;
+        if sample.phase == crate::DockPointerPhase::Pressed {
+            settings.hide();
+        }
+        let before = self.dock_controller.state().clone();
+        let visual_before = self.dock_controller.visual_generation();
+        let actions = self
+            .dock_controller
+            .handle_pointer(sample)
+            .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+        if !apply_dock_actions(&actions, self.dock_controller.state())? {
+            return Ok(false);
+        }
+        if let Some(delta_seconds) = frame_delta_seconds {
+            if !self.dock_controller.animations_idle() {
+                self.dock_controller.advance_animation(delta_seconds);
+            }
+            let update = self.advance_dock_visibility(dock, delta_seconds);
+            self.complete_surface_update(
+                update,
+                SurfaceWindows {
+                    topbar,
+                    dock: &*dock,
+                    popover,
+                    preview: &*preview,
+                    settings,
+                },
+            )?;
+        }
+        self.render_dock_change(
+            DockRenderBaseline::new(&before, visual_before),
+            &actions,
+            DockRenderWindows {
+                topbar,
+                dock,
+                popover,
+                preview: &*preview,
+                settings,
+            },
+        )?;
+        self.sync_dock_animation(dock)?;
+        let target = self
+            .dock_controller
+            .hovered_item()
+            .filter(|item| self.dock_controller.has_preview_windows_for_item(*item));
+        let preview_effects = self
+            .preview_controller
+            .dock_target_changed(target, now_ms());
+        self.apply_preview_effects(&preview_effects, topbar, dock, popover, preview, settings)?;
+        self.sync_preview_timer(dock)?;
+        Ok(true)
+    }
+
+    fn ensure_dock_animation_clock(&mut self, dock: &OwnedWindow) -> Result<()> {
+        let was_active = self.dock_animation_active;
+        self.dock_animation_active = true;
+        let compositor_paced = self
+            .surface_runtime
+            .frame_latency_waitable_object(ShowcaseRole::Dock)
+            .is_some();
+        if compositor_paced {
+            self.dock_animation_timer = None;
+        } else if self.dock_animation_timer.is_none() {
+            self.dock_animation_timer = Some(TimerGuard::start_dock_animation(dock.hwnd)?);
+        }
+        if !was_active {
+            self.last_dock_animation_frame = (!compositor_paced).then(Instant::now);
+        }
+        Ok(())
+    }
+
+    fn stop_dock_animation_clock(&mut self) {
+        self.dock_animation_active = false;
+        self.dock_animation_timer = None;
+        self.last_dock_animation_frame = None;
+    }
+
+    pub(super) fn dock_frame_waitable(&self) -> Option<HANDLE> {
+        let waitable = self
+            .surface_runtime
+            .frame_latency_waitable_object(ShowcaseRole::Dock);
+        if dock_frame_waitable_is_active(
+            self.dock_animation_active,
+            self.dock_animation_timer.is_some(),
+            waitable.is_some(),
+        ) {
+            waitable
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn schedule_dock_redraw_retry(&mut self, dock: &OwnedWindow) -> Result<()> {
+        self.pending_dock_redraw = true;
+        crate::diagnostics::record(
+            crate::diagnostics::DiagnosticModule::DockPerformance,
+            crate::diagnostics::LogLevel::Info,
+            "dock.present.skipped",
+            &[],
+        );
+        self.ensure_dock_animation_clock(dock)
+    }
+
+    fn record_dock_pointer_batch(&mut self) {
+        if self.dock_pointer_moves_received == 0 {
+            return;
+        }
+        let received = self.dock_pointer_moves_received.to_string();
+        let consumed = self.dock_pointer_moves_consumed.to_string();
+        let coalesced = self
+            .dock_pointer_moves_received
+            .saturating_sub(self.dock_pointer_moves_consumed)
+            .to_string();
+        crate::diagnostics::record(
+            crate::diagnostics::DiagnosticModule::DockPerformance,
+            crate::diagnostics::LogLevel::Info,
+            "dock.pointer.batch",
+            &[
+                ("received", &received),
+                ("consumed", &consumed),
+                ("coalesced", &coalesced),
+            ],
+        );
+        self.dock_pointer_moves_received = 0;
+        self.dock_pointer_moves_consumed = 0;
     }
 
     fn sync_dock_edge_probe(&mut self, dock: &OwnedWindow) -> Result<()> {
@@ -702,11 +1644,36 @@ impl RuntimeSurfaces {
             self.dock_controller.state().dock().is_revealed(),
             self.fullscreen_suppressed,
         );
-        let needs_probe = (effective_config.autohide() && hidden) || self.edge_reveal_active;
-        if !needs_probe {
+        let hidden_probe = effective_config.autohide() && hidden;
+        let visibility_animating = self.dock_visibility_motion.is_some();
+        let cursor_near = if hidden_probe || self.edge_reveal_active || visibility_animating {
+            dock_cursor_location(dock.hwnd, dock.rect).is_some_and(|location| {
+                matches!(
+                    location,
+                    DockCursorLocation::PhysicalBottom
+                        | DockCursorLocation::Dock
+                        | DockCursorLocation::ApproachCorridor
+                        | DockCursorLocation::NearPhysicalBottom
+                )
+            })
+        } else {
+            false
+        };
+        let mode = dock_edge_probe_mode(
+            hidden_probe,
+            self.edge_reveal_active,
+            cursor_near,
+            visibility_animating,
+        );
+        let Some(interval_ms) = mode.interval_ms() else {
             self.dock_edge_probe_timer = None;
-        } else if self.dock_edge_probe_timer.is_none() {
-            self.dock_edge_probe_timer = Some(TimerGuard::start_dock_edge_probe(dock.hwnd)?);
+            return Ok(());
+        };
+        if let Some(timer) = self.dock_edge_probe_timer.as_mut() {
+            timer.rearm(interval_ms)?;
+        } else {
+            self.dock_edge_probe_timer =
+                Some(TimerGuard::start_dock_edge_probe(dock.hwnd, interval_ms)?);
         }
         Ok(())
     }
@@ -723,8 +1690,10 @@ impl RuntimeSurfaces {
         let needs_timer = match self.preview_controller.phase() {
             PreviewPhase::Dwelling { .. } | PreviewPhase::Closing { .. } => true,
             PreviewPhase::Visible {
-                bridge_deadline_ms, ..
-            } => bridge_deadline_ms.is_some(),
+                bridge_deadline_ms,
+                switch_deadline_ms,
+                ..
+            } => bridge_deadline_ms.is_some() || switch_deadline_ms.is_some(),
             PreviewPhase::Closed => false,
         } || self.preview_entrance.is_some();
         if !needs_timer {
@@ -732,6 +1701,368 @@ impl RuntimeSurfaces {
         } else if self.preview_timer.is_none() {
             self.preview_timer = Some(TimerGuard::start_preview(dock.hwnd)?);
         }
+        Ok(())
+    }
+
+    pub(super) fn release_external_menu_handles(&mut self) {
+        self.external_menu_timer = None;
+        self.external_menu_hook = None;
+        self.external_menu_popover_layer = None;
+        self.shell_menu_handoff = None;
+        self.background_app_context_point = None;
+    }
+
+    /// Releases every shell-side resource associated with one external-menu
+    /// hand-off. Queued timer or popup events become harmless once the
+    /// coordinator returns to `Idle` and the exact pending activation is
+    /// cancelled.
+    pub(super) fn cleanup_external_menu_state(&mut self) -> bool {
+        let _ = self.external_menu_coordinator.escape();
+        self.cancel_pending_tray_activation();
+        self.release_external_menu_handles();
+        !self.popover_controller.clear_external_active().is_empty()
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "external-menu dismissal coordinates all owned shell surfaces"
+    )]
+    fn dismiss_after_external_pointer_end(
+        &mut self,
+        topbar: &OwnedWindow,
+        dock: &mut OwnedWindow,
+        popover: &mut OwnedWindow,
+        app_menu: &mut OwnedWindow,
+        preview: &mut OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<bool> {
+        self.external_menu_focus_restore_deadline = None;
+        self.background_app_menu_controller.dismiss();
+        app_menu.hide();
+        self.dismiss_transient_overlays(topbar, dock, popover, preview, settings)?;
+        let effects = self.preview_controller.dismiss(now_ms());
+        self.apply_preview_effects(&effects, topbar, dock, popover, preview, settings)?;
+        self.sync_preview_timer(dock)?;
+        Ok(true)
+    }
+
+    pub(super) fn cancel_pending_tray_activation(&mut self) {
+        if let Some(id) = self.tray_activation_coordinator.pending_id() {
+            let _ = self.tray_activation_coordinator.cancel(id);
+        }
+    }
+
+    fn background_app_anchor(
+        &self,
+        popover: &OwnedWindow,
+        point: Option<DipPoint>,
+    ) -> PhysicalRect {
+        if let Some(point) = point {
+            return PhysicalRect::new(
+                popover.rect.x + physical_from_dip(point.x.max(0.0), popover.dpi()),
+                popover.rect.y + physical_from_dip(point.y.max(0.0), popover.dpi()),
+                1,
+                1,
+            );
+        }
+        if let Some(scene) = self.popover_controller.scene()
+            && let Some(anchor) = focused_background_app_anchor(
+                &scene,
+                crate::win32_dock_render::dip_surface(popover),
+                popover.rect,
+                popover.dpi(),
+            )
+        {
+            return anchor;
+        }
+        PhysicalRect::new(popover.rect.x, popover.rect.y, 1, 1)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "native menu lifecycle coordinates the owned shell surfaces"
+    )]
+    fn show_shell_owned_background_menu(
+        &mut self,
+        app: crate::BackgroundAppId,
+        allow_alternate: bool,
+        point: Option<DipPoint>,
+        popover: &OwnedWindow,
+        app_menu: &mut OwnedWindow,
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<()> {
+        self.external_menu_popover_layer = None;
+        self.background_app_menu_controller
+            .open(app, allow_alternate);
+        let scene = self.background_app_menu_controller.scene();
+        let height = scene.as_ref().map_or(58.0, |scene| {
+            context_menu_height_for_entries(scene.entries())
+        });
+        let work = window_work_area(popover.hwnd)?;
+        app_menu.place_app_menu(work, self.background_app_anchor(popover, point), height)?;
+        self.app_menu_endpoint = surface_endpoint(app_menu);
+        let update = present_app_menu_frame(
+            &mut self.surface_runtime,
+            SurfaceFrame {
+                target: SurfaceTarget {
+                    hwnd: app_menu.hwnd,
+                    role: ShowcaseRole::AppMenu,
+                    metrics: SurfaceMetrics::new(
+                        app_menu.rect.width.max(1) as u32,
+                        app_menu.rect.height.max(1) as u32,
+                        app_menu.dpi(),
+                    ),
+                },
+                scenes: ShellScenes {
+                    context_menu: scene.as_ref(),
+                    ..empty_scenes()
+                },
+            },
+        );
+        self.complete_surface_update(
+            update,
+            SurfaceWindows {
+                topbar,
+                dock,
+                popover,
+                preview,
+                settings,
+            },
+        )?;
+        app_menu.show_activating();
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "native menu lifecycle coordinates the owned shell surfaces"
+    )]
+    fn apply_external_menu_effects(
+        &mut self,
+        effects: &[ExternalMenuEffect],
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        popover: &OwnedWindow,
+        app_menu: &mut OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<bool> {
+        let mut redraw = false;
+        let retry_point = self.background_app_context_point;
+        let mut retry_native = None;
+        for effect in effects {
+            match effect {
+                ExternalMenuEffect::Redraw => redraw = true,
+                ExternalMenuEffect::SuppressDismissal => {}
+                ExternalMenuEffect::ActivationObserved { activation } => {
+                    let _ = self
+                        .tray_activation_coordinator
+                        .mark_observed_success(*activation);
+                    if let Some(timer) = self.external_menu_timer.as_mut() {
+                        timer.rearm(1_000)?;
+                    }
+                }
+                ExternalMenuEffect::RetryNativeActivation { app, activation } => {
+                    let _ = self.tray_activation_coordinator.mark_timeout(*activation);
+                    retry_native = Some(*app);
+                }
+                ExternalMenuEffect::RestoreFocus(app) => {
+                    redraw |= !self.popover_controller.restore_focus(*app).is_empty();
+                    popover.restore_focus();
+                }
+                ExternalMenuEffect::Release => {
+                    redraw |= self.cleanup_external_menu_state();
+                }
+            }
+        }
+        if let Some(app) = retry_native {
+            self.background_app_context_point = retry_point;
+            self.open_background_app_context_menu(
+                app, topbar, dock, popover, app_menu, preview, settings,
+            )?;
+        }
+        if redraw {
+            self.redraw_popover(topbar, dock, popover, preview, settings)?;
+        }
+        Ok(true)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "native menu lifecycle coordinates the owned shell surfaces"
+    )]
+    pub(super) fn open_background_app_context_menu(
+        &mut self,
+        app: crate::BackgroundAppId,
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        popover: &OwnedWindow,
+        app_menu: &mut OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<()> {
+        self.external_menu_focus_restore_deadline = None;
+        let point = self.background_app_context_point.take();
+        let generation = self.popover_controller.load_generation();
+        if self.external_menu_coordinator.phase() != crate::ExternalMenuPhase::Idle
+            || self.shell_menu_handoff.is_some()
+        {
+            self.cleanup_external_menu_state();
+        }
+        let Some(entry) = self.background_apps.iter().find(|entry| entry.id() == app) else {
+            return Ok(());
+        };
+        let identity = match entry.origin() {
+            crate::background_apps::BackgroundAppOrigin::Native(identity) => *identity,
+            crate::background_apps::BackgroundAppOrigin::RegistryFallback => {
+                let owner_pid = entry.process_id();
+                let owner_process_ids = shell_menu_owner_process_ids(owner_pid);
+                let hook = match crate::win32_external_menu_events::ExternalMenuEventRegistration::register_for_owner_pids(
+                    crate::win32_event_queue::native_window_id(topbar.hwnd),
+                    &owner_process_ids,
+                ) {
+                        Ok(hook) => hook,
+                        Err(_) => {
+                            return self.show_shell_owned_background_menu(
+                                app, false, point, popover, app_menu, topbar, dock, preview,
+                                settings,
+                            );
+                        }
+                    };
+                self.external_menu_popover_layer =
+                    match ExternalMenuPopoverLayerGuard::lower(popover) {
+                        Ok(layer) => Some(layer),
+                        Err(_) => {
+                            return self.show_shell_owned_background_menu(
+                                app, false, point, popover, app_menu, topbar, dock, preview,
+                                settings,
+                            );
+                        }
+                    };
+                self.external_menu_timer = match TimerGuard::start_external_menu(topbar.hwnd) {
+                    Ok(timer) => Some(timer),
+                    Err(_) => {
+                        self.cleanup_external_menu_state();
+                        return self.show_shell_owned_background_menu(
+                            app, false, point, popover, app_menu, topbar, dock, preview, settings,
+                        );
+                    }
+                };
+                self.external_menu_hook = Some(hook);
+                self.shell_menu_handoff = Some(ShellMenuHandoff::new(
+                    app,
+                    &owner_process_ids,
+                    generation,
+                    Instant::now(),
+                ));
+                self.background_app_context_point = point;
+                self.popover_controller.mark_external_active(app);
+                self.shell_menu_worker
+                    .request(crate::shell_menu_worker::ShellMenuRequest::new(
+                        app,
+                        generation,
+                        entry.label(),
+                        entry.executable(),
+                        point,
+                        crate::win32_event_queue::native_window_id(topbar.hwnd),
+                    ));
+                self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                return Ok(());
+            }
+        };
+        self.shell_menu_worker.cancel_pending();
+        let Some(native_generation) =
+            native_activation_generation(identity, self.background_apps_catalog_generation)
+        else {
+            return self.show_shell_owned_background_menu(
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
+            );
+        };
+        let ops = crate::win32_tray_activation::Win32NativeTrayOps;
+        let owner_pid = identity.owner_process_id();
+        let hook = match crate::win32_external_menu_events::ExternalMenuEventRegistration::register(
+            crate::win32_event_queue::native_window_id(topbar.hwnd),
+            owner_pid,
+        ) {
+            Ok(hook) => hook,
+            Err(_) => {
+                return self.show_shell_owned_background_menu(
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
+                );
+            }
+        };
+        self.external_menu_popover_layer = match ExternalMenuPopoverLayerGuard::lower(popover) {
+            Ok(layer) => Some(layer),
+            Err(_) => {
+                return self.show_shell_owned_background_menu(
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
+                );
+            }
+        };
+        let anchor = self.background_app_anchor(popover, point);
+        let result = crate::win32_tray_activation::activate_native_tray_context_menu(
+            &mut self.tray_activation_coordinator,
+            &ops,
+            identity,
+            native_generation,
+            entry.executable(),
+            TrayScreenPoint::new(anchor.x, anchor.y),
+        );
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => {
+                return self.show_shell_owned_background_menu(
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
+                );
+            }
+        };
+        if result.status() == TrayActivationStatus::Pending {
+            return Ok(());
+        }
+        let Some(activation) = result.id() else {
+            return self.show_shell_owned_background_menu(
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
+            );
+        };
+        if result.status() != TrayActivationStatus::Posted {
+            let _ = self.tray_activation_coordinator.cancel(activation);
+            return self.show_shell_owned_background_menu(
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
+            );
+        }
+        let generation_effects = self.external_menu_coordinator.set_generation(generation);
+        if !generation_effects.is_empty() {
+            self.cleanup_external_menu_state();
+        }
+        self.external_menu_hook = Some(hook);
+        let arm_effects = self.external_menu_coordinator.arm(
+            app,
+            activation,
+            owner_pid,
+            generation,
+            Instant::now(),
+        );
+        if arm_effects.is_empty() {
+            self.cleanup_external_menu_state();
+            return self.show_shell_owned_background_menu(
+                app, false, point, popover, app_menu, topbar, dock, preview, settings,
+            );
+        }
+        self.background_app_context_point = point;
+        self.popover_controller.mark_external_active(app);
+        self.external_menu_timer = match TimerGuard::start_external_menu(topbar.hwnd) {
+            Ok(timer) => Some(timer),
+            Err(_) => {
+                self.cleanup_external_menu_state();
+                return self.show_shell_owned_background_menu(
+                    app, false, point, popover, app_menu, topbar, dock, preview, settings,
+                );
+            }
+        };
+        self.redraw_popover(topbar, dock, popover, preview, settings)?;
         Ok(())
     }
 
@@ -801,6 +2132,15 @@ impl RuntimeSurfaces {
         Ok(())
     }
 
+    pub(super) fn rebuild_native_surfaces_with_app_menu(
+        &mut self,
+        windows: SurfaceWindows<'_>,
+        app_menu: &OwnedWindow,
+    ) -> Result<()> {
+        self.app_menu_endpoint = surface_endpoint(app_menu);
+        self.rebuild_native_surfaces(windows)
+    }
+
     pub(super) fn rebuild_native_surfaces(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
         let now = now_ms();
         let preview_scene = self.preview_scene.clone();
@@ -808,19 +2148,23 @@ impl RuntimeSurfaces {
             .update_density(density_for_width(windows.topbar.rect.width));
         self.topbar_controller
             .update_surface(dip_surface(windows.topbar));
-        self.topbar_controller
-            .update_snapshot(self.topbar_status.snapshot(now));
         let topbar_scene = self.topbar_controller.scene();
         self.dock_controller
             .update_surface(dip_surface(windows.dock));
         let dock_scene = self.dock_controller.scene();
         let popover_scene = self.popover_controller.scene();
+        let quick_settings_scene = self
+            .quick_settings_controller
+            .is_open()
+            .then(|| self.quick_settings_controller.scene());
         let context_menu_scene = self.context_menu_controller.scene();
+        let app_menu_scene = self.background_app_menu_controller.scene();
         let settings_scene = self.settings_controller.scene();
         let targets = canonical_surface_targets(SurfaceEndpoints {
             topbar: surface_endpoint(windows.topbar),
             dock: surface_endpoint(windows.dock),
             popover: surface_endpoint(windows.popover),
+            app_menu: self.app_menu_endpoint,
             preview: surface_endpoint(windows.preview),
             settings: surface_endpoint(windows.settings),
         });
@@ -829,6 +2173,7 @@ impl RuntimeSurfaces {
                 topbar: Some(&topbar_scene),
                 dock: None,
                 popover: None,
+                quick_settings: None,
                 context_menu: None,
                 settings: None,
                 preview: None,
@@ -837,6 +2182,7 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: Some(&dock_scene),
                 popover: None,
+                quick_settings: None,
                 context_menu: None,
                 settings: None,
                 preview: None,
@@ -845,9 +2191,14 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: None,
                 popover: popover_scene.as_ref(),
+                quick_settings: quick_settings_scene.as_ref(),
                 context_menu: context_menu_scene.as_ref(),
                 settings: None,
                 preview: None,
+            },
+            app_menu: ShellScenes {
+                context_menu: app_menu_scene.as_ref(),
+                ..empty_scenes()
             },
             preview: ShellScenes {
                 preview: preview_scene.as_ref(),
@@ -857,6 +2208,7 @@ impl RuntimeSurfaces {
                 topbar: None,
                 dock: None,
                 popover: None,
+                quick_settings: None,
                 context_menu: None,
                 settings: Some(&settings_scene),
                 preview: None,
@@ -871,11 +2223,23 @@ impl RuntimeSurfaces {
         );
         let plan = surface_build_plan(targets, scenes, composition);
         self.surface_runtime.rebuild(plan)?;
+        if self.dock_animation_active {
+            self.ensure_dock_animation_clock(windows.dock)?;
+        }
         if std::env::var_os("MINHA_UI_QA_TRACE").is_some() {
             println!("{}", self.dock_controller.qa_trace_line());
         }
+        let dock_pacing = if self
+            .surface_runtime
+            .frame_latency_waitable_object(ShowcaseRole::Dock)
+            .is_some()
+        {
+            "dxgi_waitable"
+        } else {
+            "timer_fallback"
+        };
         println!(
-            "RESOURCE generation={} renderer={}",
+            "RESOURCE generation={} renderer={} dock_pacing={dock_pacing}",
             self.orchestration.generation(),
             match self.device_kind() {
                 DeviceKind::Hardware => "hardware",
@@ -891,9 +2255,126 @@ impl RuntimeSurfaces {
         windows: SurfaceWindows<'_>,
     ) -> Result<()> {
         match outcome? {
-            SurfaceUpdate::Presented => Ok(()),
+            SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => Ok(()),
             SurfaceUpdate::RebuildAllRequired => self.rebuild_native_surfaces(windows),
         }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "surface recovery needs the complete slot alongside the dedicated menu window"
+    )]
+    fn apply_background_app_menu_actions(
+        &mut self,
+        actions: &[QueuedBackgroundAppMenuAction],
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        popover: &OwnedWindow,
+        app_menu: &mut OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<bool> {
+        for action in actions {
+            match action {
+                QueuedBackgroundAppMenuAction::Redraw => {
+                    let scene = self.background_app_menu_controller.scene();
+                    let update = self.surface_runtime.redraw(
+                        ShowcaseRole::AppMenu,
+                        ShellScenes {
+                            context_menu: scene.as_ref(),
+                            ..empty_scenes()
+                        },
+                    );
+                    self.complete_surface_update(
+                        update,
+                        SurfaceWindows {
+                            topbar,
+                            dock,
+                            popover,
+                            preview,
+                            settings,
+                        },
+                    )?;
+                }
+                QueuedBackgroundAppMenuAction::Dismiss => {
+                    app_menu.hide();
+                }
+                QueuedBackgroundAppMenuAction::Execute(command) => {
+                    app_menu.hide();
+                    self.execute_background_app_menu_command(
+                        *command, topbar, dock, popover, app_menu, preview, settings,
+                    )?;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "native menu command execution coordinates the owned shell surfaces"
+    )]
+    fn execute_background_app_menu_command(
+        &mut self,
+        command: BackgroundAppMenuCommand,
+        topbar: &OwnedWindow,
+        dock: &OwnedWindow,
+        popover: &OwnedWindow,
+        app_menu: &mut OwnedWindow,
+        preview: &OwnedWindow,
+        settings: &OwnedWindow,
+    ) -> Result<()> {
+        let app = match command {
+            BackgroundAppMenuCommand::OpenOrFocus(app)
+            | BackgroundAppMenuCommand::OpenFileLocation(app)
+            | BackgroundAppMenuCommand::TryAlternateActivation(app) => app,
+        };
+        let Some(entry) = self.background_apps.iter().find(|entry| entry.id() == app) else {
+            return Ok(());
+        };
+        match command {
+            BackgroundAppMenuCommand::OpenOrFocus(_) => {
+                match crate::win32_background_apps::activate_background_app(
+                    entry,
+                    &self.latest_observed_windows,
+                ) {
+                    Ok(()) => {
+                        self.cleanup_external_menu_state();
+                        self.popover_controller.dismiss();
+                        app_menu.hide();
+                        popover.hide();
+                        let active_changed = self.clear_active_topbar_module();
+                        if active_changed {
+                            self.redraw_topbar(topbar, dock, popover, preview, settings)?;
+                        }
+                    }
+                    Err(error) => crate::diagnostics::record(
+                        crate::diagnostics::DiagnosticModule::AppLifecycle,
+                        crate::diagnostics::LogLevel::Error,
+                        "background_app_open_failed",
+                        &[("code", error.code())],
+                    ),
+                }
+            }
+            BackgroundAppMenuCommand::OpenFileLocation(_) => {
+                if let Err(error) =
+                    crate::win32_background_apps::open_background_app_location(entry)
+                {
+                    crate::diagnostics::record(
+                        crate::diagnostics::DiagnosticModule::AppLifecycle,
+                        crate::diagnostics::LogLevel::Error,
+                        "background_app_location_failed",
+                        &[("code", error.code())],
+                    );
+                }
+            }
+            BackgroundAppMenuCommand::TryAlternateActivation(_) => {
+                self.open_background_app_context_menu(
+                    app, topbar, dock, popover, app_menu, preview, settings,
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -908,6 +2389,7 @@ struct SurfaceEndpoints {
     topbar: SurfaceEndpoint,
     dock: SurfaceEndpoint,
     popover: SurfaceEndpoint,
+    app_menu: SurfaceEndpoint,
     preview: SurfaceEndpoint,
     settings: SurfaceEndpoint,
 }
@@ -917,6 +2399,7 @@ struct CanonicalSurfaceTargets {
     topbar: SurfaceTarget,
     dock: SurfaceTarget,
     popover: SurfaceTarget,
+    app_menu: SurfaceTarget,
     preview: SurfaceTarget,
     settings: SurfaceTarget,
 }
@@ -926,6 +2409,7 @@ struct CanonicalSurfaceScenes<'scene> {
     topbar: ShellScenes<'scene>,
     dock: ShellScenes<'scene>,
     popover: ShellScenes<'scene>,
+    app_menu: ShellScenes<'scene>,
     preview: ShellScenes<'scene>,
     settings: ShellScenes<'scene>,
 }
@@ -994,6 +2478,11 @@ const fn canonical_surface_targets(endpoints: SurfaceEndpoints) -> CanonicalSurf
             role: ShowcaseRole::Popover,
             metrics: endpoints.popover.metrics,
         },
+        app_menu: SurfaceTarget {
+            hwnd: endpoints.app_menu.hwnd,
+            role: ShowcaseRole::AppMenu,
+            metrics: endpoints.app_menu.metrics,
+        },
         preview: SurfaceTarget {
             hwnd: endpoints.preview.hwnd,
             role: ShowcaseRole::Preview,
@@ -1025,6 +2514,10 @@ const fn surface_build_plan<'scene>(
             target: targets.popover,
             scenes: scenes.popover,
         },
+        app_menu: SurfaceFrame {
+            target: targets.app_menu,
+            scenes: scenes.app_menu,
+        },
         preview: SurfaceFrame {
             target: targets.preview,
             scenes: scenes.preview,
@@ -1045,9 +2538,20 @@ const fn empty_scenes() -> ShellScenes<'static> {
         topbar: None,
         dock: None,
         popover: None,
+        quick_settings: None,
         context_menu: None,
         settings: None,
         preview: None,
+    }
+}
+
+const fn quick_settings_key(key: crate::PopoverKey) -> Option<crate::QuickSettingsKey> {
+    match key {
+        crate::PopoverKey::Next => Some(crate::QuickSettingsKey::Next),
+        crate::PopoverKey::Previous => Some(crate::QuickSettingsKey::Previous),
+        crate::PopoverKey::Activate => Some(crate::QuickSettingsKey::Activate),
+        crate::PopoverKey::ContextMenu => None,
+        crate::PopoverKey::Escape => Some(crate::QuickSettingsKey::Escape),
     }
 }
 
@@ -1062,15 +2566,25 @@ pub(super) fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use shell_core::DockItemId;
+    use std::time::{Duration, Instant};
+
+    use shell_core::{DockItemId, Popover};
     use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
-    use shell_renderer::{Dpi, PhysicalRect, WindowPreviewScene};
+    use shell_renderer::{
+        Dpi, PhysicalRect, PopoverContentState, PopoverLayoutStyle, PopoverRow, PopoverScene,
+        WindowPreviewScene,
+    };
     use windows::Win32::Foundation::HWND;
 
     use super::{
-        CanonicalSurfaceScenes, SurfaceCompositionState, SurfaceEndpoint, SurfaceEndpoints,
-        canonical_surface_targets, empty_scenes, surface_build_plan, surface_composition_state,
+        CanonicalSurfaceScenes, ShellMenuHandoff, SurfaceCompositionState, SurfaceEndpoint,
+        SurfaceEndpoints, canonical_surface_targets, empty_scenes,
+        external_menu_focus_restore_is_active, focused_background_app_anchor,
+        native_activation_generation, should_dismiss_after_external_menu_end,
+        suppress_external_menu_dismissal, surface_build_plan, surface_composition_state,
     };
+    use crate::native_event_route::NativeWindowId;
+    use crate::native_tray::NativeTrayIdentity;
     use crate::{DockVisibilityMotion, PreviewEntranceMotion, PreviewMotionSpec};
 
     fn endpoint(id: usize, width: u32, height: u32) -> SurfaceEndpoint {
@@ -1085,8 +2599,9 @@ mod tests {
             topbar: endpoint(generation + 1, 101 + generation as u32, 11),
             dock: endpoint(generation + 2, 102 + generation as u32, 12),
             popover: endpoint(generation + 3, 103 + generation as u32, 13),
-            preview: endpoint(generation + 4, 104 + generation as u32, 14),
-            settings: endpoint(generation + 5, 105 + generation as u32, 15),
+            app_menu: endpoint(generation + 4, 104 + generation as u32, 14),
+            preview: endpoint(generation + 5, 105 + generation as u32, 15),
+            settings: endpoint(generation + 6, 106 + generation as u32, 16),
         }
     }
 
@@ -1095,6 +2610,7 @@ mod tests {
             topbar: empty_scenes(),
             dock: empty_scenes(),
             popover: empty_scenes(),
+            app_menu: empty_scenes(),
             preview: ShellScenes {
                 preview,
                 ..empty_scenes()
@@ -1113,7 +2629,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_plan_maps_five_distinct_endpoints_to_their_slots() {
+    fn canonical_plan_maps_six_distinct_endpoints_to_their_slots() {
         let plan = surface_build_plan(
             canonical_surface_targets(endpoints(10)),
             scenes(None),
@@ -1123,6 +2639,7 @@ mod tests {
             plan.topbar.target,
             plan.dock.target,
             plan.popover.target,
+            plan.app_menu.target,
             plan.preview.target,
             plan.settings.target,
         ]
@@ -1133,8 +2650,9 @@ mod tests {
                 (11, ShowcaseRole::Topbar, (111, 11)),
                 (12, ShowcaseRole::Dock, (112, 12)),
                 (13, ShowcaseRole::Popover, (113, 13)),
-                (14, ShowcaseRole::Preview, (114, 14)),
-                (15, ShowcaseRole::Settings, (115, 15)),
+                (14, ShowcaseRole::AppMenu, (114, 14)),
+                (15, ShowcaseRole::Preview, (115, 15)),
+                (16, ShowcaseRole::Settings, (116, 16)),
             ]
         );
         assert_eq!(plan.dock_visibility_opacity, 0.25);
@@ -1156,8 +2674,8 @@ mod tests {
             composition(0.9, 0.8),
         );
 
-        assert_eq!(first.preview.target.hwnd.0 as usize, 104);
-        assert_eq!(second.preview.target.hwnd.0 as usize, 204);
+        assert_eq!(first.preview.target.hwnd.0 as usize, 105);
+        assert_eq!(second.preview.target.hwnd.0 as usize, 205);
         assert_eq!(first.preview.scenes.preview.unwrap().item().value(), 101);
         assert_eq!(second.preview.scenes.preview.unwrap().item().value(), 202);
         assert_eq!(first.dock_visibility_opacity, 0.1);
@@ -1195,5 +2713,199 @@ mod tests {
         assert_eq!(animation.target_opacity, 0.0);
         assert!((animation.duration_seconds - 0.09).abs() < f32::EPSILON);
         assert_eq!(snapshot.preview_opacity, preview_motion.opacity_at(200));
+    }
+
+    #[test]
+    fn keyboard_context_anchor_uses_the_focused_apps_row() {
+        let scene = PopoverScene::new(
+            Popover::BackgroundApps,
+            "Apps",
+            PopoverContentState::Ready,
+            vec![
+                PopoverRow::new("First", "", true),
+                PopoverRow::new("Focused", "", true),
+            ],
+            Some(1),
+        )
+        .with_layout_style(PopoverLayoutStyle::BalancedApps);
+
+        let anchor = focused_background_app_anchor(
+            &scene,
+            shell_renderer::DipRect::new(0.0, 0.0, 288.0, 148.0),
+            PhysicalRect::new(100, 50, 288, 148),
+            Dpi::from_raw(96),
+        )
+        .expect("focused row anchor");
+
+        assert_eq!(anchor, PhysicalRect::new(372, 170, 1, 1));
+    }
+
+    #[test]
+    fn native_popup_start_positions_the_observed_menu_at_the_apps_row() {
+        let source = include_str!("win32_owner.rs");
+        let branch = source
+            .split_once("let effects = self.external_menu_coordinator.popup_start(")
+            .map(|(_, branch)| branch)
+            .and_then(|branch| {
+                branch
+                    .split_once("return self.apply_external_menu_effects(")
+                    .map(|(branch, _)| branch)
+            })
+            .expect("native popup-start branch");
+
+        assert!(branch.contains("background_app_anchor"));
+        assert!(branch.contains("place_external_menu"));
+    }
+
+    #[test]
+    fn pointer_ended_external_menu_dismisses_the_apps_popover() {
+        let source = include_str!("win32_owner.rs");
+        let branch = source
+            .split_once("PlatformEvent::ExternalMenuPopupEnded {")
+            .map(|(_, branch)| branch)
+            .and_then(|branch| {
+                branch
+                    .split_once("PlatformEvent::AppMenuKey(key)")
+                    .map(|(branch, _)| branch)
+            })
+            .expect("external popup-end branch");
+
+        assert!(branch.contains("dismissed_by_pointer"));
+        assert!(branch.contains("dismiss_after_external_pointer_end"));
+    }
+
+    #[test]
+    fn cached_native_app_uses_its_catalog_generation_for_activation() {
+        let identity = NativeTrayIdentity::new(NativeWindowId::new(7), 42, 9, 0x8001, 4, None, 41)
+            .expect("valid tray identity");
+
+        assert_eq!(native_activation_generation(identity, 41), Some(41));
+        assert_eq!(native_activation_generation(identity, 42), None);
+    }
+
+    #[test]
+    fn native_menu_handoff_suppresses_focus_dismissal_before_the_coordinator_is_armed() {
+        assert!(suppress_external_menu_dismissal(
+            crate::ExternalMenuPhase::Idle,
+            true,
+        ));
+        assert!(suppress_external_menu_dismissal(
+            crate::ExternalMenuPhase::Armed,
+            false,
+        ));
+        assert!(!suppress_external_menu_dismissal(
+            crate::ExternalMenuPhase::Idle,
+            false,
+        ));
+    }
+
+    #[test]
+    fn external_menu_focus_restore_grace_ignores_only_immediate_deactivation() {
+        let now = Instant::now();
+
+        assert!(external_menu_focus_restore_is_active(
+            Some(now + Duration::from_millis(450)),
+            now,
+        ));
+        assert!(!external_menu_focus_restore_is_active(
+            Some(now),
+            now + Duration::from_millis(451),
+        ));
+        assert!(!external_menu_focus_restore_is_active(None, now));
+    }
+
+    #[test]
+    fn shell_menu_handoff_tracks_only_its_owner_and_has_bounded_lifetime() {
+        let app = crate::BackgroundAppId::new(7);
+        let started = Instant::now();
+        let mut handoff = ShellMenuHandoff::new(app, &[42], 9, started);
+
+        assert_eq!(handoff.observe(99, 9), None);
+        assert_eq!(handoff.observe(42, 8), None);
+        assert!(!handoff.expired(started + Duration::from_secs(4)));
+        assert!(handoff.expired(started + Duration::from_secs(5)));
+
+        assert_eq!(handoff.observe(42, 9), Some(app));
+        assert_eq!(handoff.ended(99, 9), None);
+        assert_eq!(handoff.ended(42, 9), Some(app));
+        assert!(!handoff.expired(started + Duration::from_secs(29)));
+        assert!(handoff.expired(started + Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn shell_menu_handoff_accepts_shell_owned_popup_pids_and_latches_the_observed_owner() {
+        let app = crate::BackgroundAppId::new(7);
+        let started = Instant::now();
+        let mut handoff = ShellMenuHandoff::new(app, &[42, 77], 9, started);
+
+        assert_eq!(handoff.observe(77, 9), Some(app));
+        assert_eq!(handoff.ended(42, 9), None);
+        assert_eq!(handoff.ended(77, 9), Some(app));
+    }
+
+    #[test]
+    fn external_menu_end_dismisses_only_when_focus_leaves_the_menu_owner() {
+        let shell_windows = [NativeWindowId::new(100), NativeWindowId::new(200)];
+
+        assert!(!should_dismiss_after_external_menu_end(
+            true,
+            Some((NativeWindowId::new(300), 77)),
+            77,
+            &shell_windows,
+        ));
+        assert!(should_dismiss_after_external_menu_end(
+            false,
+            Some((NativeWindowId::new(301), 88)),
+            77,
+            &shell_windows,
+        ));
+        assert!(!should_dismiss_after_external_menu_end(
+            true,
+            Some((NativeWindowId::new(100), 1)),
+            77,
+            &shell_windows,
+        ));
+    }
+
+    #[test]
+    fn only_high_frequency_pointer_motion_waits_for_the_next_frame() {
+        use crate::DockPointerPhase;
+
+        assert!(super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Moved,
+            false
+        ));
+        assert!(super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Dragged,
+            false
+        ));
+        assert!(!super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Pressed,
+            false
+        ));
+        assert!(!super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Released,
+            false
+        ));
+        assert!(!super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Cancelled,
+            false
+        ));
+        assert!(!super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Exited,
+            false
+        ));
+        assert!(!super::dock_pointer_waits_for_frame(
+            DockPointerPhase::Moved,
+            true
+        ));
+    }
+
+    #[test]
+    fn compositor_waitable_is_exposed_only_while_animation_owns_the_clock() {
+        assert!(super::dock_frame_waitable_is_active(true, false, true));
+        assert!(!super::dock_frame_waitable_is_active(false, false, true));
+        assert!(!super::dock_frame_waitable_is_active(true, true, true));
+        assert!(!super::dock_frame_waitable_is_active(true, false, false));
     }
 }

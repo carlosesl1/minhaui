@@ -73,11 +73,18 @@ impl RuntimeOrchestrator {
                 RuntimeAction::RepositionAndRebuild
             }
             PlatformEvent::AppBarPositionChanged => RuntimeAction::None,
+            PlatformEvent::QuickSettingsRefresh(_)
+            | PlatformEvent::QuickSettingsWorkerCompleted(_)
+            | PlatformEvent::MediaSessionsChanged(_)
+            | PlatformEvent::MediaTransportCompleted(_)
+            | PlatformEvent::NightLightCompleted(_)
+            | PlatformEvent::BrightnessCompleted(_) => RuntimeAction::None,
             PlatformEvent::DpiChanged(rect) => RuntimeAction::ResizeAndRebuild(rect),
             PlatformEvent::DockPointer(_)
             | PlatformEvent::DockEdgeProbe
             | PlatformEvent::DockAnimationFrame
             | PlatformEvent::PreviewTimer
+            | PlatformEvent::ExternalMenuTimer
             | PlatformEvent::PreviewPointerMoved(_)
             | PlatformEvent::PreviewPointerPressed(_)
             | PlatformEvent::PreviewPointerReleased(_)
@@ -87,12 +94,25 @@ impl RuntimeOrchestrator {
             | PlatformEvent::DockContextMenuRequested { .. } => RuntimeAction::None,
             PlatformEvent::TopbarPointer(_) | PlatformEvent::TopbarKey(_) => RuntimeAction::None,
             PlatformEvent::PopoverKey(_) => RuntimeAction::None,
-            PlatformEvent::PopoverPointer(_) | PlatformEvent::PopoverPointerMoved(_) => {
-                RuntimeAction::None
-            }
+            PlatformEvent::PopoverPointerPressed(_)
+            | PlatformEvent::PopoverContextPressed(_)
+            | PlatformEvent::PopoverPointer(_)
+            | PlatformEvent::PopoverPointerMoved(_)
+            | PlatformEvent::PopoverContextRequested(_)
+            | PlatformEvent::PopoverScroll(_) => RuntimeAction::None,
+            PlatformEvent::AppMenuKey(_)
+            | PlatformEvent::AppMenuPointerMoved(_)
+            | PlatformEvent::AppMenuPointerReleased(_)
+            | PlatformEvent::AppMenuDismissed => RuntimeAction::None,
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
             PlatformEvent::SettingsKey(_) => RuntimeAction::None,
-            PlatformEvent::DockDrop { .. } | PlatformEvent::SyncWindows => RuntimeAction::None,
+            PlatformEvent::DockDrop { .. }
+            | PlatformEvent::SyncWindows
+            | PlatformEvent::ShellObservationLoaded(_)
+            | PlatformEvent::BackgroundAppsLoaded(_)
+            | PlatformEvent::ShellMenuActivationCompleted(_)
+            | PlatformEvent::ExternalMenuPopupStarted { .. }
+            | PlatformEvent::ExternalMenuPopupEnded { .. } => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
             PlatformEvent::Destroyed => RuntimeAction::None,
         };

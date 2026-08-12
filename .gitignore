@@ -1,8 +1,11 @@
 /target/
+/target-*/
+/artifacts/
 /.omo/
 /.worktrees/
 /.agents/
 /.codegraph/
+/.superpowers/
 /packaging/msix/out/
 /packaging/steam/out/
 *.pdb

@@ -28,8 +28,19 @@ impl RoutedPlatformEvent {
         }
     }
 
+    pub(super) const fn window_id(window: NativeWindowId, event: PlatformEvent) -> Self {
+        Self {
+            target: NativeEventTarget::Window(window),
+            event,
+        }
+    }
+
     pub(super) const fn target(&self) -> NativeEventTarget {
         self.target
+    }
+
+    pub(super) const fn event(&self) -> &PlatformEvent {
+        &self.event
     }
 
     pub(super) fn into_event(self) -> PlatformEvent {
@@ -45,6 +56,30 @@ pub(super) fn queue_event(event: RoutedPlatformEvent) {
     if let Ok(mut events) = queue.lock() {
         events.push_back(event);
     }
+}
+
+pub(super) fn queue_event_with_wake(
+    event: RoutedPlatformEvent,
+    wake: impl FnOnce() -> bool,
+) -> bool {
+    let queue = EVENT_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()));
+    let mut events = queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    enqueue_and_wake(&mut events, event, wake)
+}
+
+fn enqueue_and_wake(
+    events: &mut VecDeque<RoutedPlatformEvent>,
+    event: RoutedPlatformEvent,
+    wake: impl FnOnce() -> bool,
+) -> bool {
+    events.push_back(event);
+    if wake() {
+        return true;
+    }
+    events.pop_back();
+    false
 }
 
 pub(super) fn next_event() -> Option<RoutedPlatformEvent> {
@@ -77,4 +112,24 @@ pub(super) fn is_dragging(hwnd: HWND) -> bool {
 
 pub(super) fn native_window_id(hwnd: HWND) -> NativeWindowId {
     NativeWindowId::new(hwnd.0 as isize)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::{RoutedPlatformEvent, enqueue_and_wake};
+    use crate::PlatformEvent;
+
+    #[test]
+    fn failed_wake_does_not_leave_an_orphaned_event_queued() {
+        let mut events = VecDeque::new();
+
+        assert!(!enqueue_and_wake(
+            &mut events,
+            RoutedPlatformEvent::broadcast(PlatformEvent::SyncWindows),
+            || false,
+        ));
+        assert!(events.is_empty());
+    }
 }

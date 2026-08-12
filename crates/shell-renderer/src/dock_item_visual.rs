@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DockItemVisualKind {
     App,
@@ -14,7 +16,7 @@ pub enum RunningIndicator {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum DockIcon {
-    WindowsExecutable(String),
+    WindowsExecutable(Arc<str>),
     #[default]
     SystemFallback,
 }
@@ -22,14 +24,14 @@ pub enum DockIcon {
 impl DockIcon {
     #[must_use]
     pub fn windows_executable(source: &str) -> Self {
-        Self::WindowsExecutable(source.to_owned())
+        Self::WindowsExecutable(source.into())
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockItemVisual {
     id: u64,
-    label: String,
+    label: Arc<str>,
     kind: DockItemVisualKind,
     indicator: RunningIndicator,
     icon: DockIcon,
@@ -40,7 +42,7 @@ impl DockItemVisual {
     pub fn app(id: u64, label: &str, indicator: RunningIndicator) -> Self {
         Self {
             id,
-            label: label.to_owned(),
+            label: label.into(),
             kind: DockItemVisualKind::App,
             indicator,
             icon: DockIcon::SystemFallback,
@@ -56,7 +58,7 @@ impl DockItemVisual {
     ) -> Self {
         Self {
             id,
-            label: label.to_owned(),
+            label: label.into(),
             kind: DockItemVisualKind::App,
             indicator,
             icon,
@@ -67,7 +69,7 @@ impl DockItemVisual {
     pub fn separator(id: u64) -> Self {
         Self {
             id,
-            label: String::new(),
+            label: Arc::default(),
             kind: DockItemVisualKind::Separator,
             indicator: RunningIndicator::Stopped,
             icon: DockIcon::SystemFallback,

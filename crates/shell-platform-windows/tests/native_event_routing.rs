@@ -24,6 +24,7 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
             NativeWindowId::new(102),
             NativeWindowId::new(103),
             NativeWindowId::new(104),
+            NativeWindowId::new(105),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
@@ -32,6 +33,7 @@ fn native_hwnd_events_mutate_only_the_target_monitor_slot() -> Result<(), Box<dy
             NativeWindowId::new(202),
             NativeWindowId::new(203),
             NativeWindowId::new(204),
+            NativeWindowId::new(205),
         ),
     ];
     let mut first = DockController::new(state("first.exe")?, DockRuntimeConfig::default())?;
@@ -72,6 +74,7 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
             NativeWindowId::new(102),
             NativeWindowId::new(103),
             NativeWindowId::new(104),
+            NativeWindowId::new(105),
         ),
         NativeWindowSlot::new(
             MonitorId::new(20),
@@ -80,6 +83,7 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
             NativeWindowId::new(202),
             NativeWindowId::new(203),
             NativeWindowId::new(204),
+            NativeWindowId::new(205),
         ),
     ];
 
@@ -89,6 +93,8 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
         route_native_event_to_slot(&slots, NativeEventTarget::Window(NativeWindowId::new(203)));
     let preview_route =
         route_native_event_to_slot(&slots, NativeEventTarget::Window(NativeWindowId::new(204)));
+    let app_menu_route =
+        route_native_event_to_slot(&slots, NativeEventTarget::Window(NativeWindowId::new(205)));
 
     // Then: the shell manager handles it as a broadcast instead of slot mutation.
     assert_eq!(route, NativeRouteDecision::Broadcast);
@@ -97,4 +103,8 @@ fn native_broadcast_events_are_not_misrouted_to_a_single_slot() {
         NativeRouteDecision::Slot(MonitorId::new(20))
     );
     assert_eq!(preview_route, NativeRouteDecision::Slot(MonitorId::new(20)));
+    assert_eq!(
+        app_menu_route,
+        NativeRouteDecision::Slot(MonitorId::new(20))
+    );
 }

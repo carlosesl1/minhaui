@@ -5,7 +5,7 @@ mod resize;
 
 pub use animation::SurfaceVisibilityAnimation;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, HANDLE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
@@ -26,21 +26,27 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
-    IDXGISwapChain3,
+    IDXGISwapChain2, IDXGISwapChain3,
 };
+use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::core::{Interface, Result};
 
 use crate::ShowcaseTokens;
+use crate::native_desktop_capture::{DesktopBlurCapture, wants_desktop_blur};
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
-use crate::native_present::{present_swap_chain, present_swap_chain_blocking};
-use crate::native_showcase::{ShowcaseStyle, draw_showcase};
+use crate::native_liquid_glass::{
+    LiquidGlassMode, LiquidGlassProfile, LiquidGlassResources, liquid_glass_mode, profile_for_role,
+};
+use crate::native_present::{present_swap_chain, present_swap_chain_initial};
+use crate::native_showcase::{ShowcaseResourceCache, ShowcaseStyle, draw_showcase};
 use crate::native_showcase_resources::{DockInsetBitmap, create_dock_inset_bitmap};
 use crate::{
-    ContextMenuScene, DockScene, Dpi, PopoverScene, SettingsScene, TopbarScene, WindowPreviewScene,
-    logical_surface_rect,
+    ContextMenuScene, DockScene, Dpi, PopoverScene, QuickSettingsScene, SettingsScene, TopbarScene,
+    WindowPreviewScene, logical_surface_rect,
 };
 
 pub use crate::native_present::{
@@ -59,8 +65,13 @@ pub enum ShowcaseRole {
     Topbar,
     Dock,
     Popover,
+    AppMenu,
     Preview,
     Settings,
+}
+
+const fn should_present_initial_frame(role: ShowcaseRole, visible: bool) -> bool {
+    visible || matches!(role, ShowcaseRole::Topbar | ShowcaseRole::Dock)
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +79,7 @@ pub struct ShellScenes<'a> {
     pub topbar: Option<&'a TopbarScene>,
     pub dock: Option<&'a DockScene>,
     pub popover: Option<&'a PopoverScene>,
+    pub quick_settings: Option<&'a QuickSettingsScene>,
     pub context_menu: Option<&'a ContextMenuScene>,
     pub settings: Option<&'a SettingsScene>,
     pub preview: Option<&'a WindowPreviewScene>,
@@ -80,20 +92,64 @@ pub struct CompositionRenderer {
     dcomp: IDCompositionDevice,
     device_kind: DeviceKind,
     icons: RefCell<NativeIconCache>,
+    showcase_resources: RefCell<ShowcaseResourceCache>,
     solid_material: bool,
+    liquid_glass_mode: LiquidGlassMode,
 }
 
 pub struct WindowSurface {
+    hwnd: HWND,
     pub(super) swap_chain: IDXGISwapChain1,
+    pub(super) swap_chain_flags: DXGI_SWAP_CHAIN_FLAG,
+    frame_latency_waitable: Option<HANDLE>,
+    pub(super) back_buffers: RefCell<BackBufferCache<ID2D1Bitmap1>>,
     device: ID3D11Device,
-    dcomp: IDCompositionDevice,
-    _target: IDCompositionTarget,
-    visual: IDCompositionVisual,
-    opacity_effect: IDCompositionEffectGroup,
+    composition: DirectCompositionAttachment,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) dpi: Dpi,
     dock_inset: Option<DockInsetBitmap>,
+    liquid_glass: Option<LiquidGlassResources>,
+    desktop_blur: RefCell<Option<DesktopBlurCapture>>,
+}
+
+struct DirectCompositionAttachment {
+    dcomp: IDCompositionDevice,
+    _target: IDCompositionTarget,
+    visual: IDCompositionVisual,
+    opacity_effect: IDCompositionEffectGroup,
+}
+
+pub(super) struct BackBufferCache<T> {
+    slots: [Option<T>; 2],
+}
+
+impl<T> Default for BackBufferCache<T> {
+    fn default() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+impl<T> BackBufferCache<T> {
+    fn get_or_try_insert_with<E>(
+        &mut self,
+        index: usize,
+        create: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<Option<&T>, E> {
+        let Some(slot) = self.slots.get_mut(index) else {
+            return Ok(None);
+        };
+        if slot.is_none() {
+            *slot = Some(create()?);
+        }
+        Ok(slot.as_ref())
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.slots.fill_with(|| None);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,7 +172,12 @@ impl SurfaceMetrics {
 }
 
 impl CompositionRenderer {
-    pub fn new(force_warp: bool, solid_material: bool) -> Result<Self> {
+    pub fn new(
+        force_warp: bool,
+        solid_material: bool,
+        liquid_glass: bool,
+        reduced_motion: bool,
+    ) -> Result<Self> {
         let (d3d, device_kind) = create_d3d_device(force_warp)?;
         let dxgi_device: IDXGIDevice = d3d.cast()?;
 
@@ -146,7 +207,14 @@ impl CompositionRenderer {
             dcomp,
             device_kind,
             icons: RefCell::new(icons),
+            showcase_resources: RefCell::new(ShowcaseResourceCache::default()),
             solid_material,
+            liquid_glass_mode: liquid_glass_mode(
+                liquid_glass,
+                solid_material,
+                device_kind,
+                reduced_motion,
+            ),
         })
     }
 
@@ -170,7 +238,7 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). The adapter has a DXGI factory parent;
         // the requested `IDXGIFactory2` is required by composition swap chains.
         let factory: IDXGIFactory2 = unsafe { adapter.GetParent() }?;
-        let description = DXGI_SWAP_CHAIN_DESC1 {
+        let mut description = DXGI_SWAP_CHAIN_DESC1 {
             Width: width,
             Height: height,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -186,11 +254,16 @@ impl CompositionRenderer {
             AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
             Flags: 0,
         };
-        // SAFETY: Category 8 (FFI boundary). The descriptor uses the documented
-        // flip-model composition combination and the device outlives the chain.
-        let swap_chain =
-            unsafe { factory.CreateSwapChainForComposition(&self._d3d, &description, None) }?;
-        let bitmap = self.create_target_bitmap(&swap_chain, dpi)?;
+        let (swap_chain, swap_chain_flags, frame_latency_waitable) =
+            self.create_composition_swap_chain(&factory, &mut description, role)?;
+        let index = Self::current_back_buffer_index(&swap_chain)?;
+        let mut back_buffers = BackBufferCache::default();
+        let bitmap = back_buffers
+            .get_or_try_insert_with(index, || {
+                self.create_target_bitmap(&swap_chain, dpi, index as u32)
+            })?
+            .cloned()
+            .ok_or_else(|| windows::core::Error::from_hresult(E_INVALIDARG))?;
         // SAFETY: Category 8 (FFI boundary). The bitmap and context are live COM
         // interfaces from the same D2D device.
         unsafe {
@@ -209,15 +282,141 @@ impl CompositionRenderer {
         } else {
             None
         };
+        let liquid_glass = if let Some(profile) = profile_for_role(role) {
+            let tokens = ShowcaseTokens::obsidian_glass();
+            let (glass_width, glass_height, radius) = match profile {
+                LiquidGlassProfile::Dock => (
+                    logical_surface.width,
+                    logical_surface.height,
+                    tokens.dock_radius,
+                ),
+                LiquidGlassProfile::Panel => (
+                    logical_surface.width,
+                    logical_surface.height,
+                    tokens.popover_radius,
+                ),
+                LiquidGlassProfile::ActiveModule => {
+                    (160.0, logical_surface.height, logical_surface.height / 2.0)
+                }
+            };
+            LiquidGlassResources::create(
+                &self.d2d_context,
+                profile,
+                glass_width,
+                glass_height,
+                radius,
+                self.liquid_glass_mode,
+            )?
+        } else {
+            None
+        };
+        let desktop_blur = if wants_desktop_blur(
+            role,
+            scenes.popover.map(PopoverScene::layout_style),
+            scenes.quick_settings.is_some(),
+            self.solid_material,
+        ) {
+            DesktopBlurCapture::capture(&self.d2d_context, hwnd, width, height, dpi).unwrap_or_else(
+                |error| {
+                    eprintln!(
+                        "DESKTOP_BLUR stage=initial_capture status=fallback hresult={:#010X}",
+                        error.code().0 as u32,
+                    );
+                    None
+                },
+            )
+        } else {
+            None
+        };
+        let mut showcase_resources = self.showcase_resources.borrow_mut();
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
             &mut icons,
-            ShowcaseStyle::new(role, self.solid_material, dock_inset.as_ref()),
+            &mut showcase_resources,
+            ShowcaseStyle::new(
+                role,
+                self.solid_material,
+                dock_inset.as_ref(),
+                liquid_glass.as_ref(),
+                desktop_blur.as_ref(),
+            ),
             logical_surface,
             scenes,
         )?;
 
+        let composition = self.create_direct_attachment(hwnd, &swap_chain)?;
+        let surface = WindowSurface {
+            hwnd,
+            swap_chain,
+            swap_chain_flags,
+            frame_latency_waitable,
+            back_buffers: RefCell::new(back_buffers),
+            device: self._d3d.clone(),
+            composition,
+            width,
+            height,
+            dpi,
+            dock_inset,
+            liquid_glass,
+            desktop_blur: RefCell::new(desktop_blur),
+        };
+        // SAFETY: The surface owns this HWND. Hidden transient surfaces are
+        // redrawn and presented immediately before their first show.
+        let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+        if should_present_initial_frame(role, visible) {
+            validate_initial_present_outcome(surface.present_initial()?)?;
+        }
+        Ok(surface)
+    }
+
+    fn create_composition_swap_chain(
+        &self,
+        factory: &IDXGIFactory2,
+        description: &mut DXGI_SWAP_CHAIN_DESC1,
+        role: ShowcaseRole,
+    ) -> Result<(IDXGISwapChain1, DXGI_SWAP_CHAIN_FLAG, Option<HANDLE>)> {
+        let preferred_flags = swap_chain_flags_for_role(role);
+        description.Flags = preferred_flags.0 as u32;
+        let preferred = self
+            .create_swap_chain(factory, description)
+            .and_then(|swap_chain| {
+                let waitable = frame_latency_waitable(&swap_chain, preferred_flags)?;
+                Ok((swap_chain, preferred_flags, waitable))
+            });
+        match preferred {
+            Ok(surface) => Ok(surface),
+            Err(error)
+                if preferred_flags.contains(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) =>
+            {
+                eprintln!(
+                    "DOCK_PACING mode=timer_fallback hresult={:#010X}",
+                    error.code().0 as u32
+                );
+                let fallback_flags = DXGI_SWAP_CHAIN_FLAG(0);
+                description.Flags = fallback_flags.0 as u32;
+                let swap_chain = self.create_swap_chain(factory, description)?;
+                Ok((swap_chain, fallback_flags, None))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn create_swap_chain(
+        &self,
+        factory: &IDXGIFactory2,
+        description: &DXGI_SWAP_CHAIN_DESC1,
+    ) -> Result<IDXGISwapChain1> {
+        // SAFETY: Category 8 (FFI boundary). The descriptor uses a documented
+        // flip-model composition combination and the device outlives the chain.
+        unsafe { factory.CreateSwapChainForComposition(&self._d3d, description, None) }
+    }
+
+    fn create_direct_attachment(
+        &self,
+        hwnd: HWND,
+        swap_chain: &IDXGISwapChain1,
+    ) -> Result<DirectCompositionAttachment> {
         // SAFETY: Category 8 (FFI boundary). `hwnd` is a live top-level window owned
         // by the caller and remains valid for the lifetime of the returned surface.
         let target = unsafe { self.dcomp.CreateTargetForHwnd(hwnd, true) }?;
@@ -226,7 +425,7 @@ impl CompositionRenderer {
         let visual = unsafe { self.dcomp.CreateVisual() }?;
         // SAFETY: Category 8 (FFI boundary). A composition swap chain is a supported
         // visual content object and remains owned by this surface.
-        unsafe { visual.SetContent(&swap_chain) }?;
+        unsafe { visual.SetContent(swap_chain) }?;
         // SAFETY: Category 8 (FFI boundary). Both COM objects come from this
         // composition device and remain retained by the returned surface.
         let opacity_effect = unsafe {
@@ -240,26 +439,12 @@ impl CompositionRenderer {
         // SAFETY: Category 8 (FFI boundary). All pending operations reference live
         // resources retained in this renderer/surface pair.
         unsafe { self.dcomp.Commit() }?;
-        let surface = WindowSurface {
-            swap_chain,
-            device: self._d3d.clone(),
+        Ok(DirectCompositionAttachment {
             dcomp: self.dcomp.clone(),
             _target: target,
-            opacity_effect,
             visual,
-            width,
-            height,
-            dpi,
-            dock_inset,
-        };
-        match surface.present_blocking()? {
-            PresentOutcome::Presented | PresentOutcome::FrameSkipped => Ok(surface),
-            PresentOutcome::DeviceLost(kind) => Err(windows::core::Error::new(
-                device_loss_hresult(kind),
-                format!("recoverable device loss during initial present: {kind:?}"),
-            )),
-            PresentOutcome::Failed(code) => Err(windows::core::Error::from_hresult(code)),
-        }
+            opacity_effect,
+        })
     }
 
     pub fn redraw_surface(
@@ -268,7 +453,34 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> Result<PresentOutcome> {
-        let bitmap = self.create_target_bitmap(&surface.swap_chain, surface.dpi)?;
+        let desktop_blur_enabled = wants_desktop_blur(
+            role,
+            scenes.popover.map(PopoverScene::layout_style),
+            scenes.quick_settings.is_some(),
+            self.solid_material,
+        );
+        if !desktop_blur_enabled {
+            surface.desktop_blur.borrow_mut().take();
+        // SAFETY: The surface owns this HWND and visibility is queried only to
+        // avoid capturing the popover into its own background.
+        } else if !unsafe { IsWindowVisible(surface.hwnd) }.as_bool() {
+            let capture = DesktopBlurCapture::capture(
+                &self.d2d_context,
+                surface.hwnd,
+                surface.width,
+                surface.height,
+                surface.dpi,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "DESKTOP_BLUR stage=refresh status=fallback hresult={:#010X}",
+                    error.code().0 as u32,
+                );
+                None
+            });
+            *surface.desktop_blur.borrow_mut() = capture;
+        }
+        let bitmap = self.current_target_bitmap(surface)?;
         // SAFETY: Category 8 (FFI boundary). The freshly acquired back-buffer
         // bitmap belongs to this D2D device; its DPI matches the logical scene.
         unsafe {
@@ -277,22 +489,51 @@ impl CompositionRenderer {
                 .SetDpi(surface.dpi.raw() as f32, surface.dpi.raw() as f32);
         }
         let mut icons = self.icons.borrow_mut();
+        let mut showcase_resources = self.showcase_resources.borrow_mut();
         draw_showcase(
             &self.d2d_context,
             &self.dwrite,
             &mut icons,
-            ShowcaseStyle::new(role, self.solid_material, surface.dock_inset.as_ref()),
+            &mut showcase_resources,
+            ShowcaseStyle::new(
+                role,
+                self.solid_material,
+                surface.dock_inset.as_ref(),
+                surface.liquid_glass.as_ref(),
+                surface.desktop_blur.borrow().as_ref(),
+            ),
             logical_surface_rect(surface.width, surface.height, surface.dpi),
             scenes,
         )?;
         surface.present()
     }
 
-    fn create_target_bitmap(&self, swap_chain: &IDXGISwapChain1, dpi: Dpi) -> Result<ID2D1Bitmap1> {
+    fn current_target_bitmap(&self, surface: &WindowSurface) -> Result<ID2D1Bitmap1> {
+        let index = Self::current_back_buffer_index(&surface.swap_chain)?;
+        surface
+            .back_buffers
+            .borrow_mut()
+            .get_or_try_insert_with(index, || {
+                self.create_target_bitmap(&surface.swap_chain, surface.dpi, index as u32)
+            })?
+            .cloned()
+            .ok_or_else(|| windows::core::Error::from_hresult(E_INVALIDARG))
+    }
+
+    fn current_back_buffer_index(swap_chain: &IDXGISwapChain1) -> Result<usize> {
         let rotating_chain: IDXGISwapChain3 = swap_chain.cast()?;
         // SAFETY: Category 8 (FFI boundary). The typed swapchain is live and
         // reports the current writable back-buffer index without mutation.
         let index = unsafe { rotating_chain.GetCurrentBackBufferIndex() };
+        Ok(index as usize)
+    }
+
+    fn create_target_bitmap(
+        &self,
+        swap_chain: &IDXGISwapChain1,
+        dpi: Dpi,
+        index: u32,
+    ) -> Result<ID2D1Bitmap1> {
         // SAFETY: Category 8 (FFI boundary). The reported index belongs to this
         // live flip-model chain and is queried as its documented DXGI surface.
         let surface: IDXGISurface = unsafe { swap_chain.GetBuffer(index) }?;
@@ -315,6 +556,45 @@ impl CompositionRenderer {
     }
 }
 
+fn validate_initial_present_outcome(outcome: PresentOutcome) -> Result<()> {
+    match outcome {
+        PresentOutcome::Presented => Ok(()),
+        PresentOutcome::FrameSkipped => Err(windows::core::Error::new(
+            E_FAIL,
+            "initial immediate present unexpectedly skipped its frame",
+        )),
+        PresentOutcome::DeviceLost(kind) => Err(windows::core::Error::new(
+            device_loss_hresult(kind),
+            format!("recoverable device loss during initial present: {kind:?}"),
+        )),
+        PresentOutcome::Failed(code) => Err(windows::core::Error::from_hresult(code)),
+    }
+}
+
+impl DirectCompositionAttachment {
+    fn set_opacity(&self, opacity: f32) -> Result<()> {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        // SAFETY: The effect and device are retained by this attachment.
+        unsafe {
+            self.opacity_effect.SetOpacity2(opacity)?;
+            self.dcomp.Commit()
+        }
+    }
+
+    pub(super) fn set_visibility_state(&self, offset_y: f32, opacity: f32) -> Result<()> {
+        // SAFETY: The visual, effect and device are retained by this attachment.
+        unsafe {
+            self.visual.SetOffsetY2(offset_y)?;
+            self.opacity_effect.SetOpacity2(opacity.clamp(0.0, 1.0))?;
+            self.dcomp.Commit()
+        }
+    }
+}
+
 impl WindowSurface {
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
@@ -326,41 +606,36 @@ impl WindowSurface {
         SurfaceMetrics::new(self.width, self.height, self.dpi)
     }
 
+    #[must_use]
+    pub const fn frame_latency_waitable_object(&self) -> Option<HANDLE> {
+        self.frame_latency_waitable
+    }
+
     pub fn present(&self) -> Result<PresentOutcome> {
         present_swap_chain(&self.swap_chain, &self.device)
     }
 
-    fn present_blocking(&self) -> Result<PresentOutcome> {
-        present_swap_chain_blocking(&self.swap_chain, &self.device)
+    fn present_initial(&self) -> Result<PresentOutcome> {
+        present_swap_chain_initial(&self.swap_chain, &self.device)
     }
 
     pub fn set_opacity(&self, opacity: f32) -> Result<()> {
-        let opacity = if opacity.is_finite() {
-            opacity.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        // SAFETY: Category 8 (FFI boundary). The visual belongs to this live
-        // composition device and receives a finite normalized opacity.
-        unsafe { self.opacity_effect.SetOpacity2(opacity) }?;
-        // SAFETY: Category 8 (FFI boundary). The visual update references only
-        // resources owned by this surface.
-        unsafe { self.dcomp.Commit() }
+        self.composition.set_opacity(opacity)
     }
 
     pub fn animate_entrance(&self, reduced_motion: bool) -> Result<()> {
+        let attachment = &self.composition;
         if reduced_motion {
-            // SAFETY: Category 8 (FFI boundary). The visual belongs to this live
-            // composition device and accepts a finite immediate offset.
-            unsafe { self.visual.SetOffsetY2(0.0) }?;
+            // SAFETY: Category 8 (FFI boundary). The visual belongs to this
+            // live composition attachment and accepts an immediate offset.
+            unsafe { attachment.visual.SetOffsetY2(0.0) }?;
         } else {
             let duration = 0.18_f64;
             let start = -6.0_f32;
-            // SAFETY: Category 8 (FFI boundary). The device returns an owned
-            // animation and all polynomial coefficients are finite.
-            let animation = unsafe { self.dcomp.CreateAnimation() }?;
-            // SAFETY: Category 8 (FFI boundary). The cubic segment and terminal
-            // value form one bounded 180 ms ease-out animation.
+            // SAFETY: Category 8 (FFI boundary). The attachment owns the
+            // device, returned animation, and target visual.
+            let animation = unsafe { attachment.dcomp.CreateAnimation() }?;
+            // SAFETY: The bounded coefficients and visual share one device.
             unsafe {
                 animation.AddCubic(
                     0.0,
@@ -370,20 +645,96 @@ impl WindowSurface {
                     2.0 * start / (duration * duration * duration) as f32,
                 )?;
                 animation.End(duration, 0.0)?;
-                self.visual.SetOffsetY(&animation)?;
+                attachment.visual.SetOffsetY(&animation)?;
             }
         }
-        // SAFETY: Category 8 (FFI boundary). All pending animation operations
-        // reference resources owned by this surface.
-        unsafe { self.dcomp.Commit() }
+        // SAFETY: Every pending operation references retained resources.
+        unsafe { attachment.dcomp.Commit() }
     }
+}
+
+const fn swap_chain_flags_for_role(role: ShowcaseRole) -> DXGI_SWAP_CHAIN_FLAG {
+    if matches!(role, ShowcaseRole::Dock) {
+        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+    } else {
+        DXGI_SWAP_CHAIN_FLAG(0)
+    }
+}
+
+fn frame_latency_waitable(
+    swap_chain: &IDXGISwapChain1,
+    flags: DXGI_SWAP_CHAIN_FLAG,
+) -> Result<Option<HANDLE>> {
+    if !flags.contains(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) {
+        return Ok(None);
+    }
+    let paced_chain: IDXGISwapChain2 = swap_chain.cast()?;
+    // SAFETY: Category 8 (FFI boundary). The chain was created with the frame
+    // latency waitable flag and owns the returned synchronization handle.
+    unsafe { paced_chain.SetMaximumFrameLatency(1) }?;
+    // SAFETY: The same live waitable swap chain owns this borrowed handle. DXGI
+    // closes it with the swap chain, so callers must not close it.
+    let waitable = unsafe { paced_chain.GetFrameLatencyWaitableObject() };
+    if waitable.is_invalid() {
+        return Err(windows::core::Error::from_hresult(E_FAIL));
+    }
+    Ok(Some(waitable))
 }
 
 #[cfg(test)]
 mod tests {
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    };
+
     use crate::Dpi;
 
-    use super::{SurfaceMetrics, WindowSurface};
+    use super::{
+        BackBufferCache, PresentOutcome, ShowcaseRole, SurfaceMetrics, WindowSurface,
+        should_present_initial_frame, swap_chain_flags_for_role, validate_initial_present_outcome,
+    };
+
+    #[test]
+    fn back_buffer_cache_reuses_each_slot_and_clears_before_resize() {
+        let mut cache = BackBufferCache::default();
+        let mut creates = 0;
+
+        assert_eq!(
+            cache
+                .get_or_try_insert_with(0, || Ok::<_, ()>({
+                    creates += 1;
+                    10
+                }))
+                .unwrap(),
+            Some(&10)
+        );
+        assert_eq!(
+            cache.get_or_try_insert_with(0, || Ok::<_, ()>(99)).unwrap(),
+            Some(&10)
+        );
+        assert_eq!(
+            cache
+                .get_or_try_insert_with(1, || Ok::<_, ()>({
+                    creates += 1;
+                    20
+                }))
+                .unwrap(),
+            Some(&20)
+        );
+        assert_eq!(creates, 2);
+
+        cache.clear();
+        assert_eq!(
+            cache
+                .get_or_try_insert_with(0, || Ok::<_, ()>({
+                    creates += 1;
+                    30
+                }))
+                .unwrap(),
+            Some(&30)
+        );
+        assert_eq!(creates, 3);
+    }
 
     #[test]
     fn surface_metrics_report_pixel_size() {
@@ -397,5 +748,39 @@ mod tests {
         let accessor: fn(&WindowSurface) -> SurfaceMetrics = WindowSurface::metrics;
 
         let _ = accessor;
+    }
+
+    #[test]
+    fn only_the_dock_requests_compositor_frame_pacing() {
+        assert_eq!(
+            swap_chain_flags_for_role(ShowcaseRole::Dock),
+            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+        );
+        for role in [
+            ShowcaseRole::Topbar,
+            ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
+            ShowcaseRole::Preview,
+            ShowcaseRole::Settings,
+        ] {
+            assert_eq!(swap_chain_flags_for_role(role), DXGI_SWAP_CHAIN_FLAG(0));
+        }
+    }
+
+    #[test]
+    fn initial_frame_backpressure_never_installs_a_blank_surface() {
+        let error = validate_initial_present_outcome(PresentOutcome::FrameSkipped)
+            .expect_err("a skipped first frame must reject the surface");
+
+        assert_eq!(error.code(), windows::Win32::Foundation::E_FAIL);
+    }
+
+    #[test]
+    fn hidden_transient_surfaces_defer_their_initial_present() {
+        assert!(should_present_initial_frame(ShowcaseRole::Topbar, false));
+        assert!(should_present_initial_frame(ShowcaseRole::Dock, false));
+        assert!(!should_present_initial_frame(ShowcaseRole::Popover, false));
+        assert!(!should_present_initial_frame(ShowcaseRole::Preview, false));
+        assert!(should_present_initial_frame(ShowcaseRole::Popover, true));
     }
 }

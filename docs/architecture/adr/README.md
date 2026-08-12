@@ -41,3 +41,5 @@ precisam de ADR.
 | [0004](0004-ui-responsiveness-and-diagnostics.md) | Accepted | Responsividade da UI e diagnóstico modular |
 | [0005](0005-native-surface-runtime.md) | Accepted | Propriedade gráfica do Shell Slot |
 | [0006](0006-shared-diagnostics-policy.md) | Accepted | Política compartilhada de diagnóstico |
+| [0007](0007-topbar-system-actions.md) | Accepted | Ações de sistema da topbar por intents e Adapter Windows |
+| [0008](0008-background-apps-notification-catalog.md) | Accepted | Catálogo de aplicativos da área de notificação sob demanda |

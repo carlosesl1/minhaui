@@ -15,15 +15,14 @@ pub(crate) fn draw_functional_dock(
     brushes: DockBrushes<'_>,
     control_radius: f32,
 ) {
-    let active_icon_sources = scene
-        .items()
-        .iter()
-        .filter_map(|item| match item.icon() {
-            DockIcon::WindowsExecutable(source) => Some(source.as_str()),
-            DockIcon::SystemFallback => None,
+    resources.icons.retain_dock(|source| {
+        scene.items().iter().any(|item| {
+            matches!(
+                item.icon(),
+                DockIcon::WindowsExecutable(active) if active.as_ref() == source
+            )
         })
-        .collect::<Vec<_>>();
-    resources.icons.retain(&active_icon_sources);
+    });
     let layout = layout_dock_scene(scene, surface);
     if let Some(x) = scene.drag_insertion_x() {
         fill_round(
@@ -91,7 +90,7 @@ pub(crate) fn draw_functional_dock(
                     };
                     let drew_native = match item.icon() {
                         DockIcon::WindowsExecutable(source) => {
-                            resources.icons.draw(source, icon_bounds)
+                            resources.icons.draw_dock(source, icon_bounds)
                         }
                         DockIcon::SystemFallback => false,
                     };

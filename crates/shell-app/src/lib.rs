@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub safe_mode: bool,
     pub high_contrast: bool,
     pub reduced_motion: bool,
+    pub liquid_glass: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +52,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
     let mut safe_mode = false;
     let mut high_contrast = false;
     let mut reduced_motion = false;
+    let mut liquid_glass = true;
     let mut index = 1;
 
     while index < args.len() {
@@ -64,6 +66,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
             "--safe-mode" => safe_mode = true,
             "--high-contrast" => high_contrast = true,
             "--reduced-motion" => reduced_motion = true,
+            "--liquid-glass" => liquid_glass = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -87,6 +90,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
         safe_mode,
         high_contrast,
         reduced_motion,
+        liquid_glass,
     }
 }
 
@@ -106,6 +110,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
     let mut safe_mode = false;
     let mut high_contrast = false;
     let mut reduced_motion = false;
+    let mut liquid_glass = true;
     let mut index = 1;
 
     while index < args.len() {
@@ -119,6 +124,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
             "--safe-mode" => safe_mode = true,
             "--high-contrast" => high_contrast = true,
             "--reduced-motion" => reduced_motion = true,
+            "--liquid-glass" => liquid_glass = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -142,5 +148,6 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
         safe_mode,
         high_contrast,
         reduced_motion,
+        liquid_glass,
     }
 }

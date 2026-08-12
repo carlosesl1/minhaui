@@ -1,13 +1,14 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use windows::Win32::Media::Audio::waveOutGetVolume;
 use windows::Win32::NetworkManagement::IpHelper::{
     FreeMibTable, GetIfTable2, MIB_IF_TABLE2, MIB_IF_TYPE_LOOPBACK,
 };
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::{QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState};
+
+use shell_core::CalendarDate;
 
 use crate::{NetworkSnapshot, PowerSnapshot, TopbarSnapshot};
 
@@ -31,12 +32,21 @@ pub(super) struct TopbarStatusReader {
 
 impl TopbarStatusReader {
     pub(super) fn snapshot(&mut self, now_ms: u64) -> TopbarSnapshot {
+        let local = local_time();
         TopbarSnapshot::new(
             clock_label(),
             self.network_snapshot(now_ms),
             volume_percent(),
             power_snapshot(),
             notification_indicator(),
+        )
+        .with_local_date(
+            CalendarDate::new(
+                i32::from(local.wYear),
+                u8::try_from(local.wMonth).unwrap_or(1),
+                u8::try_from(local.wDay).unwrap_or(1),
+            )
+            .unwrap_or_default(),
         )
     }
 
@@ -68,7 +78,7 @@ impl TopbarStatusReader {
 fn clock_label() -> String {
     // SAFETY: Category 8 (FFI boundary). GetLocalTime writes and returns a value
     // struct with no borrowed pointers.
-    let local = unsafe { GetLocalTime() };
+    let local = local_time();
     format!(
         "{:02}:{:02} {} {:02}",
         local.wHour,
@@ -76,6 +86,12 @@ fn clock_label() -> String {
         weekday(local.wDayOfWeek),
         local.wDay
     )
+}
+
+fn local_time() -> windows::Win32::Foundation::SYSTEMTIME {
+    // SAFETY: Category 8 (FFI boundary). GetLocalTime writes and returns a value
+    // struct with no borrowed pointers.
+    unsafe { GetLocalTime() }
 }
 
 fn network_totals() -> NetworkTotals {
@@ -112,16 +128,12 @@ unsafe fn totals_from_table(table: &MIB_IF_TABLE2) -> NetworkTotals {
 }
 
 fn volume_percent() -> u8 {
-    let mut raw = 0_u32;
-    // SAFETY: Category 8 (FFI boundary). Passing no HWAVEOUT queries the preferred
-    // wave output device and writes one u32 volume value.
-    if unsafe { waveOutGetVolume(None, &mut raw) } != 0 {
-        return 0;
-    }
-    let left = raw & 0xffff;
-    let right = (raw >> 16) & 0xffff;
-    let percent = ((left + right) / 2).saturating_mul(100) / 0xffff;
-    u8::try_from(percent).unwrap_or(100)
+    crate::win32_audio_endpoint::read().map_or(
+        0,
+        |state| {
+            if state.muted { 0 } else { state.volume }
+        },
+    )
 }
 
 fn power_snapshot() -> PowerSnapshot {

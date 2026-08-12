@@ -33,7 +33,7 @@ fn apply_preview_action(action: PreviewQueuedAction) -> Result<()> {
     match action {
         PreviewQueuedAction::Focus { window, app } => {
             if window_matches_app(window, &app) {
-                focus(window);
+                focus_window(window);
             }
             Ok(())
         }
@@ -48,7 +48,7 @@ fn apply_effect(effect: &Effect) -> Result<()> {
             Ok(())
         }
         Effect::FocusWindow(window) => {
-            focus(*window);
+            focus_window(*window);
             Ok(())
         }
         Effect::MinimizeWindow(window) => {
@@ -121,7 +121,7 @@ fn diagnostic_launch_target(target: &str) -> &'static str {
     }
 }
 
-fn focus(window: WindowId) {
+pub(super) fn focus_window(window: WindowId) {
     let hwnd = hwnd_from_id(window);
     // SAFETY: Category 8 (FFI boundary). HWND identity comes from documented
     // platform discovery; invalid handles are ignored by Windows.

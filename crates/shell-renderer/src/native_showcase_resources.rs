@@ -212,6 +212,87 @@ pub(crate) fn create_detail_format(
     Ok(format)
 }
 
+pub(crate) fn create_quick_settings_label_format(
+    dwrite: &IDWriteFactory,
+) -> Result<IDWriteTextFormat> {
+    // SAFETY: Category 8 (FFI boundary). Static strings remain valid for the call.
+    let format = unsafe {
+        dwrite.CreateTextFormat(
+            w!("Segoe UI Variable"),
+            None,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            13.0,
+            w!("en-US"),
+        )?
+    };
+    configure_quick_settings_text(dwrite, &format)?;
+    Ok(format)
+}
+
+pub(crate) fn create_quick_settings_detail_format(
+    dwrite: &IDWriteFactory,
+) -> Result<IDWriteTextFormat> {
+    // SAFETY: Category 8 (FFI boundary). Static strings remain valid for the call.
+    let format = unsafe {
+        dwrite.CreateTextFormat(
+            w!("Segoe UI Variable"),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            11.5,
+            w!("en-US"),
+        )?
+    };
+    configure_quick_settings_text(dwrite, &format)?;
+    Ok(format)
+}
+
+fn configure_quick_settings_text(
+    dwrite: &IDWriteFactory,
+    format: &IDWriteTextFormat,
+) -> Result<()> {
+    // SAFETY: Category 8 (FFI boundary). The owned format remains live while
+    // these setters establish compact, single-line quick-settings typography.
+    unsafe {
+        format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+    }
+    let trimming = preview_title_trimming();
+    // SAFETY: Category 8 (FFI boundary). The format and ellipsis object remain
+    // live through the synchronous setter call.
+    let ellipsis = unsafe { dwrite.CreateEllipsisTrimmingSign(format) }?;
+    // SAFETY: Category 8 (FFI boundary). The trimming descriptor is valid.
+    unsafe { format.SetTrimming(&trimming, &ellipsis) }?;
+    Ok(())
+}
+
+pub(crate) fn create_popover_title_format(dwrite: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+    // SAFETY: Category 8 (FFI boundary). Static strings remain valid for the call.
+    let format = unsafe {
+        dwrite.CreateTextFormat(
+            w!("Segoe UI Variable"),
+            None,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            16.0,
+            w!("en-US"),
+        )?
+    };
+    // SAFETY: Category 8 (FFI boundary). The owned format remains live through
+    // drawing and these setters only configure its immutable presentation.
+    unsafe {
+        format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+    }
+    Ok(format)
+}
+
 #[cfg(test)]
 mod tests {
     use windows::Win32::Graphics::DirectWrite::DWRITE_TRIMMING_GRANULARITY_CHARACTER;

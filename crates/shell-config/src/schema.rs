@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     AdvancedSettings, AppearanceSettings, BehaviorSettings, DockSettings, MAX_CONFIG_BYTES,
-    TopbarSettings,
+    QuickSettingsSettings, TopbarSettings,
 };
 
 const SCHEMA_VERSION: u16 = 1;
@@ -33,6 +33,8 @@ pub struct ShellConfigV1 {
     #[serde(default)]
     topbar: TopbarSettings,
     #[serde(default)]
+    quick_settings: QuickSettingsSettings,
+    #[serde(default)]
     behavior: BehaviorSettings,
     #[serde(default)]
     appearance: AppearanceSettings,
@@ -53,6 +55,7 @@ impl Default for ShellConfigV1 {
             topbar_modules: default_topbar(),
             dock: DockSettings::default(),
             topbar: TopbarSettings::default(),
+            quick_settings: QuickSettingsSettings::default(),
             behavior: BehaviorSettings::default(),
             appearance: AppearanceSettings::default(),
             advanced: AdvancedSettings::default(),
@@ -111,7 +114,26 @@ impl ShellConfigV1 {
         if !all_unique(self.topbar_modules.iter().map(|module| module.kind())) {
             return Err(ConfigError::DuplicateTopbarModule);
         }
-        if !self.dock.validate() || !self.appearance.validate() {
+        if self
+            .topbar_modules
+            .iter()
+            .any(|module| !module.kind().is_v1_persisted())
+        {
+            return Err(ConfigError::UnsupportedTopbarModule);
+        }
+        let expected = default_topbar()
+            .into_iter()
+            .map(|module| module.kind())
+            .collect::<HashSet<_>>();
+        let actual = self
+            .topbar_modules
+            .iter()
+            .map(|module| module.kind())
+            .collect::<HashSet<_>>();
+        if actual != expected {
+            return Err(ConfigError::IncompleteTopbarModules);
+        }
+        if !self.dock.validate() || !self.appearance.validate() || !self.quick_settings.validate() {
             return Err(ConfigError::InvalidSettings);
         }
         Ok(())
@@ -184,12 +206,30 @@ impl ShellConfigV1 {
         &self.topbar_modules
     }
     #[must_use]
+    pub fn with_topbar_modules(mut self, topbar_modules: Vec<TopbarModule>) -> Self {
+        self.topbar_modules = topbar_modules
+            .into_iter()
+            .filter(|module| module.kind().is_v1_persisted())
+            .collect();
+        self
+    }
+    #[must_use]
     pub const fn dock(&self) -> &DockSettings {
         &self.dock
     }
     #[must_use]
     pub const fn topbar(&self) -> &TopbarSettings {
         &self.topbar
+    }
+    #[must_use]
+    pub const fn quick_settings(&self) -> &QuickSettingsSettings {
+        &self.quick_settings
+    }
+    #[must_use]
+    pub fn with_quick_settings(&self, quick_settings: QuickSettingsSettings) -> Self {
+        let mut config = self.clone();
+        config.quick_settings = quick_settings.normalized();
+        config
     }
     #[must_use]
     pub const fn behavior(&self) -> BehaviorSettings {
@@ -299,7 +339,8 @@ pub fn decode_config(bytes: &[u8]) -> ConfigLoad {
         if version == SCHEMA_VERSION {
             return match serde_json::from_value::<ShellConfigV1>(value) {
                 Ok(config) if config.validate().is_ok() => ConfigLoad::Current(config),
-                Ok(_) | Err(_) => recovered(RecoveryKind::Malformed, Some(version)),
+                Ok(_) => recovered(RecoveryKind::Malformed, Some(version)),
+                Err(_) => recovered(RecoveryKind::Malformed, Some(version)),
             };
         }
         return recovered(RecoveryKind::Malformed, Some(version));
@@ -347,6 +388,7 @@ impl ConfigV0 {
             topbar_modules: default_topbar(),
             dock: DockSettings::default(),
             topbar: TopbarSettings::default(),
+            quick_settings: QuickSettingsSettings::default(),
             behavior: BehaviorSettings::default(),
             appearance: AppearanceSettings::default(),
             advanced: AdvancedSettings::default(),
@@ -397,6 +439,10 @@ pub enum ConfigError {
     /// Top-bar module kinds were not unique.
     #[error("topbar module kinds must be unique")]
     DuplicateTopbarModule,
+    #[error("topbar module is not supported by configuration schema V1")]
+    UnsupportedTopbarModule,
+    #[error("configuration must contain every schema V1 topbar module exactly once")]
+    IncompleteTopbarModules,
     #[error("settings value is outside supported bounds")]
     InvalidSettings,
     /// JSON encoding failed.

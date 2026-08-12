@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use shell_core::{DockItemId, WindowId};
 
 use crate::dock_item_visual::DockItemVisual;
@@ -89,7 +91,7 @@ impl Default for DockLayoutConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockScene {
     config: DockLayoutConfig,
-    items: Vec<DockItemVisual>,
+    items: Arc<[DockItemVisual]>,
     hovered_item: Option<u64>,
     hover_position_x: Option<f32>,
     hover_strength: f32,
@@ -106,7 +108,12 @@ pub struct DockScene {
 
 impl DockScene {
     #[must_use]
-    pub const fn new(config: DockLayoutConfig, items: Vec<DockItemVisual>) -> Self {
+    pub fn new(config: DockLayoutConfig, items: Vec<DockItemVisual>) -> Self {
+        Self::from_shared_items(config, items.into())
+    }
+
+    #[must_use]
+    pub fn from_shared_items(config: DockLayoutConfig, items: Arc<[DockItemVisual]>) -> Self {
         Self {
             config,
             items,

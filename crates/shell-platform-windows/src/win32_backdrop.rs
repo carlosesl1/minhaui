@@ -14,10 +14,16 @@ enum BackdropRequest {
 
 const fn request_for(role: ShowcaseRole, enabled: bool) -> BackdropRequest {
     match (enabled, role) {
-        (true, ShowcaseRole::Topbar | ShowcaseRole::Popover | ShowcaseRole::Settings) => {
-            BackdropRequest::Transient
-        }
-        (false, _) | (true, ShowcaseRole::Dock | ShowcaseRole::Preview) => BackdropRequest::None,
+        (true, ShowcaseRole::Settings) => BackdropRequest::Transient,
+        (false, _)
+        | (
+            true,
+            ShowcaseRole::Topbar
+            | ShowcaseRole::Dock
+            | ShowcaseRole::Popover
+            | ShowcaseRole::AppMenu
+            | ShowcaseRole::Preview,
+        ) => BackdropRequest::None,
     }
 }
 
@@ -65,14 +71,22 @@ mod tests {
     use windows::Win32::Graphics::Dwm::{DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW};
 
     #[test]
-    fn requests_backdrop_only_for_enabled_shell_surfaces() {
+    fn custom_alpha_surfaces_never_request_dwm_backdrop() {
         assert_eq!(request_for(ShowcaseRole::Dock, true), BackdropRequest::None);
         assert_eq!(
             request_for(ShowcaseRole::Topbar, true),
-            BackdropRequest::Transient
+            BackdropRequest::None
         );
         assert_eq!(
             request_for(ShowcaseRole::Popover, true),
+            BackdropRequest::None
+        );
+        assert_eq!(
+            request_for(ShowcaseRole::AppMenu, true),
+            BackdropRequest::None
+        );
+        assert_eq!(
+            request_for(ShowcaseRole::Settings, true),
             BackdropRequest::Transient
         );
         assert_eq!(
@@ -81,6 +95,10 @@ mod tests {
         );
         assert_eq!(
             request_for(ShowcaseRole::Dock, false),
+            BackdropRequest::None
+        );
+        assert_eq!(
+            request_for(ShowcaseRole::Popover, false),
             BackdropRequest::None
         );
     }

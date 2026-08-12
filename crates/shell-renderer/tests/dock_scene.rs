@@ -130,12 +130,38 @@ fn magnifies_only_the_hover_neighborhood_without_changing_input_order() {
     assert_eq!(layout.items()[0].id(), 10);
     assert_eq!(layout.items()[1].id(), 11);
     assert_eq!(layout.items()[4].id(), 14);
-    assert_eq!(layout.items()[2].bounds().height, 61.0);
-    assert_eq!(layout.items()[1].bounds().height, 55.5);
-    assert_eq!(layout.items()[3].bounds().height, 55.5);
+    assert_eq!(layout.items()[2].bounds().height, 76.0);
+    assert_eq!(layout.items()[1].bounds().height, 63.0);
+    assert_eq!(layout.items()[3].bounds().height, 63.0);
     assert_eq!(layout.items()[0].bounds().height, 50.0);
     assert_eq!(layout.items()[4].bounds().height, 50.0);
-    assert_eq!(layout.items()[2].bounds().x, 99.5);
+    assert_eq!(layout.items()[2].bounds().x, 92.0);
+}
+
+#[test]
+fn maximum_persisted_scale_fits_inside_the_dynamic_surface() {
+    let config = DockLayoutConfig::default()
+        .with_item_size(72.0)
+        .with_spacing(20.0)
+        .with_padding(29.0)
+        .with_magnified_item_size(100.8);
+    let scene = DockScene::new(
+        config,
+        vec![DockItemVisual::app(1, "One", RunningIndicator::Running)],
+    )
+    .with_hovered_item(Some(1));
+    let surface = DipRect::new(
+        0.0,
+        0.0,
+        dock_scene_max_width(&scene),
+        config.padding() + config.item_size() + 11.0,
+    );
+
+    let bounds = layout_dock_scene(&scene, surface).items()[0].bounds();
+
+    assert!((bounds.height - 100.8).abs() < 0.001);
+    assert!(bounds.y >= surface.y);
+    assert!(bounds.y + bounds.height <= surface.y + surface.height - 11.0);
 }
 
 #[test]

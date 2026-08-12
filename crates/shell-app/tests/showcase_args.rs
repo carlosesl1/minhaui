@@ -86,3 +86,9 @@ fn parses_accessibility_and_safe_mode_smoke_flags() {
     assert!(config.high_contrast);
     assert!(config.reduced_motion);
 }
+
+#[test]
+fn liquid_glass_is_enabled_for_the_normal_launch() {
+    assert!(parse_args(["shell-app.exe"]).liquid_glass);
+    assert!(parse_args(["shell-app.exe", "--liquid-glass"]).liquid_glass);
+}

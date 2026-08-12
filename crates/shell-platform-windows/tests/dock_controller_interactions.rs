@@ -391,6 +391,71 @@ fn magnification_spring_enters_smoothly_and_converges() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn pointer_hit_testing_reuses_the_resting_layout_until_geometry_changes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = DockController::new(state()?, DockRuntimeConfig::default())?;
+    let surface = DipRect::new(0.0, 0.0, 320.0, 96.0);
+    controller.update_surface(surface);
+    let first = item_center(&controller, DockItemId::new(1), surface)?;
+    assert!(!controller.hit_layout_cache_populated());
+
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Moved, first))?;
+    assert!(controller.hit_layout_cache_populated());
+
+    controller.handle_pointer(DockPointerSample::new(
+        DockPointerPhase::Moved,
+        DipPoint::new(first.x + 1.0, first.y),
+    ))?;
+    assert!(controller.hit_layout_cache_populated());
+
+    controller.update_surface(DipRect::new(0.0, 0.0, 360.0, 96.0));
+    assert!(!controller.hit_layout_cache_populated());
+    Ok(())
+}
+
+#[test]
+fn animated_frames_share_static_visual_items() -> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = DockController::new(state()?, DockRuntimeConfig::default())?;
+    let surface = DipRect::new(0.0, 0.0, 320.0, 96.0);
+    controller.update_surface(surface);
+    let first_item = item_center(&controller, DockItemId::new(1), surface)?;
+
+    let resting = controller.scene();
+    assert_eq!(controller.visual_items_cache_strong_count(), 2);
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Moved, first_item))?;
+    controller.advance_animation(1.0 / 60.0);
+    let animated = controller.scene();
+
+    assert_eq!(controller.visual_items_cache_strong_count(), 3);
+    assert_eq!(resting.items(), animated.items());
+    Ok(())
+}
+
+#[test]
+fn magnification_wave_keeps_balanced_first_frame_position_inertia() {
+    let mut animator = DockAnimator::new();
+    animator.retarget(0.0, 1.0);
+    animator.snap_to_target();
+    animator.retarget(120.0, 1.0);
+
+    animator.advance(1.0 / 60.0);
+
+    assert!(animator.position_x() > 30.0);
+    assert!(animator.position_x() < 40.0);
+}
+
+#[test]
+fn magnification_wave_eases_strength_in_without_feeling_delayed() {
+    let mut animator = DockAnimator::new();
+    animator.retarget(0.0, 1.0);
+
+    animator.advance(1.0 / 60.0);
+
+    assert!(animator.strength() > 0.18);
+    assert!(animator.strength() < 0.26);
+}
+
+#[test]
 fn magnification_spring_is_refresh_rate_independent() {
     // Given: the same in-flight pointer transition sampled on two monitor refresh rates.
     let mut seed = DockAnimator::new();

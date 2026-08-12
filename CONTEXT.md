@@ -66,3 +66,67 @@ DWM ou GPU reais.
 Module puro compartilhado que define redação, limites de campos e retenção dos
 diagnósticos. Não conhece formato de arquivo, thread, fila ou filesystem. O app e
 o watchdog mantêm writers próprios como Adapters dessa política.
+
+## System Action Adapter
+
+Adapter interno da plataforma Windows que traduz intents tipados de topbar e
+popover para pesquisa, rotas de Settings, volume, mídia e ações de sessão. Não
+possui estado de produto, não apresenta cenas e não executa espera, descoberta
+de pacotes ou I/O em disco na thread da UI.
+
+## Shell Observation
+
+Snapshot imutável e process-wide das janelas observadas e do status da topbar.
+Todos os Shell Slots recebem a mesma observação para um ciclo de sincronização,
+evitando descoberta e leitura de status duplicadas por monitor.
+
+## Shell Observation Runtime
+
+Module interno que possui os Adapters de descoberta de janelas, identidade e
+status da topbar. Aplica um único Poll Budget por processo e distribui a Shell
+Observation atual aos Shell Slots. A thread da UI apenas agenda capturas e
+aplica resultados imutáveis; um worker process-wide, com uma única captura
+ativa e somente a solicitação pendente mais recente, possui o trabalho
+potencialmente lento. Cada solicitação recebe uma geração, resultados anteriores
+à geração mais recente são descartados e o wake usa a fila da thread da UI, sem
+depender do lifetime de um HWND. Não possui controllers, janelas nativas ou
+estado visual.
+
+## Tray Bridge
+
+Adapter Windows process-wide que observa registros `Shell_NotifyIcon` recebidos
+exclusivamente pela thread do `Shell_TrayWnd`. Um host nativo pequeno permanece
+ativo durante a sessão, instala a DLL somente no Explorer e mantém um snapshot
+limitado em memória compartilhada, independente do lifetime da UI. O payload
+fica sob `%LOCALAPPDATA%\ObsidianGlass\TrayBridge` e o host é registrado no
+início da sessão para observar os primeiros `NIM_ADD` antes dos aplicativos de
+bandeja. O worker de aplicativos em segundo plano consome o snapshot fora da
+thread da UI e o converte para Native Tray Identity. O Tray Bridge não faz
+polling enquanto o Explorer está vivo, não injeta código nos aplicativos
+observados e preserva, durante a troca do Explorer ou atualização do host,
+somente registros cujo `HWND` proprietário continue válido. Registros removidos
+ou pertencentes a janelas encerradas são descartados. O Adapter deve retornar
+ao caminho documentado existente quando o host, o Explorer ou o protocolo não
+forem compatíveis. O catálogo não promove ícones internos do shell nem registros
+de fallback associados apenas a hosts compartilhados de scripts ou runtimes;
+esses hosts só são aceitos quando existe uma identidade nativa ativa. O Adapter
+nunca deve abrir a superfície de ícones ocultos para descobrir um callback
+ausente, pois isso produz um frame visível do Explorer. Quando um popup nativo
+é observado para a ativação atual, sua janela é posicionada junto à linha
+acionada e limitada à área útil do monitor, independentemente de onde o
+aplicativo proprietário criou inicialmente o menu.
+
+## Dock Edge Probe
+
+Timer adaptativo do Dock Runtime usado para revelar ou ocultar a dock. Sua
+cadência depende do estado: desligado quando desnecessário, lento quando o
+cursor está distante, rápido perto da borda física e alinhado ao frame durante
+animação.
+
+## Lightweight Liquid Glass
+
+Material experimental e opt-in da dock que adiciona profundidade óptica por
+bitmaps Direct2D cacheados. Reutiliza a posição e a força do hover existentes,
+sem captura do desktop, novo timer, blur adicional ou alteração de geometria.
+O renderer possui os recursos e seleciona os modos Dynamic, Static ou Disabled
+conforme hardware, movimento reduzido e fallback sólido.

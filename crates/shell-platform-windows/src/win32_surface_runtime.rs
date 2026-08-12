@@ -2,11 +2,12 @@ use shell_renderer::native::{
     CompositionRenderer, DeviceKind, PresentOutcome, ShellScenes, ShowcaseRole, SurfaceMetrics,
     SurfaceVisibilityAnimation, WindowSurface, is_recoverable_hresult,
 };
-use windows::Win32::Foundation::{E_INVALIDARG, E_UNEXPECTED, HWND};
+use windows::Win32::Foundation::{E_INVALIDARG, E_UNEXPECTED, HANDLE, HWND};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SurfaceUpdate {
     Presented,
+    FrameSkipped,
     RebuildAllRequired,
 }
 
@@ -32,9 +33,8 @@ fn normalize_present_result(
     result: windows::core::Result<PresentOutcome>,
 ) -> windows::core::Result<SurfaceUpdate> {
     match result {
-        Ok(PresentOutcome::Presented | PresentOutcome::FrameSkipped) => {
-            Ok(SurfaceUpdate::Presented)
-        }
+        Ok(PresentOutcome::Presented) => Ok(SurfaceUpdate::Presented),
+        Ok(PresentOutcome::FrameSkipped) => Ok(SurfaceUpdate::FrameSkipped),
         Ok(PresentOutcome::DeviceLost(_)) => Ok(SurfaceUpdate::RebuildAllRequired),
         Ok(PresentOutcome::Failed(code)) if is_recoverable_hresult(code) => {
             Ok(SurfaceUpdate::RebuildAllRequired)
@@ -59,6 +59,8 @@ fn normalize_unit_result(
 pub(super) struct NativeSurfaceOptions {
     pub(super) force_warp: bool,
     pub(super) solid_material: bool,
+    pub(super) liquid_glass: bool,
+    pub(super) reduced_motion: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +81,7 @@ pub(super) struct SurfaceBuildPlan<'scene> {
     pub(super) topbar: SurfaceFrame<'scene>,
     pub(super) dock: SurfaceFrame<'scene>,
     pub(super) popover: SurfaceFrame<'scene>,
+    pub(super) app_menu: SurfaceFrame<'scene>,
     pub(super) preview: SurfaceFrame<'scene>,
     pub(super) settings: SurfaceFrame<'scene>,
     pub(super) dock_visibility_offset_y: f32,
@@ -119,6 +122,7 @@ pub(super) trait SurfaceAdapter {
         scenes: ShellScenes<'_>,
     ) -> windows::core::Result<PresentOutcome>;
     fn metrics(surface: &Self::Surface) -> SurfaceMetrics;
+    fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE>;
     fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()>;
     fn animate_entrance(surface: &Self::Surface, reduced_motion: bool)
     -> windows::core::Result<()>;
@@ -140,7 +144,12 @@ impl SurfaceAdapter for DirectCompositionAdapter {
     type Surface = WindowSurface;
 
     fn create_renderer(options: NativeSurfaceOptions) -> windows::core::Result<Self::Renderer> {
-        CompositionRenderer::new(options.force_warp, options.solid_material)
+        CompositionRenderer::new(
+            options.force_warp,
+            options.solid_material,
+            options.liquid_glass,
+            options.reduced_motion,
+        )
     }
 
     fn device_kind(renderer: &Self::Renderer) -> DeviceKind {
@@ -180,6 +189,10 @@ impl SurfaceAdapter for DirectCompositionAdapter {
         surface.metrics()
     }
 
+    fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE> {
+        surface.frame_latency_waitable_object()
+    }
+
     fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()> {
         surface.set_opacity(opacity)
     }
@@ -211,6 +224,7 @@ struct SurfaceSet<S> {
     topbar: S,
     dock: S,
     popover: S,
+    app_menu: S,
     preview: S,
     settings: S,
 }
@@ -221,6 +235,7 @@ impl<S> SurfaceSet<S> {
             ShowcaseRole::Topbar => &self.topbar,
             ShowcaseRole::Dock => &self.dock,
             ShowcaseRole::Popover => &self.popover,
+            ShowcaseRole::AppMenu => &self.app_menu,
             ShowcaseRole::Preview => &self.preview,
             ShowcaseRole::Settings => &self.settings,
         }
@@ -231,6 +246,7 @@ impl<S> SurfaceSet<S> {
             ShowcaseRole::Topbar => &mut self.topbar,
             ShowcaseRole::Dock => &mut self.dock,
             ShowcaseRole::Popover => &mut self.popover,
+            ShowcaseRole::AppMenu => &mut self.app_menu,
             ShowcaseRole::Preview => &mut self.preview,
             ShowcaseRole::Settings => &mut self.settings,
         }
@@ -308,6 +324,13 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
 
     pub(super) fn size(&self, role: ShowcaseRole) -> Option<(u32, u32)> {
         self.metrics(role).map(|metrics| metrics.size())
+    }
+
+    pub(super) fn frame_latency_waitable_object(&self, role: ShowcaseRole) -> Option<HANDLE> {
+        self.resources
+            .as_ref()
+            .and_then(|resources| resources.surfaces.as_ref())
+            .and_then(|surfaces| A::frame_latency_waitable_object(surfaces.surface(role)))
     }
 
     pub(super) fn redraw(
@@ -402,6 +425,7 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         let topbar = Self::create_surface(&renderer, plan.topbar)?;
         let dock = Self::create_surface(&renderer, plan.dock)?;
         let popover = Self::create_surface(&renderer, plan.popover)?;
+        let app_menu = Self::create_surface(&renderer, plan.app_menu)?;
         let preview = Self::create_surface(&renderer, plan.preview)?;
         let settings = Self::create_surface(&renderer, plan.settings)?;
         A::set_visibility_state(
@@ -417,6 +441,7 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             topbar,
             dock,
             popover,
+            app_menu,
             preview,
             settings,
         };
@@ -428,6 +453,7 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             (plan.topbar, ShowcaseRole::Topbar),
             (plan.dock, ShowcaseRole::Dock),
             (plan.popover, ShowcaseRole::Popover),
+            (plan.app_menu, ShowcaseRole::AppMenu),
             (plan.preview, ShowcaseRole::Preview),
             (plan.settings, ShowcaseRole::Settings),
         ] {
@@ -479,6 +505,14 @@ pub(super) fn present_frame<A: SurfaceAdapter>(
     }
 }
 
+pub(super) fn present_app_menu_frame<A: SurfaceAdapter>(
+    runtime: &mut NativeSurfaceRuntime<A>,
+    frame: SurfaceFrame<'_>,
+) -> windows::core::Result<SurfaceUpdate> {
+    debug_assert_eq!(frame.target.role, ShowcaseRole::AppMenu);
+    present_frame(runtime, frame, SurfaceSizeChange::Resize)
+}
+
 fn runtime_not_ready() -> windows::core::Error {
     windows::core::Error::new(E_UNEXPECTED, "native surface runtime is not ready")
 }
@@ -498,13 +532,14 @@ mod tests {
         SurfaceVisibilityAnimation, device_loss_hresult,
     };
     use shell_renderer::{ContextMenuEntry, ContextMenuScene};
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HANDLE, HWND};
     use windows::core::HRESULT;
 
     use super::{
         NativeSurfaceOptions, NativeSurfaceRuntime, SurfaceAdapter, SurfaceBuildPlan, SurfaceFrame,
         SurfaceRenderDecision, SurfaceSizeChange, SurfaceTarget, SurfaceUpdate,
-        normalize_present_result, present_frame, runtime_device_kind, surface_render_decision,
+        normalize_present_result, present_app_menu_frame, present_frame, runtime_device_kind,
+        surface_render_decision,
     };
 
     #[test]
@@ -668,7 +703,12 @@ mod tests {
         type Surface = RecordingSurface;
 
         fn create_renderer(options: NativeSurfaceOptions) -> windows::core::Result<Self::Renderer> {
-            let _ = (options.force_warp, options.solid_material);
+            let _ = (
+                options.force_warp,
+                options.solid_material,
+                options.liquid_glass,
+                options.reduced_motion,
+            );
             let mut state = recording();
             state.attempts += 1;
             let attempt = state.attempts;
@@ -760,6 +800,11 @@ mod tests {
             surface.metrics
         }
 
+        fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE> {
+            (surface.role == ShowcaseRole::Dock)
+                .then_some(HANDLE(std::ptr::dangling_mut::<core::ffi::c_void>()))
+        }
+
         fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()> {
             let mut state = recording();
             state
@@ -847,6 +892,7 @@ mod tests {
             topbar: None,
             dock: None,
             popover: None,
+            quick_settings: None,
             context_menu: None,
             settings: None,
             preview: None,
@@ -870,6 +916,7 @@ mod tests {
             topbar: frame(ShowcaseRole::Topbar),
             dock: frame(ShowcaseRole::Dock),
             popover: frame(ShowcaseRole::Popover),
+            app_menu: frame(ShowcaseRole::AppMenu),
             preview: frame(ShowcaseRole::Preview),
             settings: frame(ShowcaseRole::Settings),
             dock_visibility_offset_y: 0.0,
@@ -883,6 +930,8 @@ mod tests {
         NativeSurfaceRuntime::new(NativeSurfaceOptions {
             force_warp: false,
             solid_material: false,
+            liquid_glass: false,
+            reduced_motion: false,
         })
     }
 
@@ -891,15 +940,17 @@ mod tests {
             ShowcaseRole::Topbar => (1, 11),
             ShowcaseRole::Dock => (2, 12),
             ShowcaseRole::Popover => (3, 13),
-            ShowcaseRole::Preview => (4, 14),
-            ShowcaseRole::Settings => (5, 15),
+            ShowcaseRole::AppMenu => (4, 14),
+            ShowcaseRole::Preview => (5, 15),
+            ShowcaseRole::Settings => (6, 16),
         }
     }
 
-    const ROLES: [ShowcaseRole; 5] = [
+    const ROLES: [ShowcaseRole; 6] = [
         ShowcaseRole::Topbar,
         ShowcaseRole::Dock,
         ShowcaseRole::Popover,
+        ShowcaseRole::AppMenu,
         ShowcaseRole::Preview,
         ShowcaseRole::Settings,
     ];
@@ -916,10 +967,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_exposes_frame_pacing_only_for_the_dock_surface() {
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+
+        assert!(
+            runtime
+                .frame_latency_waitable_object(ShowcaseRole::Dock)
+                .is_some()
+        );
+        for role in ROLES.into_iter().filter(|role| *role != ShowcaseRole::Dock) {
+            assert!(runtime.frame_latency_waitable_object(role).is_none());
+        }
+    }
+
+    #[test]
     fn presentation_results_have_one_recovery_policy() {
         assert_eq!(
             normalize_present_result(Ok(PresentOutcome::Presented)).unwrap(),
             SurfaceUpdate::Presented
+        );
+        assert_eq!(
+            normalize_present_result(Ok(PresentOutcome::FrameSkipped)).unwrap(),
+            SurfaceUpdate::FrameSkipped
         );
         assert_eq!(
             normalize_present_result(Ok(PresentOutcome::DeviceLost(DeviceLossKind::Reset)))
@@ -1047,6 +1118,38 @@ mod tests {
                 Event::Redrawn(1, ShowcaseRole::Dock, ShowcaseRole::Dock),
                 Event::MetricsRead(1, ShowcaseRole::Dock),
                 Event::Resized(1, ShowcaseRole::Dock, ShowcaseRole::Dock),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_menu_open_resizes_surface_before_present() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        let mut initial_plan = plan();
+        initial_plan.app_menu.target.metrics = SurfaceMetrics::new(300, 1, Dpi::from_raw(144));
+        runtime.build(initial_plan).unwrap();
+        recording().events.clear();
+        let mut menu = frame(ShowcaseRole::AppMenu);
+        menu.target.metrics = SurfaceMetrics::new(300, 224, Dpi::from_raw(144));
+
+        assert_eq!(
+            present_app_menu_frame(&mut runtime, menu).unwrap(),
+            SurfaceUpdate::Presented
+        );
+        assert_eq!(
+            runtime.metrics(ShowcaseRole::AppMenu),
+            Some(menu.target.metrics)
+        );
+        assert_eq!(
+            events(),
+            [
+                Event::MetricsRead(1, ShowcaseRole::AppMenu),
+                Event::Resized(1, ShowcaseRole::AppMenu, ShowcaseRole::AppMenu),
+                Event::MetricsRead(1, ShowcaseRole::AppMenu),
             ]
         );
     }
@@ -1508,6 +1611,7 @@ mod tests {
                 installed.topbar.role,
                 installed.dock.role,
                 installed.popover.role,
+                installed.app_menu.role,
                 installed.preview.role,
                 installed.settings.role,
             ],
@@ -1515,6 +1619,7 @@ mod tests {
                 ShowcaseRole::Topbar,
                 ShowcaseRole::Dock,
                 ShowcaseRole::Popover,
+                ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
                 ShowcaseRole::Settings,
             ]
@@ -1532,6 +1637,7 @@ mod tests {
                 ShowcaseRole::Topbar,
                 ShowcaseRole::Dock,
                 ShowcaseRole::Popover,
+                ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
                 ShowcaseRole::Settings,
             ]
@@ -1546,6 +1652,7 @@ mod tests {
                 ShowcaseRole::Topbar,
                 ShowcaseRole::Dock,
                 ShowcaseRole::Popover,
+                ShowcaseRole::AppMenu,
                 ShowcaseRole::Preview,
                 ShowcaseRole::Settings,
             ]
@@ -1797,6 +1904,7 @@ mod tests {
             ShowcaseRole::Topbar,
             ShowcaseRole::Dock,
             ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
             ShowcaseRole::Preview,
             ShowcaseRole::Settings,
         ] {
@@ -1833,6 +1941,7 @@ mod tests {
             ShowcaseRole::Topbar,
             ShowcaseRole::Dock,
             ShowcaseRole::Popover,
+            ShowcaseRole::AppMenu,
             ShowcaseRole::Preview,
             ShowcaseRole::Settings,
         ] {

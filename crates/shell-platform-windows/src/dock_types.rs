@@ -16,6 +16,8 @@ pub struct DockRuntimeConfig {
 }
 
 impl DockRuntimeConfig {
+    const INDICATOR_AND_BOTTOM_RESERVE_DIP: f32 = 11.0;
+
     #[must_use]
     pub const fn new(alignment: DockAlignment) -> Self {
         Self {
@@ -47,17 +49,32 @@ impl DockRuntimeConfig {
     }
 
     #[must_use]
-    #[cfg(test)]
     pub const fn with_item_size(mut self, value: f32) -> Self {
         self.layout = self.layout.with_item_size(value);
         self
     }
 
     #[must_use]
-    #[cfg(test)]
     pub const fn with_spacing(mut self, value: f32) -> Self {
         self.layout = self.layout.with_spacing(value);
         self
+    }
+
+    #[must_use]
+    pub const fn with_padding(mut self, value: f32) -> Self {
+        self.layout = self.layout.with_padding(value);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_magnified_item_size(mut self, value: f32) -> Self {
+        self.layout = self.layout.with_magnified_item_size(value);
+        self
+    }
+
+    #[must_use]
+    pub const fn dock_height_dip(self) -> f32 {
+        self.layout.padding() + self.layout.item_size() + Self::INDICATOR_AND_BOTTOM_RESERVE_DIP
     }
 
     #[must_use]
@@ -329,8 +346,8 @@ impl Default for DockAnimator {
     }
 }
 
-const POSITION_SPRING_FREQUENCY_HZ: f32 = 14.0;
-const STRENGTH_SPRING_FREQUENCY_HZ: f32 = 10.0;
+const POSITION_SPRING_FREQUENCY_HZ: f32 = 10.0;
+const STRENGTH_SPRING_FREQUENCY_HZ: f32 = 8.5;
 const MATERIAL_SPRING_FREQUENCY_HZ: f32 = 7.5;
 const MAX_FRAME_SECONDS: f32 = 1.0 / 20.0;
 const POSITION_EPSILON: f32 = 0.01;

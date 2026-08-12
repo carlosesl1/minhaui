@@ -2,16 +2,17 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use windows::core::Result;
 
+use crate::external_menu_coordinator::EXTERNAL_MENU_OBSERVATION_INTERVAL_MS;
 use crate::win32::{
-    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, PREVIEW_TIMER_ID, SYNC_TIMER_ID, TIMER_ID,
+    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, EXTERNAL_MENU_TIMER_ID, PREVIEW_TIMER_ID,
+    SYNC_TIMER_ID, TIMER_ID,
 };
 
 const DOCK_ANIMATION_INTERVAL_MS: u32 = 16;
-const DOCK_EDGE_PROBE_INTERVAL_MS: u32 = 25;
-
 pub(super) struct TimerGuard {
     hwnd: HWND,
     id: usize,
+    interval_ms: u32,
 }
 
 impl TimerGuard {
@@ -27,12 +28,20 @@ impl TimerGuard {
         Self::start_id(hwnd, DOCK_ANIMATION_TIMER_ID, DOCK_ANIMATION_INTERVAL_MS)
     }
 
-    pub(super) fn start_dock_edge_probe(hwnd: HWND) -> Result<Self> {
-        Self::start_id(hwnd, DOCK_EDGE_PROBE_TIMER_ID, DOCK_EDGE_PROBE_INTERVAL_MS)
+    pub(super) fn start_dock_edge_probe(hwnd: HWND, interval_ms: u32) -> Result<Self> {
+        Self::start_id(hwnd, DOCK_EDGE_PROBE_TIMER_ID, interval_ms)
     }
 
     pub(super) fn start_preview(hwnd: HWND) -> Result<Self> {
         Self::start_id(hwnd, PREVIEW_TIMER_ID, 16)
+    }
+
+    pub(super) fn start_external_menu(hwnd: HWND) -> Result<Self> {
+        Self::start_id(
+            hwnd,
+            EXTERNAL_MENU_TIMER_ID,
+            EXTERNAL_MENU_OBSERVATION_INTERVAL_MS,
+        )
     }
 
     fn start_id(hwnd: HWND, id: usize, milliseconds: u32) -> Result<Self> {
@@ -42,7 +51,25 @@ impl TimerGuard {
         if timer == 0 {
             return Err(windows::core::Error::from_thread());
         }
-        Ok(Self { hwnd, id })
+        Ok(Self {
+            hwnd,
+            id,
+            interval_ms: milliseconds,
+        })
+    }
+
+    pub(super) fn rearm(&mut self, milliseconds: u32) -> Result<()> {
+        if self.interval_ms == milliseconds {
+            return Ok(());
+        }
+        // SAFETY: Category 8 (FFI boundary). Reusing the owned HWND/id pair
+        // updates the existing timer cadence without changing its owner.
+        let timer = unsafe { SetTimer(Some(self.hwnd), self.id, milliseconds, None) };
+        if timer == 0 {
+            return Err(windows::core::Error::from_thread());
+        }
+        self.interval_ms = milliseconds;
+        Ok(())
     }
 }
 
@@ -59,7 +86,7 @@ mod tests {
     use super::DOCK_ANIMATION_INTERVAL_MS;
 
     #[test]
-    fn dock_animation_timer_matches_the_frame_budget() {
+    fn dock_animation_fallback_timer_matches_the_sixty_hz_frame_budget() {
         assert_eq!(DOCK_ANIMATION_INTERVAL_MS, 16);
     }
 }

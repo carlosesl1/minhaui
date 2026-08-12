@@ -75,10 +75,6 @@ impl MonitorPlacementInput {
     }
 
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "retained as a complete value-object accessor for monitor adapters"
-    )]
     pub const fn work_area(self) -> PhysicalRect {
         self.work_area
     }
@@ -203,8 +199,11 @@ pub fn plan_monitor_placements(
     monitors
         .iter()
         .map(|monitor| {
-            let normal =
-                dock_showcase_rect(monitor.work_area, monitor.dpi, ShellMetrics::default());
+            let normal = dock_showcase_rect(
+                monitor.work_area,
+                monitor.dpi,
+                ShellMetrics::default().with_dock_height(config.dock_height_dip()),
+            );
             MonitorShellPlacement {
                 monitor: monitor.monitor,
                 dock: DockPhysicalPlacement::from_visibility(
@@ -225,19 +224,23 @@ pub fn reconcile_monitor_slots(
     current: &[MonitorId],
     monitors: &[MonitorPlacementInput],
 ) -> Vec<SlotReconcileAction> {
-    let mut actions = current
+    let mut actions = monitors
         .iter()
-        .copied()
-        .filter(|monitor| !monitors.iter().any(|next| next.monitor == *monitor))
-        .map(SlotReconcileAction::Remove)
+        .map(|monitor| {
+            if current.contains(&monitor.monitor) {
+                SlotReconcileAction::Reuse(monitor.monitor)
+            } else {
+                SlotReconcileAction::Create(monitor.monitor)
+            }
+        })
         .collect::<Vec<_>>();
-    actions.extend(monitors.iter().map(|monitor| {
-        if current.contains(&monitor.monitor) {
-            SlotReconcileAction::Reuse(monitor.monitor)
-        } else {
-            SlotReconcileAction::Create(monitor.monitor)
-        }
-    }));
+    actions.extend(
+        current
+            .iter()
+            .copied()
+            .filter(|monitor| !monitors.iter().any(|next| next.monitor == *monitor))
+            .map(SlotReconcileAction::Remove),
+    );
     actions
 }
 

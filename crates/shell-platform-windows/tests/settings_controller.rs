@@ -5,6 +5,7 @@ use crate::{
 use shell_config::{
     AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
 };
+use shell_core::TopbarModuleKind;
 
 fn qa_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir()
@@ -140,7 +141,7 @@ fn settings_keyboard_navigation_activates_sections_and_escapes()
     let mut controller = SettingsController::new(ShellConfigV1::default());
 
     // When: keyboard navigation moves to Appearance and activates it.
-    for _ in 0..4 {
+    for _ in 0..5 {
         assert_eq!(
             controller.handle_key(SettingsKey::Next)?,
             vec![QueuedSettingsAction::Redraw]
@@ -164,4 +165,115 @@ fn settings_keyboard_navigation_activates_sections_and_escapes()
     assert_eq!(escape, vec![QueuedSettingsAction::Dismiss]);
     assert_eq!(controller.preview(), controller.committed());
     Ok(())
+}
+
+#[test]
+fn quick_controls_editor_lists_only_supported_controls() {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.set_supported_quick_controls([
+        shell_core::QuickControlKind::Wifi,
+        shell_core::QuickControlKind::Focus,
+    ]);
+    controller.open_section(SettingsSection::QuickControls);
+    let scene = controller.scene();
+
+    assert_eq!(
+        scene
+            .quick_controls()
+            .unwrap()
+            .iter()
+            .map(shell_renderer::QuickControlSettingsRow::kind)
+            .collect::<Vec<_>>(),
+        vec![
+            shell_core::QuickControlKind::Wifi,
+            shell_core::QuickControlKind::Focus,
+        ]
+    );
+}
+
+#[test]
+fn hiding_supported_control_preserves_absent_preferences() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.set_supported_quick_controls([
+        shell_core::QuickControlKind::Wifi,
+        shell_core::QuickControlKind::Focus,
+    ]);
+    controller.edit(SettingsEdit::QuickControlVisibility {
+        control: shell_core::QuickControlKind::Focus,
+        visible: false,
+    })?;
+
+    assert!(
+        controller
+            .preview()
+            .quick_settings()
+            .controls()
+            .iter()
+            .any(|item| item.kind() == shell_core::QuickControlKind::Bluetooth)
+    );
+    assert!(
+        !controller
+            .preview()
+            .quick_settings()
+            .controls()
+            .iter()
+            .find(|item| item.kind() == shell_core::QuickControlKind::Focus)
+            .ok_or("focus preference missing")?
+            .visible()
+    );
+    Ok(())
+}
+
+#[test]
+fn topbar_visibility_and_order_follow_transactional_settings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let original = ShellConfigV1::default();
+    let mut controller = SettingsController::new(original.clone());
+
+    controller.edit(SettingsEdit::TopbarVisibility {
+        module: TopbarModuleKind::Network,
+        visible: false,
+    })?;
+    controller.edit(SettingsEdit::TopbarReorder {
+        module: TopbarModuleKind::Clock,
+        before: Some(TopbarModuleKind::Network),
+    })?;
+
+    let preview = controller.preview().topbar_modules();
+    assert_eq!(preview[1].kind(), TopbarModuleKind::Clock);
+    assert_eq!(preview[2].kind(), TopbarModuleKind::Network);
+    assert!(!preview[2].visible());
+    assert_eq!(controller.committed(), &original);
+
+    controller.cancel();
+    assert_eq!(controller.preview(), &original);
+
+    controller.edit(SettingsEdit::TopbarVisibility {
+        module: TopbarModuleKind::Power,
+        visible: false,
+    })?;
+    let applied = controller.apply()?;
+    assert!(
+        !applied
+            .topbar_modules()
+            .iter()
+            .find(|module| module.kind() == TopbarModuleKind::Power)
+            .ok_or("missing power module")?
+            .visible()
+    );
+    Ok(())
+}
+
+#[test]
+fn fixed_leading_topbar_modules_cannot_be_customized() {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+
+    let result = controller.edit(SettingsEdit::TopbarVisibility {
+        module: TopbarModuleKind::Search,
+        visible: false,
+    });
+
+    assert!(matches!(result, Err(SettingsError::Transition(_))));
+    assert_eq!(controller.preview(), &ShellConfigV1::default());
 }

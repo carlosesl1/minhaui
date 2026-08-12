@@ -9,6 +9,7 @@ pub(super) enum DockCursorLocation {
     PhysicalBottom,
     Dock,
     ApproachCorridor,
+    NearPhysicalBottom,
     Away,
 }
 
@@ -32,7 +33,16 @@ pub(super) fn dock_cursor_location(
     ) {
         Some(DockCursorLocation::ApproachCorridor)
     } else {
-        Some(DockCursorLocation::Away)
+        // SAFETY: Category 8 (FFI boundary). The callback supplies a live HWND.
+        let dpi = Dpi::from_raw(unsafe { GetDpiForWindow(hwnd) }.max(96));
+        let threshold = (48.0 * dpi.scale()).round().max(1.0) as i32;
+        if crate::dock_edge_detection::cursor_near_physical_bottom(
+            monitor, cursor.x, cursor.y, threshold,
+        ) {
+            Some(DockCursorLocation::NearPhysicalBottom)
+        } else {
+            Some(DockCursorLocation::Away)
+        }
     }
 }
 

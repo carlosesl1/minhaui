@@ -92,6 +92,7 @@ impl RuntimeSurfaces {
             topbar: None,
             dock: None,
             popover: None,
+            quick_settings: None,
             context_menu: None,
             settings: None,
             preview: Some(scene),
@@ -126,7 +127,7 @@ fn finish_preview_update_with<T, S: Clone, E>(
     rebuild: impl FnOnce(&mut T) -> std::result::Result<(), E>,
 ) -> std::result::Result<(), E> {
     match outcome? {
-        SurfaceUpdate::Presented => Ok(()),
+        SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => Ok(()),
         SurfaceUpdate::RebuildAllRequired => {
             let previous = scene_slot(owner).replace(requested.clone());
             if let Err(error) = rebuild(owner) {

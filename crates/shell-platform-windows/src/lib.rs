@@ -2,6 +2,12 @@
 
 mod diagnostics;
 
+#[allow(
+    dead_code,
+    reason = "external menu lifecycle is consumed by the native adapter incrementally"
+)]
+mod external_menu_coordinator;
+
 #[cfg(windows)]
 #[allow(
     unsafe_code,
@@ -51,14 +57,12 @@ mod win32_backdrop;
     reason = "Windows package identity and installed-path queries are isolated here"
 )]
 mod win32_package_icon;
-#[cfg(windows)]
 #[allow(
     unsafe_code,
     reason = "Hosted Win32 window identity lookup is isolated here"
 )]
 mod win32_window_identity;
 
-#[cfg(windows)]
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 window discovery is isolated here")]
 mod win32_discovery;
@@ -75,10 +79,23 @@ mod win32_slot_lifecycle;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
+    reason = "the owned observation worker initializes COM and posts wake messages here"
+)]
+mod win32_shell_observation;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
     reason = "Win32 pointer coordinate helpers are isolated here"
 )]
 mod win32_pointer;
 
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows Notification Facility reads and version-probed quiet-hours interop are isolated here"
+)]
+mod win32_do_not_disturb;
 #[cfg(windows)]
 mod win32_dock_render;
 mod win32_dock_visibility;
@@ -107,8 +124,51 @@ mod win32_installed_package_icons;
 mod win32_timer;
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Core Audio endpoint access is isolated here")]
+mod win32_audio_endpoint;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Core Audio session and endpoint access is isolated here"
+)]
+mod win32_audio_panel;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "documented WMI and DDC/CI brightness adapters are isolated here"
+)]
+mod win32_brightness;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows system commands and input injection are isolated in this Adapter"
+)]
+mod win32_system_actions;
+#[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 topbar status adapters are isolated here")]
 mod win32_topbar_status;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "documented Windows capability probes are isolated and wired incrementally"
+)]
+mod win32_quick_settings_capabilities;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "documented direct actions are isolated and wired incrementally"
+)]
+mod win32_quick_settings_actions;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "native quick-settings state adapters are isolated here"
+)]
+mod win32_quick_settings_system;
 
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "Win32 HWND ownership is isolated here")]
@@ -139,6 +199,24 @@ mod win32_sample_state;
 #[cfg(windows)]
 mod win32_popover_render;
 
+#[allow(
+    dead_code,
+    reason = "Task 10A defines the fallback menu contract; Task 10B wires its native opener"
+)]
+mod background_app_menu;
+mod background_apps;
+#[allow(
+    unsafe_code,
+    reason = "the owned catalog worker only uses PostMessageW to wake the owner window"
+)]
+mod background_apps_worker;
+mod brightness_coordinator;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the brightness worker only posts a wake message to the owner window"
+)]
+mod brightness_worker;
 mod dock_context_menu;
 mod dock_controller;
 mod dock_controller_interaction;
@@ -150,21 +228,125 @@ mod dock_types;
 mod dock_visibility_motion;
 mod dock_visuals;
 mod dock_window_sync;
+mod latest_request_worker;
+#[allow(
+    dead_code,
+    reason = "media controller is wired into the native owner incrementally"
+)]
+mod media_session_controller;
+#[allow(dead_code, reason = "media worker contracts are wired incrementally")]
+mod media_session_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the media worker only posts a wake message to the owner window"
+)]
+mod media_session_worker;
 mod native_event_route;
+mod native_tray;
+mod night_light_coordinator;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the night light worker only posts a wake message"
+)]
+mod night_light_worker;
 mod popover_adapters;
 mod popover_controller;
 mod popover_types;
 mod preview_controller;
 mod preview_motion;
+#[allow(
+    dead_code,
+    reason = "adaptive controller is wired into the native owner incrementally"
+)]
+mod quick_settings_controller;
+#[allow(
+    dead_code,
+    reason = "adaptive control intents are consumed by the native owner incrementally"
+)]
+mod quick_settings_types;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the quick-settings worker initializes COM and posts only a wake message"
+)]
+mod quick_settings_worker;
 mod runtime;
 mod settings_controller;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the shell-menu worker initializes COM and posts a wake message"
+)]
+mod shell_menu_worker;
 mod topbar_controller;
 mod topbar_types;
+#[allow(
+    dead_code,
+    reason = "pure tray activation coordination is consumed by the native adapter incrementally"
+)]
+mod tray_activation;
+mod tray_bridge_catalog;
+#[allow(
+    dead_code,
+    reason = "bounded Explorer tray decoding is consumed by the native source incrementally"
+)]
+mod tray_record_decoder;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "read-only notification registration and process capture is isolated here"
+)]
+mod win32_background_apps;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "process-owned WinEvent hook registration and callback forwarding are isolated here"
+)]
+mod win32_external_menu_events;
+#[cfg(windows)]
+mod win32_media_sessions;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Explorer taskbar discovery and visibility calls are isolated here"
+)]
+mod win32_taskbar_visibility;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    dead_code,
+    reason = "validated Win32 tray callback forwarding is isolated and wired incrementally"
+)]
+mod win32_tray_activation;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Explorer hook installation and shared-memory reads are isolated here"
+)]
+mod win32_tray_bridge;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "bounded Explorer toolbar discovery and remote-memory reads are isolated here"
+)]
+mod win32_tray_source;
 mod window_preview;
 
 #[cfg(test)]
 mod integration_tests;
 
+#[allow(
+    unused_imports,
+    reason = "Task 10B consumes the typed fallback command after native activation wiring"
+)]
+pub(crate) use background_app_menu::{
+    BackgroundAppMenuCommand, BackgroundAppMenuController, QueuedBackgroundAppMenuAction,
+    background_app_menu_rect,
+};
+pub(crate) use background_apps::BackgroundAppId;
 pub(crate) use dock_context_menu::{
     DockContextMenuController, DockContextMenuItem, QueuedContextMenuAction,
 };
@@ -182,21 +364,31 @@ pub(crate) use dock_types::{
 };
 pub(crate) use dock_visibility_motion::DockVisibilityMotion;
 pub(crate) use dock_window_sync::ObservedWindow;
-pub(crate) use native_event_route::{
-    NativeEventTarget, NativeRouteDecision, NativeWindowId, NativeWindowSlot,
-    route_native_event_to_slot,
+#[allow(unused_imports)]
+pub(crate) use external_menu_coordinator::{
+    EXTERNAL_MENU_OBSERVATION_TIMEOUT, EXTERNAL_MENU_WATCHDOG, ExternalMenuCoordinator,
+    ExternalMenuEffect, ExternalMenuPhase,
 };
+pub(crate) use native_event_route::{NativeEventTarget, NativeWindowId, NativeWindowSlot};
+#[cfg(test)]
+pub(crate) use native_event_route::{NativeRouteDecision, route_native_event_to_slot};
 pub(crate) use popover_adapters::{DefaultPopoverDataProvider, OfflineWeatherProvider};
 pub(crate) use popover_controller::PopoverController;
 pub(crate) use popover_types::{
     PopoverAction, PopoverDataError, PopoverDataProvider, PopoverItem, PopoverKey,
-    PopoverLoadState, PopoverPayload, QueuedPopoverAction, SessionAction, WeatherAccess,
-    WeatherItem, WeatherProvider,
+    PopoverLoadState, PopoverPayload, ProjectionMode, QueuedPopoverAction, SessionAction,
+    SystemRoute, WeatherAccess, WeatherItem, WeatherProvider,
 };
 #[cfg(test)]
 pub(crate) use preview_controller::{PREVIEW_BRIDGE_MS, PREVIEW_DWELL_MS};
 pub(crate) use preview_controller::{PreviewController, PreviewEffect, PreviewPhase};
 pub(crate) use preview_motion::{PreviewEntranceMotion, PreviewMotionSpec};
+pub(crate) use quick_settings_controller::QuickSettingsController;
+pub(crate) use quick_settings_types::{
+    AudioOutputId, AudioOutputSnapshot, AudioPanelSnapshot, AudioSessionId, AudioSessionSnapshot,
+    DoNotDisturbMode, QueuedQuickSettingsAction, QuickControlAvailability, QuickControlCapability,
+    QuickSettingsCapabilities, QuickSettingsIntent, QuickSettingsKey,
+};
 pub(crate) use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
@@ -206,8 +398,18 @@ pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, S
 pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
 pub(crate) use topbar_controller::TopbarController;
 pub(crate) use topbar_types::{
-    NetworkSnapshot, PollBudget, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarPointerPhase,
-    TopbarPointerSample, TopbarSnapshot,
+    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor,
+    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot, foreground_app_label,
+};
+#[allow(
+    unused_imports,
+    reason = "tray activation seam is consumed by native adapter incrementally"
+)]
+pub(crate) use tray_activation::{
+    TrayActivationCoordinator, TrayActivationEffect, TrayActivationId, TrayActivationRequest,
+    TrayActivationResult, TrayActivationStatus, TrayActivationStrategy, TrayCallbackSink,
+    TrayMessage, TrayScreenPoint, WM_CONTEXTMENU, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    normalize_executable_identity,
 };
 #[cfg(windows)]
 pub use win32::{ShowcaseRunConfig, run_showcase};
@@ -227,11 +429,20 @@ pub(crate) enum PlatformEvent {
     DpiChanged(PhysicalRect),
     DisplayChanged,
     PowerResumed,
+    QuickSettingsRefresh(RefreshScope),
+    QuickSettingsWorkerCompleted(quick_settings_worker::QuickSettingsWorkerResult),
+    MediaSessionsChanged(
+        Result<media_session_types::MediaSessionSnapshot, media_session_types::MediaSessionError>,
+    ),
+    MediaTransportCompleted(media_session_types::MediaTransportResult),
+    NightLightCompleted(night_light_worker::NightLightWorkerResult),
+    BrightnessCompleted(brightness_worker::BrightnessWorkerResult),
     DeviceLost,
     DockPointer(DockPointerSample),
     DockEdgeProbe,
     DockAnimationFrame,
     PreviewTimer,
+    ExternalMenuTimer,
     PreviewPointerMoved(DipPoint),
     PreviewPointerPressed(DipPoint),
     PreviewPointerReleased(DipPoint),
@@ -255,14 +466,39 @@ pub(crate) enum PlatformEvent {
         path: String,
     },
     PopoverKey(PopoverKey),
+    PopoverPointerPressed(DipPoint),
+    PopoverContextPressed(DipPoint),
     PopoverPointer(DipPoint),
     PopoverPointerMoved(DipPoint),
+    PopoverContextRequested(DipPoint),
+    PopoverScroll(isize),
+    AppMenuKey(PopoverKey),
+    AppMenuPointerMoved(DipPoint),
+    AppMenuPointerReleased(DipPoint),
+    AppMenuDismissed,
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
     SyncWindows,
+    ShellObservationLoaded(win32_shell_observation::ShellObservationLoadResult),
+    BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),
+    ShellMenuActivationCompleted(shell_menu_worker::ShellMenuActivationResult),
+    ExternalMenuPopupStarted {
+        window: NativeWindowId,
+        owner_process_id: u32,
+    },
+    ExternalMenuPopupEnded {
+        window: NativeWindowId,
+        owner_process_id: u32,
+        dismissed_by_pointer: bool,
+    },
     QaExitRequested,
     CloseRequested,
     Destroyed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefreshScope {
+    Devices,
 }
 
 #[must_use]

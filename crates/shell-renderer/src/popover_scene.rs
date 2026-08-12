@@ -9,11 +9,21 @@ pub enum PopoverContentState {
     Offline,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PopoverLayoutStyle {
+    Compact,
+    SystemPanel,
+    BalancedApps,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopoverRow {
     label: String,
     detail: String,
+    icon_source: Option<String>,
+    icon_glyph: Option<String>,
     enabled: bool,
+    section_start: bool,
 }
 
 impl PopoverRow {
@@ -22,8 +32,29 @@ impl PopoverRow {
         Self {
             label: label.to_owned(),
             detail: detail.to_owned(),
+            icon_source: None,
+            icon_glyph: None,
             enabled,
+            section_start: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_icon_source(mut self, source: Option<String>) -> Self {
+        self.icon_source = source;
+        self
+    }
+
+    #[must_use]
+    pub fn with_icon_glyph(mut self, glyph: &str) -> Self {
+        self.icon_glyph = Some(glyph.to_owned());
+        self
+    }
+
+    #[must_use]
+    pub const fn with_section_start(mut self) -> Self {
+        self.section_start = true;
+        self
     }
 
     #[must_use]
@@ -37,8 +68,23 @@ impl PopoverRow {
     }
 
     #[must_use]
+    pub fn icon_source(&self) -> Option<&str> {
+        self.icon_source.as_deref()
+    }
+
+    #[must_use]
+    pub fn icon_glyph(&self) -> Option<&str> {
+        self.icon_glyph.as_deref()
+    }
+
+    #[must_use]
     pub const fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    #[must_use]
+    pub const fn section_start(&self) -> bool {
+        self.section_start
     }
 }
 
@@ -49,6 +95,12 @@ pub struct PopoverScene {
     state: PopoverContentState,
     rows: Vec<PopoverRow>,
     focused: Option<usize>,
+    scroll_offset: usize,
+    status_text: String,
+    layout_style: PopoverLayoutStyle,
+    anchor_x: Option<f32>,
+    header_detail: Option<String>,
+    external_active_row: Option<usize>,
 }
 
 impl PopoverScene {
@@ -66,7 +118,51 @@ impl PopoverScene {
             state,
             rows,
             focused,
+            scroll_offset: 0,
+            status_text: default_status_text(state).to_owned(),
+            layout_style: PopoverLayoutStyle::Compact,
+            anchor_x: None,
+            header_detail: None,
+            external_active_row: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_scroll_offset(mut self, offset: usize) -> Self {
+        self.scroll_offset = offset;
+        self
+    }
+
+    #[must_use]
+    pub fn with_status_text(mut self, status: &str) -> Self {
+        self.status_text = status.to_owned();
+        self
+    }
+
+    #[must_use]
+    pub const fn with_layout_style(mut self, style: PopoverLayoutStyle) -> Self {
+        self.layout_style = style;
+        self
+    }
+
+    #[must_use]
+    pub fn with_header_detail(mut self, detail: &str) -> Self {
+        self.header_detail = Some(detail.to_owned());
+        self
+    }
+
+    /// Marks one stable row index as active in an application-owned menu.
+    /// This metadata is visual only; it never changes row geometry or focus.
+    #[must_use]
+    pub const fn with_external_active_row(mut self, row: Option<usize>) -> Self {
+        self.external_active_row = row;
+        self
+    }
+
+    #[must_use]
+    pub fn with_anchor_x(mut self, anchor_x: f32) -> Self {
+        self.anchor_x = anchor_x.is_finite().then_some(anchor_x);
+        self
     }
 
     #[must_use]
@@ -92,5 +188,45 @@ impl PopoverScene {
     #[must_use]
     pub const fn focused(&self) -> Option<usize> {
         self.focused
+    }
+
+    #[must_use]
+    pub const fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    #[must_use]
+    pub fn status_text(&self) -> &str {
+        &self.status_text
+    }
+
+    #[must_use]
+    pub const fn layout_style(&self) -> PopoverLayoutStyle {
+        self.layout_style
+    }
+
+    #[must_use]
+    pub const fn anchor_x(&self) -> Option<f32> {
+        self.anchor_x
+    }
+
+    #[must_use]
+    pub fn header_detail(&self) -> Option<&str> {
+        self.header_detail.as_deref()
+    }
+
+    #[must_use]
+    pub const fn external_active_row(&self) -> Option<usize> {
+        self.external_active_row
+    }
+}
+
+const fn default_status_text(state: PopoverContentState) -> &'static str {
+    match state {
+        PopoverContentState::Loading => "Loading",
+        PopoverContentState::Ready => "Ready",
+        PopoverContentState::Empty => "Empty",
+        PopoverContentState::Error => "Unavailable",
+        PopoverContentState::Offline => "Offline",
     }
 }
