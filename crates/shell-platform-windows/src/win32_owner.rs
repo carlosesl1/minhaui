@@ -18,6 +18,7 @@ use crate::win32_dock_render::{DockRenderBaseline, DockRenderWindows, dip_surfac
 use crate::win32_event_queue::{RoutedPlatformEvent, queue_event};
 use crate::win32_fullscreen_sync::FullscreenSyncWindows;
 use crate::win32_pointer::{DockCursorLocation, dock_cursor_location};
+use crate::win32_popover_render::QuickSettingsWorkerWindows;
 use crate::win32_preview::DwmPreviewThumbnail;
 use crate::win32_preview_interaction::PreviewHit;
 use crate::win32_preview_render::{PreviewPresentation, PreviewRenderWindows};
@@ -378,7 +379,14 @@ impl RuntimeSurfaces {
         let event = match event {
             PlatformEvent::QuickSettingsWorkerCompleted(result) => {
                 return self.complete_quick_settings_worker(
-                    result, topbar, dock, popover, preview, settings,
+                    result,
+                    QuickSettingsWorkerWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        preview,
+                        settings,
+                    },
                 );
             }
             PlatformEvent::ShellMenuActivationCompleted(result) => {

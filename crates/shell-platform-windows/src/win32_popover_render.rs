@@ -20,17 +20,27 @@ use crate::{
 
 const POPOVER_SURFACE_ROLE: ShowcaseRole = ShowcaseRole::Popover;
 
+pub(super) struct QuickSettingsWorkerWindows<'a> {
+    pub(super) topbar: &'a OwnedWindow,
+    pub(super) dock: &'a OwnedWindow,
+    pub(super) popover: &'a mut OwnedWindow,
+    pub(super) preview: &'a OwnedWindow,
+    pub(super) settings: &'a OwnedWindow,
+}
+
 impl RuntimeSurfaces {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn complete_quick_settings_worker(
         &mut self,
         result: crate::quick_settings_worker::QuickSettingsWorkerResult,
-        topbar: &OwnedWindow,
-        dock: &mut OwnedWindow,
-        popover: &mut OwnedWindow,
-        preview: &OwnedWindow,
-        settings: &mut OwnedWindow,
+        windows: QuickSettingsWorkerWindows<'_>,
     ) -> Result<bool> {
+        let QuickSettingsWorkerWindows {
+            topbar,
+            dock,
+            popover,
+            preview,
+            settings,
+        } = windows;
         let (generation, payload) = result.into_parts();
         if generation != self.quick_settings_generation
             && matches!(
