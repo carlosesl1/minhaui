@@ -455,9 +455,17 @@ fn draw_audio_panel(
         ),
         brushes.primary,
     );
+    let header_detail = audio
+        .outputs()
+        .iter()
+        .find(|output| output.selected())
+        .map_or_else(
+            || "Volume and apps".to_owned(),
+            |output| format!("Current output · {}", output.label()),
+        );
     draw_text(
         context,
-        "Volume, apps and output",
+        &header_detail,
         formats.detail,
         text_rect(
             header_x,
@@ -635,114 +643,6 @@ fn draw_audio_panel(
         );
     }
 
-    if let Some(first) = layout.audio_outputs().first() {
-        draw_text(
-            context,
-            "Output",
-            formats.label,
-            text_rect(
-                first.bounds().x,
-                first.bounds().y - 24.0,
-                first.bounds().x + first.bounds().width,
-                first.bounds().y,
-            ),
-            brushes.primary,
-        );
-    }
-    for laid_out in layout.audio_outputs() {
-        let Some(output) = audio
-            .outputs()
-            .iter()
-            .find(|output| output.id() == laid_out.id())
-        else {
-            continue;
-        };
-        let bounds = laid_out.bounds();
-        let hit = QuickSettingsHit::AudioOutput(output.id());
-        fill_round(
-            context,
-            rect(
-                bounds.x,
-                bounds.y,
-                bounds.x + bounds.width,
-                bounds.y + bounds.height,
-                11.0,
-            ),
-            if scene.hovered() == Some(hit) {
-                brushes.hover
-            } else if output.selected() {
-                brushes.selected
-            } else {
-                brushes.tile
-            },
-        );
-        let icon = DipRect::new(bounds.x + 10.0, bounds.y + 9.0, 32.0, 32.0);
-        fill_round(
-            context,
-            rect(
-                icon.x,
-                icon.y,
-                icon.x + icon.width,
-                icon.y + icon.height,
-                16.0,
-            ),
-            if output.selected() {
-                brushes.accent
-            } else {
-                brushes.pressed
-            },
-        );
-        draw_text(
-            context,
-            "\u{E7F4}",
-            formats.icon,
-            text_rect(icon.x, icon.y, icon.x + icon.width, icon.y + icon.height),
-            if output.selected() {
-                brushes.on_accent
-            } else {
-                brushes.primary
-            },
-        );
-        draw_text(
-            context,
-            output.label(),
-            formats.label,
-            text_rect(
-                icon.x + 42.0,
-                bounds.y + 5.0,
-                bounds.x + bounds.width - 38.0,
-                bounds.y + 27.0,
-            ),
-            brushes.primary,
-        );
-        draw_text(
-            context,
-            output.detail(),
-            formats.detail,
-            text_rect(
-                icon.x + 42.0,
-                bounds.y + 25.0,
-                bounds.x + bounds.width - 38.0,
-                bounds.y + 46.0,
-            ),
-            brushes.secondary,
-        );
-        if output.selected() {
-            draw_text(
-                context,
-                "\u{E73E}",
-                formats.icon,
-                text_rect(
-                    bounds.x + bounds.width - 36.0,
-                    bounds.y + 9.0,
-                    bounds.x + bounds.width - 8.0,
-                    bounds.y + 41.0,
-                ),
-                brushes.accent,
-            );
-        }
-    }
-
     if let Some(bounds) = layout.audio_spatial_bounds() {
         fill_round(
             context,
@@ -827,7 +727,7 @@ fn draw_audio_panel(
         );
         draw_text(
             context,
-            "Sound settings...",
+            "Manage output devices in Windows Settings",
             formats.footer,
             text_rect(
                 bounds.x + 12.0,

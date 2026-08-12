@@ -1,13 +1,12 @@
 use shell_core::QuickControlKind;
 
 use crate::{
-    DoNotDisturbMode, ProjectionMode, QuickControlAvailability, QuickControlCapability,
-    QuickSettingsIntent, SystemRoute,
+    ProjectionMode, QuickControlAvailability, QuickControlCapability, QuickSettingsIntent,
+    SystemRoute,
 };
 
 pub(super) enum QuickSettingsActionResult {
     Applied(QuickControlCapability),
-    AudioChanged(crate::AudioPanelSnapshot),
     OpenSystemRoute(SystemRoute),
     NoChange,
     Failed(windows::core::Error),
@@ -32,11 +31,8 @@ pub(super) fn apply_quick_settings_intent(
             };
         };
     }
-    if let QuickSettingsIntent::SetDoNotDisturbMode(mode) = *intent {
-        return match set_do_not_disturb_mode(capability, mode) {
-            Ok(control) => QuickSettingsActionResult::Applied(control),
-            Err(_) => QuickSettingsActionResult::OpenSystemRoute(SystemRoute::Focus),
-        };
+    if matches!(intent, QuickSettingsIntent::SetDoNotDisturbMode(_)) {
+        return QuickSettingsActionResult::OpenSystemRoute(SystemRoute::Focus);
     }
     let result = match *intent {
         QuickSettingsIntent::SetValue {
@@ -65,11 +61,8 @@ pub(super) fn apply_quick_settings_intent(
                 Err(error) => QuickSettingsActionResult::Failed(error),
             };
         }
-        QuickSettingsIntent::SelectAudioOutput(id) => {
-            return match crate::win32_audio_panel::select_output(id) {
-                Ok(snapshot) => QuickSettingsActionResult::AudioChanged(snapshot),
-                Err(error) => QuickSettingsActionResult::Failed(error),
-            };
+        QuickSettingsIntent::SelectAudioOutput(_) => {
+            return QuickSettingsActionResult::OpenSystemRoute(SystemRoute::Sound);
         }
         QuickSettingsIntent::OpenSoundSettings => {
             return QuickSettingsActionResult::OpenSystemRoute(SystemRoute::Sound);
@@ -168,20 +161,6 @@ fn set_projection_mode(
         mode != ProjectionMode::Internal,
         Some(projection_mode_value(mode)),
         projection_mode_label(mode),
-    ))
-}
-
-fn set_do_not_disturb_mode(
-    capability: Option<&QuickControlCapability>,
-    mode: DoNotDisturbMode,
-) -> windows::core::Result<QuickControlCapability> {
-    let capability = require_capability(QuickControlKind::Focus, capability)?;
-    let confirmed = crate::win32_do_not_disturb::set_mode(mode)?;
-    Ok(updated(
-        capability,
-        confirmed.active(),
-        Some(confirmed.value()),
-        confirmed.label(),
     ))
 }
 
@@ -316,15 +295,15 @@ mod tests {
     }
 
     #[test]
-    fn selecting_an_audio_output_never_falls_back_to_opening_settings() {
+    fn selecting_an_audio_output_uses_the_documented_sound_settings_route() {
         let result = apply_quick_settings_intent(
             &QuickSettingsIntent::SelectAudioOutput(crate::AudioOutputId::new(u64::MAX)),
             None,
         );
 
-        assert!(!matches!(
+        assert!(matches!(
             result,
-            QuickSettingsActionResult::OpenSystemRoute(_)
+            QuickSettingsActionResult::OpenSystemRoute(SystemRoute::Sound)
         ));
     }
 }

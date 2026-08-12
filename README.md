@@ -192,6 +192,13 @@ Night Light opens the documented `ms-settings:nightlight` Windows page. Stable
 builds do not edit private CloudStore records or depend on an unlicensed Git
 package to simulate a direct toggle.
 
+Do not disturb and default audio-output selection follow the same stability
+boundary: the shell keeps documented Core Audio reads, mute, master volume, and
+per-session volume controls, but opens `ms-settings:quiethours` or
+`ms-settings:sound` when Windows requires the user to change system policy.
+Stable builds no longer ship the private WNF quiet-hours bridge or the
+undocumented `IPolicyConfig` COM ABI.
+
 ## Build distributable layouts
 
 ```powershell

@@ -1,7 +1,6 @@
 use std::{error::Error, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=src/win32_do_not_disturb_bridge.cpp");
     println!("cargo:rerun-if-changed=src/win32_brightness_bridge.cpp");
     if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_TRAY_BRIDGE").is_some() {
         println!("cargo:rerun-if-changed=src/win32_tray_bridge_hook.cpp");
@@ -12,7 +11,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     cc::Build::new()
         .cpp(true)
-        .file("src/win32_do_not_disturb_bridge.cpp")
         .file("src/win32_brightness_bridge.cpp")
         .flag_if_supported("/std:c++17")
         .compile("minhaui_windows_bridges");

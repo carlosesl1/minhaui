@@ -1,4 +1,7 @@
+use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
 
 use windows::Win32::Foundation::{E_INVALIDARG, HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -20,8 +23,8 @@ use windows::Win32::Graphics::Gdi::{
     SRCCOPY, SelectObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, GetWindowRect, IsWindowVisible, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetSystemMetrics, GetWindowRect, IsWindow, IsWindowVisible, PostMessageW, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WM_APP,
 };
 use windows::core::{Error, Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
@@ -32,6 +35,13 @@ use crate::{Dpi, PopoverLayoutStyle};
 const PANEL_BODY_TOP_DIP: f32 = 8.0;
 const BLUR_STANDARD_DEVIATION_DIP: f32 = 18.0;
 const BLUR_KERNEL_RADIUS_MULTIPLIER: f32 = 3.0;
+const CAPTURE_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+const COMPLETED_CAPTURE_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+const MAX_CAPTURE_SLOTS: usize = 16;
+
+/// Pointer-free wake posted after a hidden desktop capture enters the bounded
+/// CPU cache. The platform translates it into a UI-thread redraw when useful.
+pub const DESKTOP_BLUR_WAKE_MESSAGE: u32 = WM_APP + 0x6A;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PixelRect {
@@ -117,6 +127,428 @@ pub(super) fn wants_desktop_blur(
         && !solid_material
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CaptureKey {
+    hwnd: isize,
+    plan: CapturePlanKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CapturePlanKey {
+    source: PixelRect,
+    dpi: u32,
+}
+
+impl CaptureKey {
+    fn new(hwnd: HWND, plan: CapturePlan, dpi: Dpi) -> Self {
+        Self {
+            hwnd: hwnd.0 as isize,
+            plan: CapturePlanKey {
+                source: plan.source,
+                dpi: dpi.raw(),
+            },
+        }
+    }
+}
+
+struct CaptureRequest {
+    key: CaptureKey,
+    plan: CapturePlan,
+}
+
+struct CaptureRaster {
+    key: CaptureKey,
+    plan: CapturePlan,
+    pixels: Arc<[u8]>,
+}
+
+struct CachedCapture {
+    key: CaptureKey,
+    plan: CapturePlan,
+    pixels: Arc<[u8]>,
+}
+
+struct CaptureCache {
+    entries: VecDeque<CachedCapture>,
+    byte_len: usize,
+    byte_budget: usize,
+}
+
+impl Default for CaptureCache {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            byte_len: 0,
+            byte_budget: CAPTURE_CACHE_BYTE_BUDGET,
+        }
+    }
+}
+
+impl CaptureCache {
+    #[cfg(test)]
+    fn with_budget(byte_budget: usize) -> Self {
+        Self {
+            byte_budget,
+            ..Self::default()
+        }
+    }
+
+    fn get(&mut self, key: CaptureKey) -> Option<(CapturePlan, Arc<[u8]>)> {
+        let index = self.entries.iter().position(|entry| entry.key == key)?;
+        let entry = self.entries.remove(index)?;
+        let hit = (entry.plan, Arc::clone(&entry.pixels));
+        self.entries.push_back(entry);
+        Some(hit)
+    }
+
+    fn insert(&mut self, raster: CaptureRaster) {
+        if raster.pixels.len() > self.byte_budget {
+            return;
+        }
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.key == raster.key)
+            && let Some(replaced) = self.entries.remove(index)
+        {
+            self.byte_len = self.byte_len.saturating_sub(replaced.pixels.len());
+        }
+        self.byte_len = self.byte_len.saturating_add(raster.pixels.len());
+        self.entries.push_back(CachedCapture {
+            key: raster.key,
+            plan: raster.plan,
+            pixels: raster.pixels,
+        });
+        while self.byte_len > self.byte_budget {
+            let Some(evicted) = self.entries.pop_front() else {
+                break;
+            };
+            self.byte_len = self.byte_len.saturating_sub(evicted.pixels.len());
+        }
+    }
+}
+
+struct WorkerState {
+    pending: VecDeque<CaptureRequest>,
+    stopping: bool,
+}
+
+impl WorkerState {
+    fn enqueue(&mut self, request: CaptureRequest) {
+        if let Some(index) = self
+            .pending
+            .iter()
+            .position(|entry| entry.key.hwnd == request.key.hwnd)
+        {
+            let _ = self.pending.remove(index);
+        }
+        self.pending.push_back(request);
+        while self.pending.len() > MAX_CAPTURE_SLOTS {
+            let _ = self.pending.pop_front();
+        }
+    }
+}
+
+struct CompletedCaptures {
+    entries: VecDeque<CaptureRaster>,
+    byte_len: usize,
+    byte_budget: usize,
+}
+
+impl Default for CompletedCaptures {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::with_capacity(MAX_CAPTURE_SLOTS),
+            byte_len: 0,
+            byte_budget: COMPLETED_CAPTURE_BYTE_BUDGET,
+        }
+    }
+}
+
+impl CompletedCaptures {
+    #[cfg(test)]
+    fn with_budget(byte_budget: usize) -> Self {
+        Self {
+            byte_budget,
+            ..Self::default()
+        }
+    }
+
+    fn push_latest(&mut self, raster: CaptureRaster) {
+        if raster.pixels.len() > self.byte_budget {
+            return;
+        }
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.key.hwnd == raster.key.hwnd)
+            && let Some(replaced) = self.entries.remove(index)
+        {
+            self.byte_len = self.byte_len.saturating_sub(replaced.pixels.len());
+        }
+        self.byte_len = self.byte_len.saturating_add(raster.pixels.len());
+        self.entries.push_back(raster);
+        while self.entries.len() > MAX_CAPTURE_SLOTS || self.byte_len > self.byte_budget {
+            let Some(evicted) = self.entries.pop_front() else {
+                break;
+            };
+            self.byte_len = self.byte_len.saturating_sub(evicted.pixels.len());
+        }
+    }
+
+    fn pop_front(&mut self) -> Option<CaptureRaster> {
+        let raster = self.entries.pop_front()?;
+        self.byte_len = self.byte_len.saturating_sub(raster.pixels.len());
+        Some(raster)
+    }
+}
+
+struct WorkerShared {
+    state: Mutex<WorkerState>,
+    wake: Condvar,
+    completed: Mutex<CompletedCaptures>,
+}
+
+pub(crate) struct DesktopBlurPipeline {
+    shared: Arc<WorkerShared>,
+    _worker: JoinHandle<()>,
+    newly_ready: VecDeque<CaptureKey>,
+    cache: CaptureCache,
+}
+
+impl std::fmt::Debug for DesktopBlurPipeline {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DesktopBlurPipeline")
+            .field("ready_slots", &self.newly_ready.len())
+            .field("cache_bytes", &self.cache.byte_len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DesktopBlurPipeline {
+    pub(crate) fn new() -> std::io::Result<Self> {
+        let shared = Arc::new(WorkerShared {
+            state: Mutex::new(WorkerState {
+                pending: VecDeque::with_capacity(MAX_CAPTURE_SLOTS),
+                stopping: false,
+            }),
+            wake: Condvar::new(),
+            completed: Mutex::new(CompletedCaptures::default()),
+        });
+        let worker_shared = Arc::clone(&shared);
+        let worker = thread::Builder::new()
+            .name("desktop-blur-capture".to_owned())
+            .spawn(move || capture_worker_loop(&worker_shared))?;
+        Ok(Self {
+            shared,
+            _worker: worker,
+            newly_ready: VecDeque::with_capacity(MAX_CAPTURE_SLOTS),
+            cache: CaptureCache::default(),
+        })
+    }
+
+    pub(crate) fn prepare_hidden(
+        &mut self,
+        context: &ID2D1DeviceContext,
+        hwnd: HWND,
+        width: u32,
+        height: u32,
+        dpi: Dpi,
+    ) -> Result<Option<DesktopBlurCapture>> {
+        self.drain_completed();
+        let Some((key, plan)) = capture_target(hwnd, width, height, dpi)? else {
+            return Ok(None);
+        };
+        if let Some((cached_plan, pixels)) = self.cache.get(key) {
+            remove_key(&mut self.newly_ready, key);
+            return DesktopBlurCapture::from_pixels(context, cached_plan, dpi, &pixels).map(Some);
+        }
+        if !is_hidden_live_window(hwnd) {
+            return Ok(None);
+        }
+        self.enqueue(key, plan);
+        Ok(None)
+    }
+
+    pub(crate) fn request_hidden(
+        &mut self,
+        hwnd: HWND,
+        width: u32,
+        height: u32,
+        dpi: Dpi,
+    ) -> Result<()> {
+        self.drain_completed();
+        if !is_hidden_live_window(hwnd) {
+            return Ok(());
+        }
+        let Some((key, plan)) = capture_target(hwnd, width, height, dpi)? else {
+            return Ok(());
+        };
+        // Every confirmed hide refreshes the latest-only snapshot. An older
+        // bounded cache entry remains available for an immediate next open until
+        // this request replaces it, avoiding TTL-dependent blank material.
+        self.enqueue(key, plan);
+        Ok(())
+    }
+
+    fn enqueue(&mut self, key: CaptureKey, plan: CapturePlan) {
+        let request = CaptureRequest { key, plan };
+        let mut state = lock_recover(&self.shared.state);
+        if !state.stopping {
+            state.enqueue(request);
+            self.shared.wake.notify_one();
+        }
+    }
+
+    pub(crate) fn take_ready(
+        &mut self,
+        context: &ID2D1DeviceContext,
+        hwnd: HWND,
+        width: u32,
+        height: u32,
+        dpi: Dpi,
+    ) -> Result<Option<DesktopBlurCapture>> {
+        self.drain_completed();
+        let Some(key) = capture_key(hwnd, width, height, dpi)? else {
+            return Ok(None);
+        };
+        if !remove_key(&mut self.newly_ready, key) {
+            return Ok(None);
+        }
+        let Some((plan, pixels)) = self.cache.get(key) else {
+            return Ok(None);
+        };
+        DesktopBlurCapture::from_pixels(context, plan, dpi, &pixels).map(Some)
+    }
+
+    fn drain_completed(&mut self) {
+        let mut completed = lock_recover(&self.shared.completed);
+        while let Some(raster) = completed.pop_front() {
+            remove_key(&mut self.newly_ready, raster.key);
+            self.newly_ready.push_back(raster.key);
+            while self.newly_ready.len() > MAX_CAPTURE_SLOTS {
+                let _ = self.newly_ready.pop_front();
+            }
+            self.cache.insert(raster);
+        }
+    }
+}
+
+fn remove_key(keys: &mut VecDeque<CaptureKey>, key: CaptureKey) -> bool {
+    let Some(index) = keys.iter().position(|entry| *entry == key) else {
+        return false;
+    };
+    let _ = keys.remove(index);
+    true
+}
+
+fn capture_key(hwnd: HWND, width: u32, height: u32, dpi: Dpi) -> Result<Option<CaptureKey>> {
+    Ok(capture_target(hwnd, width, height, dpi)?.map(|(key, _plan)| key))
+}
+
+fn capture_target(
+    hwnd: HWND,
+    width: u32,
+    height: u32,
+    dpi: Dpi,
+) -> Result<Option<(CaptureKey, CapturePlan)>> {
+    if !is_live_window(hwnd) {
+        return Ok(None);
+    }
+    let mut window = RECT::default();
+    // SAFETY: `window` is valid output storage and `hwnd` remains live.
+    unsafe { GetWindowRect(hwnd, &mut window) }?;
+    let Some(plan) = capture_plan(
+        window.left,
+        window.top,
+        width,
+        height,
+        dpi.raw(),
+        virtual_desktop_rect()?,
+    ) else {
+        return Ok(None);
+    };
+    if pixel_byte_len(plan.source)? > CAPTURE_CACHE_BYTE_BUDGET {
+        return Ok(None);
+    }
+    Ok(Some((CaptureKey::new(hwnd, plan, dpi), plan)))
+}
+
+fn capture_worker_loop(shared: &WorkerShared) {
+    loop {
+        let request = {
+            let mut state = lock_recover(&shared.state);
+            while state.pending.is_empty() && !state.stopping {
+                state = shared
+                    .wake
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            if state.stopping {
+                return;
+            }
+            state.pending.pop_front()
+        };
+        let Some(request) = request else {
+            continue;
+        };
+        let hwnd = HWND(request.key.hwnd as *mut core::ffi::c_void);
+        if !is_hidden_live_window(hwnd) {
+            continue;
+        }
+        match capture_bgra(request.plan.source) {
+            Ok(pixels) => {
+                if !is_hidden_live_window(hwnd) {
+                    continue;
+                }
+                let mut completed = lock_recover(&shared.completed);
+                completed.push_latest(CaptureRaster {
+                    key: request.key,
+                    plan: request.plan,
+                    pixels: pixels.into(),
+                });
+                drop(completed);
+                // SAFETY: This pointer-free private message is only a wake hint;
+                // stale HWND failures are benign and no capture bytes cross it.
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(hwnd),
+                        DESKTOP_BLUR_WAKE_MESSAGE,
+                        Default::default(),
+                        Default::default(),
+                    )
+                };
+            }
+            Err(error) => eprintln!(
+                "DESKTOP_BLUR stage=worker_capture status=fallback hresult={:#010X}",
+                error.code().0 as u32,
+            ),
+        }
+    }
+}
+
+fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn is_live_window(hwnd: HWND) -> bool {
+    // SAFETY: The copied HWND is used only for a read-only validity query. A
+    // destroyed or recycled handle is treated as ineligible by the caller.
+    unsafe { IsWindow(Some(hwnd)) }.as_bool()
+}
+
+fn is_hidden_live_window(hwnd: HWND) -> bool {
+    if !is_live_window(hwnd) {
+        return false;
+    }
+    // SAFETY: The HWND passed the best-effort validity check and visibility is
+    // queried without mutation. Callers recheck after BitBlt to close the race.
+    !unsafe { IsWindowVisible(hwnd) }.as_bool()
+}
+
 pub(crate) struct DesktopBlurCapture {
     _bitmap: ID2D1Bitmap1,
     effect: ID2D1Effect,
@@ -124,33 +556,16 @@ pub(crate) struct DesktopBlurCapture {
 }
 
 impl DesktopBlurCapture {
-    pub(crate) fn capture(
+    fn from_pixels(
         context: &ID2D1DeviceContext,
-        hwnd: HWND,
-        width: u32,
-        height: u32,
+        plan: CapturePlan,
         dpi: Dpi,
-    ) -> Result<Option<Self>> {
-        // SAFETY: The HWND is owned by the live surface and this read-only query
-        // determines whether the capture can avoid sampling the popover itself.
-        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            return Ok(None);
+        pixels: &[u8],
+    ) -> Result<Self> {
+        let expected_len = pixel_byte_len(plan.source)?;
+        if pixels.len() != expected_len {
+            return Err(capture_error());
         }
-        let mut window = RECT::default();
-        // SAFETY: `window` is valid output storage and `hwnd` remains live.
-        unsafe { GetWindowRect(hwnd, &mut window) }?;
-        let virtual_desktop = virtual_desktop_rect()?;
-        let Some(plan) = capture_plan(
-            window.left,
-            window.top,
-            width,
-            height,
-            dpi.raw(),
-            virtual_desktop,
-        ) else {
-            return Ok(None);
-        };
-        let pixels = capture_bgra(plan.source)?;
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -192,11 +607,11 @@ impl DesktopBlurCapture {
                 &D2D1_BORDER_MODE_HARD.0.to_ne_bytes(),
             )?;
         }
-        Ok(Some(Self {
+        Ok(Self {
             _bitmap: bitmap,
             effect,
             plan,
-        }))
+        })
     }
 
     pub(crate) fn draw(
@@ -280,6 +695,11 @@ fn virtual_desktop_rect() -> Result<PixelRect> {
 }
 
 fn capture_bgra(rect: PixelRect) -> Result<Vec<u8>> {
+    let byte_len = pixel_byte_len(rect)?;
+    capture_bgra_with_len(rect, byte_len)
+}
+
+fn pixel_byte_len(rect: PixelRect) -> Result<usize> {
     let byte_len = usize::try_from(rect.width)
         .ok()
         .and_then(|width| {
@@ -289,6 +709,10 @@ fn capture_bgra(rect: PixelRect) -> Result<Vec<u8>> {
         })
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or_else(capture_error)?;
+    Ok(byte_len)
+}
+
+fn capture_bgra_with_len(rect: PixelRect, byte_len: usize) -> Result<Vec<u8>> {
     // SAFETY: A null HWND requests the desktop DC. The guard releases it on the
     // same thread after the synchronous transfer.
     let screen = ScreenDc::acquire()?;
@@ -418,7 +842,14 @@ impl Drop for SelectedObject {
 
 #[cfg(test)]
 mod tests {
-    use super::{CapturePlan, PANEL_BODY_TOP_DIP, PixelRect, capture_plan, wants_desktop_blur};
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    use super::{
+        CaptureCache, CaptureKey, CapturePlan, CapturePlanKey, CaptureRaster, CaptureRequest,
+        CompletedCaptures, MAX_CAPTURE_SLOTS, PANEL_BODY_TOP_DIP, PixelRect, WorkerState,
+        capture_plan, remove_key, wants_desktop_blur,
+    };
     use crate::PopoverLayoutStyle;
     use crate::native::ShowcaseRole;
 
@@ -458,5 +889,162 @@ mod tests {
             true,
         ));
         assert!(wants_desktop_blur(ShowcaseRole::Popover, None, true, false,));
+    }
+
+    #[test]
+    fn capture_cache_evicts_least_recently_used_raster_to_its_byte_budget() {
+        let mut cache = CaptureCache::with_budget(8);
+        cache.insert(raster(1, 4));
+        cache.insert(raster(2, 4));
+        assert!(cache.get(key(1)).is_some());
+
+        cache.insert(raster(3, 4));
+
+        assert!(cache.get(key(1)).is_some());
+        assert!(cache.get(key(2)).is_none());
+        assert!(cache.get(key(3)).is_some());
+        assert_eq!(cache.byte_len, 8);
+    }
+
+    #[test]
+    fn capture_cache_retains_last_raster_until_replaced_and_drops_oversize() {
+        let mut cache = CaptureCache::with_budget(8);
+        cache.insert(raster(1, 4));
+        cache.insert(raster(2, 9));
+
+        assert!(cache.get(key(1)).is_some());
+        assert!(cache.get(key(2)).is_none());
+        assert_eq!(cache.byte_len, 4);
+    }
+
+    #[test]
+    fn completed_backlog_is_latest_per_monitor_and_byte_bounded() {
+        let mut completed = CompletedCaptures::with_budget(8);
+        completed.push_latest(raster(1, 4));
+        completed.push_latest(raster(2, 4));
+        completed.push_latest(raster_with_geometry(1, 2, 2, 144));
+
+        assert_eq!(completed.byte_len, 6);
+        assert_eq!(
+            completed
+                .entries
+                .iter()
+                .map(|entry| entry.key.hwnd)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(completed.entries.back().unwrap().key.plan.dpi, 144);
+        assert_eq!(completed.entries.back().unwrap().key.plan.source.width, 2);
+
+        completed.push_latest(raster(3, 4));
+        completed.push_latest(raster(4, 9));
+
+        assert_eq!(completed.byte_len, 6);
+        assert_eq!(
+            completed
+                .entries
+                .iter()
+                .map(|entry| entry.key.hwnd)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(completed.pop_front().unwrap().key.hwnd, 1);
+        assert_eq!(completed.byte_len, 4);
+    }
+
+    #[test]
+    fn keyed_ready_queue_consumes_only_the_matching_monitor() {
+        let mut ready = VecDeque::from([key(1), key(2)]);
+
+        assert!(remove_key(&mut ready, key(1)));
+        assert_eq!(ready, VecDeque::from([key(2)]));
+        assert!(!remove_key(&mut ready, key(3)));
+    }
+
+    #[test]
+    fn pending_capture_queue_is_fair_bounded_and_latest_per_monitor() {
+        let mut state = WorkerState {
+            pending: VecDeque::new(),
+            stopping: false,
+        };
+        state.enqueue(request(1, 1.0));
+        state.enqueue(request(2, 2.0));
+        state.enqueue(request_with_geometry(1, 3.0, 2, 144));
+
+        assert_eq!(
+            state
+                .pending
+                .iter()
+                .map(|entry| entry.key.hwnd)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(state.pending.back().unwrap().plan.draw_origin_x_dip, 3.0);
+        assert_eq!(state.pending.back().unwrap().key.plan.dpi, 144);
+        assert_eq!(state.pending.back().unwrap().key.plan.source.width, 2);
+
+        for hwnd in 3..=(MAX_CAPTURE_SLOTS + 2) as isize {
+            state.enqueue(request(hwnd, hwnd as f32));
+        }
+        assert_eq!(state.pending.len(), MAX_CAPTURE_SLOTS);
+        assert_eq!(
+            state.pending.back().unwrap().key.hwnd,
+            (MAX_CAPTURE_SLOTS + 2) as isize
+        );
+    }
+
+    fn raster(hwnd: isize, byte_len: usize) -> CaptureRaster {
+        raster_with_geometry(hwnd, byte_len, 1, 96)
+    }
+
+    fn raster_with_geometry(hwnd: isize, byte_len: usize, width: u32, dpi: u32) -> CaptureRaster {
+        let key = key_with_geometry(hwnd, width, dpi);
+        let mut plan = plan();
+        plan.source = key.plan.source;
+        CaptureRaster {
+            key,
+            plan,
+            pixels: Arc::from(vec![0; byte_len]),
+        }
+    }
+
+    fn request(hwnd: isize, draw_origin_x_dip: f32) -> CaptureRequest {
+        request_with_geometry(hwnd, draw_origin_x_dip, 1, 96)
+    }
+
+    fn request_with_geometry(
+        hwnd: isize,
+        draw_origin_x_dip: f32,
+        width: u32,
+        dpi: u32,
+    ) -> CaptureRequest {
+        let key = key_with_geometry(hwnd, width, dpi);
+        let mut plan = plan();
+        plan.source = key.plan.source;
+        plan.draw_origin_x_dip = draw_origin_x_dip;
+        CaptureRequest { key, plan }
+    }
+
+    const fn key(hwnd: isize) -> CaptureKey {
+        key_with_geometry(hwnd, 1, 96)
+    }
+
+    const fn key_with_geometry(hwnd: isize, width: u32, dpi: u32) -> CaptureKey {
+        CaptureKey {
+            hwnd,
+            plan: CapturePlanKey {
+                source: PixelRect::new(0, 0, width, 1),
+                dpi,
+            },
+        }
+    }
+
+    const fn plan() -> CapturePlan {
+        CapturePlan {
+            source: PixelRect::new(0, 0, 1, 1),
+            draw_origin_x_dip: 0.0,
+            draw_origin_y_dip: 0.0,
+            body_top_dip: PANEL_BODY_TOP_DIP,
+        }
     }
 }

@@ -72,6 +72,8 @@ enum CoalesceKind {
     PreviewFrame,
     ExternalMenuProbe,
     SettingsResize,
+    DesktopBlurPrefetch,
+    DesktopBlurReady,
 }
 
 #[derive(Debug)]
@@ -227,6 +229,8 @@ fn coalesce_kind(event: &PlatformEvent) -> Option<CoalesceKind> {
         PlatformEvent::PreviewTimer => Some(CoalesceKind::PreviewFrame),
         PlatformEvent::ExternalMenuTimer => Some(CoalesceKind::ExternalMenuProbe),
         PlatformEvent::SettingsResized => Some(CoalesceKind::SettingsResize),
+        PlatformEvent::DesktopBlurPrefetch => Some(CoalesceKind::DesktopBlurPrefetch),
+        PlatformEvent::DesktopBlurReady => Some(CoalesceKind::DesktopBlurReady),
         _ => None,
     }
 }

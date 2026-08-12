@@ -357,6 +357,7 @@ impl QuickSettingsController {
             .audio
             .outputs()
             .iter()
+            .find(|output| output.selected())
             .map(|output| {
                 QuickSettingsAudioOutput::new(
                     QuickSettingsAudioOutputId::new(output.id().value()),
@@ -365,6 +366,7 @@ impl QuickSettingsController {
                     output.selected(),
                 )
             })
+            .into_iter()
             .collect();
         QuickSettingsScene::new(Vec::new())
             .with_audio_panel(Some(
@@ -587,7 +589,7 @@ impl QuickSettingsController {
             QuickSettingsKey::Previous => self.move_focus(-1),
             QuickSettingsKey::Activate => match self.focused {
                 Some(QuickSettingsFocus::Control(QuickControlKind::Focus)) => {
-                    self.open_do_not_disturb_page()
+                    self.activate_do_not_disturb()
                 }
                 Some(QuickSettingsFocus::Control(QuickControlKind::NightLight)) => {
                     self.activate_night_light()
@@ -750,7 +752,7 @@ impl QuickSettingsController {
             && let Some(hit) = released
         {
             if hit == QuickSettingsHit::Tile(QuickControlKind::Focus) {
-                return self.open_do_not_disturb_page();
+                return self.activate_do_not_disturb();
             }
             if hit == QuickSettingsHit::Tile(QuickControlKind::Projection) {
                 return self.open_projection_page();
@@ -835,11 +837,6 @@ impl QuickSettingsController {
                         entry.id().value(),
                     ))
                 }))
-                .chain(self.audio.outputs().iter().map(|entry| {
-                    QuickSettingsFocus::AudioOutput(QuickSettingsAudioOutputId::new(
-                        entry.id().value(),
-                    ))
-                }))
                 .chain(
                     self.audio
                         .spatial_audio()
@@ -900,6 +897,24 @@ impl QuickSettingsController {
         self.pressed = None;
         self.last_error.clear();
         vec![QueuedQuickSettingsAction::Reflow]
+    }
+
+    fn activate_do_not_disturb(&mut self) -> Vec<QueuedQuickSettingsAction> {
+        if self
+            .capabilities
+            .get(QuickControlKind::Focus)
+            .is_some_and(|capability| {
+                matches!(
+                    capability.availability(),
+                    QuickControlAvailability::RouteOnly { .. }
+                )
+            })
+        {
+            return vec![QueuedQuickSettingsAction::Intent(
+                QuickSettingsIntent::Activate(QuickControlKind::Focus),
+            )];
+        }
+        self.open_do_not_disturb_page()
     }
 
     fn close_do_not_disturb_page(&mut self) -> Vec<QueuedQuickSettingsAction> {

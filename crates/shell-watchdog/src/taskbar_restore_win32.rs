@@ -1,4 +1,6 @@
 use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -8,6 +10,9 @@ use windows::Win32::Graphics::Gdi::{
     COMPLEXREGION, CreateRectRgn, DeleteObject, ERROR, GetMonitorInfoW, GetWindowRgn, HGDIOBJ,
     MONITOR_DEFAULTTONULL, MONITORINFO, MONITORINFOEXW, MonitorFromWindow, NULLREGION,
     SIMPLEREGION, SetWindowRgn,
+};
+use windows::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::System::Threading::{
@@ -24,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE,
     SW_SHOWNOACTIVATE, ShowWindowAsync,
 };
-use windows::core::{BOOL, Error as WindowsError, PWSTR};
+use windows::core::{BOOL, Error as WindowsError, PCWSTR, PWSTR};
 
 use crate::RecoveryJournalV1;
 use crate::TaskbarBounds;
@@ -38,6 +43,41 @@ const SECONDARY_TASKBAR_CLASS: &str = "Shell_SecondaryTrayWnd";
 const MAX_WINDOWS_PATH_UNITS: usize = 32_768;
 const VERIFICATION_BUDGET: Duration = Duration::from_secs(2);
 const VERIFICATION_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Atomically publishes a fully synchronized journal replacement on Windows.
+///
+/// Both paths are created in the same directory by the safe journal layer.
+/// `MOVEFILE_REPLACE_EXISTING` is required because the durable `Prepared`
+/// journal already exists, while `MOVEFILE_WRITE_THROUGH` keeps the transition
+/// from reporting success before Windows flushes the move to disk.
+pub(crate) fn replace_recovery_journal(staging_path: &Path, path: &Path) -> std::io::Result<()> {
+    let staging = wide_path(staging_path)?;
+    let destination = wide_path(path)?;
+    // SAFETY: Both buffers are NUL-terminated, remain live for the synchronous
+    // call, and identify same-directory regular files owned by the journal
+    // transaction. The flags explicitly replace the existing Prepared file and
+    // request a durable move before returning.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(staging.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+fn wide_path(path: &Path) -> std::io::Result<Vec<u16>> {
+    let mut value = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if value.contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "recovery journal path contains an embedded NUL",
+        ));
+    }
+    value.push(0);
+    Ok(value)
+}
 
 pub(crate) struct Win32TaskbarRestoreBackend;
 
@@ -726,7 +766,9 @@ fn native_error(operation: &'static str, error: WindowsError) -> TaskbarRestoreE
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowRegionState, region_state_from_code};
+    use super::{WindowRegionState, region_state_from_code, replace_recovery_journal};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use windows::Win32::Graphics::Gdi::{COMPLEXREGION, ERROR, NULLREGION, SIMPLEREGION};
 
     #[test]
@@ -748,5 +790,30 @@ mod tests {
             Some(WindowRegionState::Complex)
         );
         assert!(region_state_from_code(99).is_err());
+    }
+
+    #[test]
+    fn windows_journal_commit_replaces_an_existing_prepared_file() -> Result<(), std::io::Error> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "minhaui-watchdog-replace-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory)?;
+        let prepared = directory.join("taskbar-recovery-v1.json");
+        let staging = directory.join(".taskbar-recovery-v1.json.staging.tmp");
+        fs::write(&prepared, b"prepared")?;
+        fs::write(&staging, b"applied")?;
+
+        replace_recovery_journal(&staging, &prepared)?;
+
+        assert_eq!(fs::read(&prepared)?, b"applied");
+        assert!(!staging.exists());
+        fs::remove_file(prepared)?;
+        fs::remove_dir(directory)?;
+        Ok(())
     }
 }

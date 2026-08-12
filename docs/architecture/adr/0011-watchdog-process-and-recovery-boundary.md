@@ -29,9 +29,19 @@ independente do processo que pode falhar.
   aplica backoff e tenta modo seguro uma vez após um crash loop.
 - Um único heartbeat não zera o orçamento de falhas; somente uma janela saudável
   sustentada o faz.
-- O journal de recuperação é versionado, limitado a 256 KiB e substituído por
-  staging no mesmo diretório após `flush` e `sync_all`. Dados futuros, corruptos
-  ou grandes demais falham fechados e são preservados.
+- O journal de recuperação é versionado e limitado a 256 KiB. A criação
+  `Prepared` grava e sincroniza staging no mesmo diretório e publica com
+  create-no-overwrite; journal pendente, futuro ou corrompido nunca é
+  substituído por uma nova transação. A transição `Prepared` -> `Applied` ocorre
+  sob lock de arquivo e exige o `RecoveryTransactionId` esperado antes da
+  substituição atômica. No Windows, a publicação usa `MoveFileExW` com
+  `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`, porque `std::fs::rename`
+  não substitui o `Prepared` existente nesse alvo. Dados futuros, corruptos,
+  grandes demais ou com `txid`
+  divergente falham fechados e são preservados.
+- A conclusão da restauração faz compare-and-delete sob o mesmo lock: ausência
+  é sucesso idempotente, mas um journal com outro `RecoveryTransactionId` é
+  preservado. Assim, um restaurador atrasado não apaga uma transação mais nova.
 - A restauração nativa é um Adapter privado do watchdog. Todo `unsafe` fica em um
   único módulo `cfg(windows)`, com invariantes por chamada. Regras, journal,
   supervisão e planejamento continuam seguros e testáveis fora do Windows.
@@ -101,8 +111,9 @@ problema; não restaura o estado do Explorer.
 ## Verificação
 
 - Testes de parser/framing, oversize, timeout, crash loop e janela saudável.
-- Testes do journal para round-trip, substituição, corrupção, schema futuro,
-  oversize e remoção idempotente.
+- Testes do journal para round-trip, criação concorrente sem overwrite, staging
+  abandonado por crash, transição autenticada por `txid`, compare-and-delete
+  resistente a ABA, corrupção, schema futuro, oversize e remoção idempotente.
 - Testes puros do planner para vazio, duplicidade, mismatch e preservação do
   journal, além da política que permite `unsafe` somente no Adapter Win32.
 - `cargo check` e Clippy com todos os targets/features para Windows.

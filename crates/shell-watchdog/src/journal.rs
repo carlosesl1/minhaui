@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use shell_core::{FixedHexError, RecoveryTransactionId};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -155,6 +156,30 @@ pub enum RecoveryJournalError {
     InvalidPath { path: PathBuf },
     #[error("could not allocate a staging file next to recovery journal `{path}`")]
     StagingCollision { path: PathBuf },
+    #[error("recovery journal `{path}` already exists and was preserved")]
+    AlreadyExists { path: PathBuf },
+    #[error("recovery journal `{path}` does not exist")]
+    Missing { path: PathBuf },
+    #[error("recovery journal `{path}` contains a non-canonical transaction id: {source}")]
+    InvalidTransactionId {
+        path: PathBuf,
+        #[source]
+        source: FixedHexError,
+    },
+    #[error(
+        "recovery journal `{path}` belongs to transaction {found}, not expected transaction {expected}"
+    )]
+    TransactionMismatch {
+        path: PathBuf,
+        expected: RecoveryTransactionId,
+        found: RecoveryTransactionId,
+    },
+    #[error("recovery journal `{path}` is in phase {found:?}; expected phase {expected:?}")]
+    UnexpectedPhase {
+        path: PathBuf,
+        expected: RecoveryJournalPhase,
+        found: RecoveryJournalPhase,
+    },
 }
 
 #[must_use]
@@ -166,19 +191,97 @@ pub fn save_recovery_journal(
     path: &Path,
     journal: &RecoveryJournalV1,
 ) -> Result<(), RecoveryJournalError> {
-    let encoded =
-        serde_json::to_vec_pretty(journal).map_err(|source| RecoveryJournalError::Encode {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    ensure_bounded(path, encoded.len() as u64)?;
-
     let parent = journal_parent(path);
-    fs::create_dir_all(parent)
-        .map_err(|source| io_error("create its directory for", path, source))?;
+    prepare_parent(path, parent)?;
+    let _lock = acquire_journal_lock(path, parent)?;
+    save_recovery_journal_locked(path, parent, journal)
+}
+
+/// Creates the initial `Prepared` journal without replacing any existing file.
+///
+/// Publishing uses a same-directory staging file followed by an atomic hard
+/// link. The link operation fails if `path` already exists, so a pending,
+/// corrupt, or future journal is never overwritten by a new transaction.
+pub fn create_prepared_recovery_journal(
+    path: &Path,
+    transaction_id: RecoveryTransactionId,
+    appbar_state: u32,
+    snapshots: Vec<TaskbarSnapshot>,
+) -> Result<RecoveryJournalV1, RecoveryJournalError> {
+    let journal = RecoveryJournalV1::new(
+        transaction_id.to_string(),
+        RecoveryJournalPhase::Prepared,
+        appbar_state,
+        snapshots,
+    );
+    let encoded = encode_journal(path, &journal)?;
+    let parent = journal_parent(path);
+    prepare_parent(path, parent)?;
+    let _lock = acquire_journal_lock(path, parent)?;
 
     let (staging_path, mut staging_file) = create_staging_file(path, parent)?;
-    let result = write_and_commit(path, parent, &staging_path, &mut staging_file, &encoded);
+    let staged = write_staging_data(path, &mut staging_file, &encoded);
+    drop(staging_file);
+    if let Err(error) = staged {
+        let _ignored = fs::remove_file(&staging_path);
+        return Err(error);
+    }
+
+    let published = publish_without_replace(path, parent, &staging_path);
+    let _ignored = fs::remove_file(&staging_path);
+    if published.is_ok() {
+        // The authoritative link was already synced. This second sync only
+        // makes best-effort cleanup of the staging link durable.
+        let _ignored = sync_parent_directory(parent, path);
+    }
+    published.map(|()| journal)
+}
+
+/// Authenticates and durably transitions one journal from `Prepared` to
+/// `Applied`.
+///
+/// The expected typed transaction id is checked while holding the journal's
+/// cross-process lock. Invalid JSON, an unknown schema, a different transaction
+/// id, or any phase other than `Prepared` fails closed without replacing the
+/// existing journal.
+pub fn mark_recovery_journal_applied(
+    path: &Path,
+    expected_transaction_id: RecoveryTransactionId,
+) -> Result<RecoveryJournalV1, RecoveryJournalError> {
+    let parent = journal_parent(path);
+    prepare_parent(path, parent)?;
+    let _lock = acquire_journal_lock(path, parent)?;
+    let Some(mut journal) = load_recovery_journal(path)? else {
+        return Err(RecoveryJournalError::Missing {
+            path: path.to_path_buf(),
+        });
+    };
+    let found_transaction_id = parse_transaction_id(path, &journal)?;
+    authenticate_transaction(path, expected_transaction_id, found_transaction_id)?;
+    if journal.phase != RecoveryJournalPhase::Prepared {
+        return Err(RecoveryJournalError::UnexpectedPhase {
+            path: path.to_path_buf(),
+            expected: RecoveryJournalPhase::Prepared,
+            found: journal.phase,
+        });
+    }
+
+    journal.set_phase(RecoveryJournalPhase::Applied);
+    save_recovery_journal_locked(path, parent, &journal)?;
+    Ok(journal)
+}
+
+fn save_recovery_journal_locked(
+    path: &Path,
+    parent: &Path,
+    journal: &RecoveryJournalV1,
+) -> Result<(), RecoveryJournalError> {
+    let encoded = encode_journal(path, journal)?;
+
+    let (staging_path, mut staging_file) = create_staging_file(path, parent)?;
+    let staged = write_staging_data(path, &mut staging_file, &encoded);
+    drop(staging_file);
+    let result = staged.and_then(|()| commit_staging_file(path, parent, &staging_path));
     if result.is_err() {
         let _ignored = fs::remove_file(&staging_path);
     }
@@ -217,9 +320,36 @@ pub fn load_recovery_journal(
 }
 
 pub fn remove_recovery_journal(path: &Path) -> Result<(), RecoveryJournalError> {
+    let parent = journal_parent(path);
+    prepare_parent(path, parent)?;
+    let _lock = acquire_journal_lock(path, parent)?;
+    remove_recovery_journal_locked(path, parent)
+}
+
+/// Removes a journal only when it still belongs to the expected transaction.
+///
+/// Absence is an idempotent success. A corrupt journal, non-canonical id, or a
+/// different transaction fails closed while the journal lock is held, so a
+/// stale restorer cannot delete a newer recovery transaction.
+pub fn remove_recovery_journal_for_transaction(
+    path: &Path,
+    expected_transaction_id: RecoveryTransactionId,
+) -> Result<(), RecoveryJournalError> {
+    let parent = journal_parent(path);
+    prepare_parent(path, parent)?;
+    let _lock = acquire_journal_lock(path, parent)?;
+    let Some(journal) = load_recovery_journal(path)? else {
+        return Ok(());
+    };
+    let found_transaction_id = parse_transaction_id(path, &journal)?;
+    authenticate_transaction(path, expected_transaction_id, found_transaction_id)?;
+    remove_recovery_journal_locked(path, parent)
+}
+
+fn remove_recovery_journal_locked(path: &Path, parent: &Path) -> Result<(), RecoveryJournalError> {
     match fs::remove_file(path) {
         Ok(()) => {
-            sync_parent_directory(journal_parent(path), path)?;
+            sync_parent_directory(parent, path)?;
             Ok(())
         }
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -227,10 +357,93 @@ pub fn remove_recovery_journal(path: &Path) -> Result<(), RecoveryJournalError> 
     }
 }
 
-fn write_and_commit(
+fn encode_journal(
+    path: &Path,
+    journal: &RecoveryJournalV1,
+) -> Result<Vec<u8>, RecoveryJournalError> {
+    let encoded =
+        serde_json::to_vec_pretty(journal).map_err(|source| RecoveryJournalError::Encode {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    ensure_bounded(path, encoded.len() as u64)?;
+    Ok(encoded)
+}
+
+fn parse_transaction_id(
+    path: &Path,
+    journal: &RecoveryJournalV1,
+) -> Result<RecoveryTransactionId, RecoveryJournalError> {
+    journal
+        .transaction_id
+        .parse()
+        .map_err(|source| RecoveryJournalError::InvalidTransactionId {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+fn authenticate_transaction(
+    path: &Path,
+    expected: RecoveryTransactionId,
+    found: RecoveryTransactionId,
+) -> Result<(), RecoveryJournalError> {
+    if found == expected {
+        Ok(())
+    } else {
+        Err(RecoveryJournalError::TransactionMismatch {
+            path: path.to_path_buf(),
+            expected,
+            found,
+        })
+    }
+}
+
+fn prepare_parent(path: &Path, parent: &Path) -> Result<(), RecoveryJournalError> {
+    fs::create_dir_all(parent).map_err(|source| io_error("create its directory for", path, source))
+}
+
+fn acquire_journal_lock(path: &Path, parent: &Path) -> Result<File, RecoveryJournalError> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| RecoveryJournalError::InvalidPath {
+            path: path.to_path_buf(),
+        })?
+        .to_string_lossy();
+    let lock_path = parent.join(format!(".{file_name}.lock"));
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(|source| io_error("open its transaction lock for", path, source))?;
+    lock.lock()
+        .map_err(|source| io_error("lock its transaction state for", path, source))?;
+    Ok(lock)
+}
+
+fn publish_without_replace(
     path: &Path,
     parent: &Path,
     staging_path: &Path,
+) -> Result<(), RecoveryJournalError> {
+    match fs::hard_link(staging_path, path) {
+        Ok(()) => {
+            sync_committed_file(path)?;
+            sync_parent_directory(parent, path)
+        }
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+            Err(RecoveryJournalError::AlreadyExists {
+                path: path.to_path_buf(),
+            })
+        }
+        Err(source) => Err(io_error("publish without replacing", path, source)),
+    }
+}
+
+fn write_staging_data(
+    path: &Path,
     staging_file: &mut File,
     encoded: &[u8],
 ) -> Result<(), RecoveryJournalError> {
@@ -242,9 +455,36 @@ fn write_and_commit(
         .map_err(|source| io_error("flush staging data for", path, source))?;
     staging_file
         .sync_all()
-        .map_err(|source| io_error("sync staging data for", path, source))?;
-    fs::rename(staging_path, path).map_err(|source| io_error("commit", path, source))?;
+        .map_err(|source| io_error("sync staging data for", path, source))
+}
+
+fn commit_staging_file(
+    path: &Path,
+    parent: &Path,
+    staging_path: &Path,
+) -> Result<(), RecoveryJournalError> {
+    replace_staging_file(staging_path, path).map_err(|source| io_error("commit", path, source))?;
+    sync_committed_file(path)?;
     sync_parent_directory(parent, path)
+}
+
+#[cfg(windows)]
+fn replace_staging_file(staging_path: &Path, path: &Path) -> io::Result<()> {
+    crate::taskbar_restore_win32::replace_recovery_journal(staging_path, path)
+}
+
+#[cfg(not(windows))]
+fn replace_staging_file(staging_path: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(staging_path, path)
+}
+
+fn sync_committed_file(path: &Path) -> Result<(), RecoveryJournalError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|source| io_error("sync committed data for", path, source))
 }
 
 fn create_staging_file(

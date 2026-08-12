@@ -145,6 +145,7 @@ pub(super) trait SurfaceAdapter {
     ) -> windows::core::Result<PresentOutcome>;
     fn metrics(surface: &Self::Surface) -> SurfaceMetrics;
     fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE>;
+    fn prefetch_desktop_blur(_renderer: &Self::Renderer, _surface: &Self::Surface) {}
     fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()>;
     fn animate_entrance(surface: &Self::Surface, reduced_motion: bool)
     -> windows::core::Result<()>;
@@ -214,6 +215,10 @@ impl SurfaceAdapter for DirectCompositionAdapter {
 
     fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE> {
         surface.frame_latency_waitable_object()
+    }
+
+    fn prefetch_desktop_blur(renderer: &Self::Renderer, surface: &Self::Surface) {
+        renderer.prefetch_desktop_blur(surface);
     }
 
     fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()> {
@@ -403,6 +408,20 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
             .and_then(|resources| resources.surfaces.as_ref())
             .and_then(|surfaces| surfaces.surface(role))
             .and_then(A::frame_latency_waitable_object)
+    }
+
+    pub(super) fn prefetch_desktop_blur(&self, role: ShowcaseRole) {
+        let Some(resources) = self.resources.as_ref() else {
+            return;
+        };
+        let (Some(renderer), Some(surfaces)) =
+            (resources.renderer.as_ref(), resources.surfaces.as_ref())
+        else {
+            return;
+        };
+        if let Some(surface) = surfaces.surface(role) {
+            A::prefetch_desktop_blur(renderer, surface);
+        }
     }
 
     pub(super) fn redraw(

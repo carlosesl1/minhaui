@@ -81,12 +81,17 @@ impl RuntimeSurfaces {
             activate,
             animate,
         } = presentation;
-        let states = self.dock_controller.preview_windows_for_item(item);
+        let states = self
+            .dock_controller
+            .preview_windows_for_item(item)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
         if states.is_empty() {
             self.hide_window_preview(preview);
             return Ok(());
         }
-        let dock_scene = self.dock_controller.scene();
+        let dock_scene = self.dock_scene_for_render(dock);
         let Some(item_visual) = dock_scene
             .items()
             .iter()

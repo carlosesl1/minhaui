@@ -1,8 +1,6 @@
 use shell_config::QuickSettingsSettings;
 use shell_core::QuickControlKind;
-use shell_renderer::{
-    DipPoint, DipRect, QuickSettingsAudioOutputId, QuickSettingsFocus, layout_quick_settings,
-};
+use shell_renderer::{DipPoint, DipRect, QuickSettingsFocus, layout_quick_settings};
 
 use crate::brightness_coordinator::BrightnessApplyResult;
 use crate::{
@@ -98,7 +96,7 @@ fn audio_topbar_module_opens_the_detailed_panel_as_a_root_surface() {
 }
 
 #[test]
-fn audio_topbar_module_preserves_every_available_output() {
+fn audio_topbar_module_exposes_only_the_current_output_as_information() {
     let capabilities = QuickSettingsCapabilities::new(vec![QuickControlCapability::new(
         QuickControlKind::Volume,
         QuickControlAvailability::Available { active: false },
@@ -132,17 +130,14 @@ fn audio_topbar_module_preserves_every_available_output() {
 
     let scene = controller.scene();
     let audio = scene.audio_panel().expect("audio panel");
-    assert_eq!(audio.outputs().len(), 5);
-    assert_eq!(audio.outputs()[4].label(), "Output 5");
+    assert_eq!(audio.outputs().len(), 1);
+    assert_eq!(audio.outputs()[0].label(), "Output 1");
+    assert!(audio.outputs()[0].selected());
 
-    for _ in 0..5 {
-        controller.handle_key(QuickSettingsKey::Next);
-    }
+    controller.handle_key(QuickSettingsKey::Next);
     assert_eq!(
         controller.scene().focused(),
-        Some(QuickSettingsFocus::AudioOutput(
-            QuickSettingsAudioOutputId::new(5)
-        ))
+        Some(QuickSettingsFocus::AudioSettings)
     );
 }
 
@@ -241,6 +236,43 @@ fn do_not_disturb_route_only_tile_shows_the_observed_active_state() {
     assert!(tile.active());
     assert_eq!(tile.label(), "Do not disturb");
     assert_eq!(tile.detail(), "On");
+}
+
+#[test]
+fn route_only_do_not_disturb_opens_documented_windows_settings() {
+    let snapshot = QuickSettingsCapabilities::new(vec![QuickControlCapability::new(
+        QuickControlKind::Focus,
+        QuickControlAvailability::RouteOnly { active: None },
+        "Do not disturb",
+        "Open settings",
+        None,
+    )]);
+    let mut controller =
+        QuickSettingsController::new(QuickSettingsSettings::default(), snapshot.clone());
+    controller.open(snapshot);
+    let surface = DipRect::new(0.0, 0.0, 368.0, 420.0);
+    let tile = layout_quick_settings(&controller.scene(), surface)
+        .tiles()
+        .iter()
+        .find(|tile| tile.kind() == QuickControlKind::Focus)
+        .expect("do not disturb tile")
+        .bounds();
+    let point = DipPoint::new(tile.x + 8.0, tile.y + 8.0);
+
+    controller.pointer_press(point, surface);
+    assert_eq!(
+        controller.pointer_release(point, surface),
+        vec![QueuedQuickSettingsAction::Intent(
+            QuickSettingsIntent::Activate(QuickControlKind::Focus)
+        )]
+    );
+    assert!(controller.scene().submenu().is_none());
+    assert_eq!(
+        controller.handle_key(crate::QuickSettingsKey::Activate),
+        vec![QueuedQuickSettingsAction::Intent(
+            QuickSettingsIntent::Activate(QuickControlKind::Focus)
+        )]
+    );
 }
 
 #[test]

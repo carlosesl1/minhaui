@@ -103,6 +103,8 @@ pub(super) struct RuntimeSurfaces {
     pub(super) reduced_motion: bool,
     pub(super) background_apps_worker:
         std::sync::Arc<crate::background_apps_worker::BackgroundAppsWorker>,
+    dock_icon_worker: Option<std::sync::Arc<crate::dock_icon_worker::DockIconWorker>>,
+    dock_icon_target: crate::NativeWindowId,
     shell_menu_worker: crate::shell_menu_worker::ShellMenuWorker,
     pub(super) quick_settings_worker:
         std::sync::Arc<crate::quick_settings_worker::QuickSettingsWorker>,
@@ -157,6 +159,9 @@ pub(super) struct RuntimeSurfaces {
 
 impl Drop for RuntimeSurfaces {
     fn drop(&mut self) {
+        if let Some(worker) = self.dock_icon_worker.as_ref() {
+            worker.cancel_target(self.dock_icon_target);
+        }
         let _ = self.external_menu_coordinator.shutdown();
         self.cancel_pending_tray_activation();
         self.release_external_menu_handles();
@@ -291,6 +296,8 @@ impl RuntimeSurfaces {
         let mut runtime = Self {
             reduced_motion: options.reduced_motion,
             background_apps_worker: crate::background_apps_worker::BackgroundAppsWorker::shared()?,
+            dock_icon_worker: crate::dock_icon_worker::DockIconWorker::shared(),
+            dock_icon_target: crate::win32_event_queue::native_window_id(windows.dock.hwnd),
             shell_menu_worker: crate::shell_menu_worker::ShellMenuWorker::new()?,
             quick_settings_worker: crate::quick_settings_worker::QuickSettingsWorker::shared()?,
             quick_settings_generation: 0,
@@ -365,6 +372,35 @@ impl RuntimeSurfaces {
         runtime_device_kind(&self.surface_runtime)
     }
 
+    pub(super) fn dock_scene_for_render(
+        &mut self,
+        dock: &OwnedWindow,
+    ) -> shell_renderer::DockScene {
+        let scene = self.dock_controller.scene();
+        if let Some(request) = self.dock_controller.take_icon_resolution_request() {
+            debug_assert_eq!(
+                self.dock_icon_target,
+                crate::win32_event_queue::native_window_id(dock.hwnd)
+            );
+            self.submit_dock_icon_request(request);
+        }
+        scene
+    }
+
+    fn submit_dock_icon_request(
+        &mut self,
+        request: crate::dock_icon_worker::DockIconResolutionRequest,
+    ) {
+        let generation = request.generation();
+        let accepted = self
+            .dock_icon_worker
+            .as_ref()
+            .is_some_and(|worker| worker.request(request, self.dock_icon_target));
+        if !accepted {
+            self.dock_controller.abandon_icon_resolution(generation);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_event(
         &mut self,
@@ -377,6 +413,18 @@ impl RuntimeSurfaces {
         settings: &mut OwnedWindow,
     ) -> Result<bool> {
         let event = match event {
+            PlatformEvent::DockIconSourcesLoaded(result) => {
+                if self.dock_controller.complete_icon_resolution(&result) {
+                    self.redraw_dock(SurfaceWindows {
+                        topbar,
+                        dock,
+                        popover,
+                        preview,
+                        settings,
+                    })?;
+                }
+                return Ok(true);
+            }
             PlatformEvent::QuickSettingsWorkerCompleted(result) => {
                 return self.complete_quick_settings_worker(
                     result,
@@ -523,6 +571,17 @@ impl RuntimeSurfaces {
                         &actions, topbar, dock, popover, preview, settings,
                     )?;
                 }
+                return Ok(true);
+            }
+            PlatformEvent::DesktopBlurReady => {
+                if popover.is_visible() {
+                    self.redraw_popover(topbar, dock, popover, preview, settings)?;
+                }
+                return Ok(true);
+            }
+            PlatformEvent::DesktopBlurPrefetch => {
+                self.surface_runtime
+                    .prefetch_desktop_blur(ShowcaseRole::Popover);
                 return Ok(true);
             }
             event => event,
@@ -1407,7 +1466,8 @@ impl RuntimeSurfaces {
                 );
                 return Ok(true);
             }
-            PlatformEvent::QuickSettingsWorkerCompleted(_)
+            PlatformEvent::DockIconSourcesLoaded(_)
+            | PlatformEvent::QuickSettingsWorkerCompleted(_)
             | PlatformEvent::BackgroundAppsLoaded(_)
             | PlatformEvent::ShellMenuActivationCompleted(_) => {
                 unreachable!("handled before routing")
@@ -1419,6 +1479,8 @@ impl RuntimeSurfaces {
                 unreachable!("handled before routing")
             }
             PlatformEvent::TaskbarCreated
+            | PlatformEvent::DesktopBlurPrefetch
+            | PlatformEvent::DesktopBlurReady
             | PlatformEvent::AppBarPositionChanged
             | PlatformEvent::DpiChanged(_)
             | PlatformEvent::DisplayChanged
@@ -2350,7 +2412,7 @@ impl RuntimeSurfaces {
         let topbar_scene = self.topbar_controller.scene();
         self.dock_controller
             .update_surface(dip_surface(windows.dock));
-        let dock_scene = self.dock_controller.scene();
+        let dock_scene = self.dock_scene_for_render(windows.dock);
         let popover_scene = self.popover_controller.scene();
         let quick_settings_scene = self
             .quick_settings_controller

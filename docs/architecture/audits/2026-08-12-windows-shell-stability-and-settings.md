@@ -86,12 +86,20 @@ over a fullscreen application. Popover, app menu, preview, and Settings now
 defer their swapchains until first use; visible lazy surfaces are rematerialized
 across renderer rebuild while hidden ones remain absent. The shared transient
 icon cache is bounded to 256 entries and about 32 MiB of estimated bitmap/key
-storage. Native and routed events also run in alternating bounded batches so a
-single flood cannot monopolize the UI thread. The larger performance work remains:
+storage. Dock icon identity, package/manifest, and filesystem source resolution
+now runs on one process-wide STA worker with latest-per-monitor scheduling,
+bounded target state, generation checks, and an immediate system fallback; only
+bitmap decode and GPU upload remain on the UI/render path. Native and routed
+events also run in alternating bounded batches so a single flood cannot
+monopolize the UI thread. Desktop blur now uses one process-wide GDI worker with
+fair latest-per-popover scheduling, a 16-slot request/result bound, and a 32 MiB
+byte-budgeted CPU raster cache. The UI thread only performs the Direct2D upload
+and falls back immediately when no raster is ready; worker creation failure
+disables this optional effect instead of failing the renderer. The larger
+performance work remains:
 
 - share the D3D/D2D device across monitor slots;
-- move icon resolution/decode and desktop capture off the UI thread;
-- use LRU/byte budgets for icon and capture caches;
+- move remaining icon decode and CPU-side raster work off the UI thread;
 - distinguish redraw, resize, surface recreation, and device recreation.
 
 ## Release gates still open
@@ -100,9 +108,12 @@ single flood cannot monopolize the UI thread. The larger performance work remain
    heartbeat monitoring, bounded crash-loop restart, one-shot safe-mode fallback,
    the bounded/versioned write-ahead journal, and fail-closed native restoration
    of a compatible V1 journal are implemented. A bounded, canonical arming
-   protocol and taskbar fingerprint now exist as pure `shell-core` primitives,
-   but are not connected to either process. Durable journal arming before
-   mutation and crash-at-every-phase recovery testing on real Windows remain open.
+   protocol and taskbar fingerprint now exist as pure `shell-core` primitives.
+   The watchdog also has exclusive durable `Prepared` creation and an
+   authenticated `Prepared` -> `Applied` transition that preserves a different
+   or corrupt journal. These primitives are not connected to either process;
+   arming before native mutation and crash-at-every-phase recovery testing on
+   real Windows remain open.
 2. Validate the implemented single-instance-per-user-and-session activation
    forwarding under concurrent launch, elevated/medium-integrity launch, RDP,
    Fast User Switching, and primary-process failure during startup.
@@ -113,17 +124,20 @@ single flood cannot monopolize the UI thread. The larger performance work remain
    controller actions. Snapshot-diffed focus/property/structure notifications
    are implemented and remain part of the native validation gate; tooltips and
    providers for the remaining custom D2D surfaces are still open.
-4. Replace or explicitly capability-gate the remaining private Windows contracts
-   (DND and audio device policy) with supported `ms-settings:` fallbacks. Night
-   Light now opens Microsoft's documented `ms-settings:nightlight` page and no
-   longer mutates private CloudStore records.
-5. Run Windows quality gates and native soak tests across mixed DPI, monitor
+4. Run Windows quality gates and native soak tests across mixed DPI, monitor
    attach/detach, Explorer restart, sleep/resume, device loss, WARP, high
    contrast, and reduced motion.
-6. Wire the synchronous `--restore-only` contract into supported update and
+5. Wire the synchronous `--restore-only` contract into supported update and
    uninstall pipelines. The checked-in scripts expose and validate the contract,
    but merely copying them into MSIX/Steam layouts does not register a platform
    lifecycle hook.
+
+The private Windows-policy gate is closed in this revision: Night Light, Do not
+disturb, and default audio-output selection now use Microsoft's documented
+`ms-settings:nightlight`, `ms-settings:quiethours`, and `ms-settings:sound`
+routes. Stable builds no longer compile the CloudStore dependency, WNF
+quiet-hours bridge, or undocumented `IPolicyConfig` COM ABI. Documented Core
+Audio enumeration, mute, master volume, and per-session volume remain native.
 
 ## Verification boundary
 

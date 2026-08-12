@@ -5,6 +5,7 @@ mod instance;
 mod journal;
 mod process_supervisor;
 mod recovery;
+mod recovery_coordinator;
 mod supervisor;
 mod taskbar_restore;
 #[cfg(windows)]
@@ -21,13 +22,16 @@ pub use instance::{InstanceDecision, InstanceProbe, classify_instance};
 pub use journal::{
     MAX_RECOVERY_JOURNAL_BYTES, RECOVERY_JOURNAL_FILE_NAME, RECOVERY_JOURNAL_SCHEMA_V1,
     RecoveryJournalError, RecoveryJournalPhase, RecoveryJournalV1, TaskbarBounds, TaskbarSnapshot,
-    load_recovery_journal, recovery_journal_path, remove_recovery_journal, save_recovery_journal,
+    create_prepared_recovery_journal, load_recovery_journal, mark_recovery_journal_applied,
+    recovery_journal_path, remove_recovery_journal, remove_recovery_journal_for_transaction,
+    save_recovery_journal,
 };
 pub use process_supervisor::{ProcessSupervisorConfig, supervise_process};
 pub use recovery::{
     Consent, ExplorerTaskbarState, RecoveryHook, RecoveryShortcut, SafeModeProfile, TaskbarAction,
     TaskbarMutation, TaskbarRequest, TaskbarTransaction, begin_taskbar_transaction,
 };
+pub use recovery_coordinator::{RecoveryCoordinator, RecoveryCoordinatorError};
 pub use shell_diagnostics::RetentionPolicy as RotationPolicy;
 pub use supervisor::{
     ChildCleanup, ChildEvent, RestartDelay, SupervisorAction, SupervisorConfig, SupervisorState,

@@ -91,12 +91,6 @@ mod win32_shell_observation;
 mod win32_pointer;
 
 #[cfg(windows)]
-#[allow(
-    unsafe_code,
-    reason = "Windows Notification Facility reads and version-probed quiet-hours interop are isolated here"
-)]
-mod win32_do_not_disturb;
-#[cfg(windows)]
 mod win32_dock_render;
 mod win32_dock_visibility;
 #[cfg(windows)]
@@ -235,6 +229,11 @@ mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
 mod dock_controller_visibility;
+#[allow(
+    unsafe_code,
+    reason = "the owned Dock icon worker initializes COM and posts only a wake message"
+)]
+mod dock_icon_worker;
 mod dock_launch;
 mod dock_placement;
 mod dock_types;
@@ -462,7 +461,10 @@ pub(crate) enum PlatformEvent {
     MediaTransportCompleted(media_session_types::MediaTransportResult),
     NightLightCompleted(night_light_worker::NightLightWorkerResult),
     BrightnessCompleted(brightness_worker::BrightnessWorkerResult),
+    DockIconSourcesLoaded(dock_icon_worker::DockIconResolutionResult),
     DeviceLost,
+    DesktopBlurPrefetch,
+    DesktopBlurReady,
     DockPointer(DockPointerSample),
     DockEdgeProbe,
     DockAnimationFrame,

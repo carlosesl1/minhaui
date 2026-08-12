@@ -72,13 +72,6 @@ impl RuntimeSurfaces {
                         self.quick_settings_controller
                             .apply_capability_update(control);
                     }
-                    crate::quick_settings_worker::QuickSettingsWorkerAction::AudioChanged(
-                        snapshot,
-                    ) => {
-                        self.quick_settings_audio_cache = snapshot.clone();
-                        self.quick_settings_controller.replace_audio_panel(snapshot);
-                        reflow = true;
-                    }
                     crate::quick_settings_worker::QuickSettingsWorkerAction::OpenSystemRoute(
                         route,
                     ) => {
@@ -733,17 +726,6 @@ impl RuntimeSurfaces {
                         crate::win32_quick_settings_actions::QuickSettingsActionResult::Applied(control) => {
                             self.quick_settings_controller.apply_capability_update(control);
                             redraw_popover = true;
-                        }
-                        crate::win32_quick_settings_actions::QuickSettingsActionResult::AudioChanged(snapshot) => {
-                            self.quick_settings_audio_cache = snapshot.clone();
-                            self.quick_settings_controller.replace_audio_panel(snapshot);
-                            self.quick_settings_generation =
-                                self.quick_settings_worker.request_refresh(
-                                    false,
-                                    crate::win32_event_queue::native_window_id(topbar.hwnd),
-                                );
-                            redraw_popover = true;
-                            reflow_popover = true;
                         }
                         crate::win32_quick_settings_actions::QuickSettingsActionResult::OpenSystemRoute(route) => {
                             let result = crate::win32_system_actions::apply(

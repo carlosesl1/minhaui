@@ -236,19 +236,12 @@ fn direct_controls() -> Vec<QuickControlCapability> {
     .into_iter()
     .map(|(kind, label, detail)| {
         let availability = if kind == QuickControlKind::Focus {
-            let mode = crate::win32_do_not_disturb::read_mode().ok();
-            let availability = mode.map_or(
-                QuickControlAvailability::RouteOnly { active: None },
-                |mode| QuickControlAvailability::Available {
-                    active: mode.active(),
-                },
-            );
             return QuickControlCapability::new(
                 kind,
-                availability,
+                QuickControlAvailability::RouteOnly { active: None },
                 label,
-                mode.map_or("Open settings", crate::DoNotDisturbMode::label),
-                mode.map(crate::DoNotDisturbMode::value),
+                "Open settings",
+                None,
             );
         } else if kind == QuickControlKind::NightLight {
             QuickControlAvailability::RouteOnly { active: None }
@@ -379,17 +372,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn do_not_disturb_reports_the_real_mode_and_only_claims_direct_control_when_probed() {
+    fn do_not_disturb_is_always_routed_through_documented_windows_settings() {
         let focus = direct_controls()
             .into_iter()
             .find(|control| control.kind() == QuickControlKind::Focus)
             .expect("focus control");
 
         assert_eq!(focus.label(), "Do not disturb");
-        assert!(matches!(
-            focus.detail(),
-            "Off" | "Priority only" | "Alarms only" | "Open settings"
-        ));
+        assert_eq!(focus.detail(), "Open settings");
+        assert_eq!(
+            focus.availability(),
+            QuickControlAvailability::RouteOnly { active: None }
+        );
+        assert_eq!(focus.value(), None);
     }
 
     #[test]

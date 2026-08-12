@@ -5,7 +5,7 @@ use std::path::Path;
 use thiserror::Error;
 
 #[cfg(any(windows, test))]
-use crate::remove_recovery_journal;
+use crate::remove_recovery_journal_for_transaction;
 use crate::{
     RecoveryJournalError, RecoveryJournalV1, TaskbarBounds, TaskbarSnapshot, load_recovery_journal,
 };
@@ -263,6 +263,12 @@ fn restore_with_backend<B: TaskbarRestoreBackend>(
     journal: &RecoveryJournalV1,
     backend: &B,
 ) -> Result<TaskbarRestoreOutcome, TaskbarRestoreError> {
+    let transaction_id = journal.transaction_id.parse().map_err(|source| {
+        RecoveryJournalError::InvalidTransactionId {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
     let observations = backend.observe()?;
     let plan = plan_taskbar_restore(journal, &observations)?;
     backend.preflight(journal, &plan)?;
@@ -270,7 +276,7 @@ fn restore_with_backend<B: TaskbarRestoreBackend>(
         return Ok(TaskbarRestoreOutcome::Checked);
     }
     backend.apply_and_verify(journal, &plan)?;
-    remove_recovery_journal(path)?;
+    remove_recovery_journal_for_transaction(path, transaction_id)?;
     Ok(TaskbarRestoreOutcome::Restored)
 }
 
@@ -396,9 +402,11 @@ mod tests {
         restore_with_backend,
     };
     use crate::{
-        RecoveryJournalPhase, RecoveryJournalV1, TaskbarBounds, TaskbarSnapshot,
-        load_recovery_journal, recovery_journal_path, save_recovery_journal,
+        RecoveryJournalError, RecoveryJournalPhase, RecoveryJournalV1, TaskbarBounds,
+        TaskbarSnapshot, create_prepared_recovery_journal, load_recovery_journal,
+        recovery_journal_path, remove_recovery_journal_for_transaction, save_recovery_journal,
     };
+    use shell_core::RecoveryTransactionId;
     use std::cell::Cell;
     use std::error::Error;
     use std::fs;
@@ -438,6 +446,12 @@ mod tests {
         fail_apply: bool,
     }
 
+    struct AbaReplacingBackend {
+        path: PathBuf,
+        original_transaction: RecoveryTransactionId,
+        replacement_transaction: RecoveryTransactionId,
+    }
+
     impl FakeBackend {
         fn healthy() -> Self {
             Self {
@@ -475,9 +489,43 @@ mod tests {
         }
     }
 
+    impl TaskbarRestoreBackend for AbaReplacingBackend {
+        fn observe(&self) -> Result<Vec<TaskbarObservation>, TaskbarRestoreError> {
+            Ok(sample_observations())
+        }
+
+        fn preflight(
+            &self,
+            _journal: &RecoveryJournalV1,
+            _plan: &TaskbarRestorePlan,
+        ) -> Result<(), TaskbarRestoreError> {
+            Ok(())
+        }
+
+        fn apply_and_verify(
+            &self,
+            journal: &RecoveryJournalV1,
+            _plan: &TaskbarRestorePlan,
+        ) -> Result<(), TaskbarRestoreError> {
+            remove_recovery_journal_for_transaction(&self.path, self.original_transaction)?;
+            create_prepared_recovery_journal(
+                &self.path,
+                self.replacement_transaction,
+                journal.appbar_state,
+                journal.snapshots.clone(),
+            )?;
+            Ok(())
+        }
+    }
+
+    fn transaction_id(seed: u8) -> RecoveryTransactionId {
+        RecoveryTransactionId::try_from_bytes([seed; 16])
+            .expect("nonzero test transaction id should be valid")
+    }
+
     fn sample_journal() -> RecoveryJournalV1 {
         RecoveryJournalV1::new(
-            "transaction-restore-1",
+            transaction_id(1).to_string(),
             RecoveryJournalPhase::Applied,
             1,
             vec![TaskbarSnapshot::new(
@@ -596,6 +644,41 @@ mod tests {
             TaskbarRestoreOutcome::NoJournal
         );
         assert_eq!(backend.apply_count.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_restore_cannot_delete_a_replacement_journal() -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::create("restore-aba")?;
+        let path = directory.journal_path();
+        let original_transaction = transaction_id(2);
+        let replacement_transaction = transaction_id(3);
+        let journal = create_prepared_recovery_journal(
+            &path,
+            original_transaction,
+            1,
+            sample_journal().snapshots,
+        )?;
+        let backend = AbaReplacingBackend {
+            path: path.clone(),
+            original_transaction,
+            replacement_transaction,
+        };
+
+        assert!(matches!(
+            restore_with_backend(&path, false, &journal, &backend),
+            Err(TaskbarRestoreError::Journal(
+                RecoveryJournalError::TransactionMismatch {
+                    expected,
+                    found,
+                    ..
+                }
+            )) if expected == original_transaction && found == replacement_transaction
+        ));
+        assert_eq!(
+            load_recovery_journal(&path)?.map(|journal| journal.transaction_id),
+            Some(replacement_transaction.to_string())
+        );
         Ok(())
     }
 }

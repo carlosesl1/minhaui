@@ -215,6 +215,7 @@ mod tests {
         assert_eq!(SystemRoute::Network.uri(), "ms-settings:network-status");
         assert_eq!(SystemRoute::Wifi.uri(), "ms-settings:network-wifi");
         assert_eq!(SystemRoute::Bluetooth.uri(), "ms-settings:bluetooth");
+        assert_eq!(SystemRoute::Sound.uri(), "ms-settings:sound");
         assert_eq!(SystemRoute::NightLight.uri(), "ms-settings:nightlight");
         assert_eq!(SystemRoute::Focus.uri(), "ms-settings:quiethours");
         assert_eq!(SystemRoute::DateTime.uri(), "ms-settings:dateandtime");

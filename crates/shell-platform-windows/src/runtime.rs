@@ -76,6 +76,8 @@ impl RuntimeOrchestrator {
                 RuntimeAction::None
             }
             PlatformEvent::QuickSettingsRefresh(_)
+            | PlatformEvent::DesktopBlurPrefetch
+            | PlatformEvent::DesktopBlurReady
             | PlatformEvent::QuickSettingsWorkerCompleted(_)
             | PlatformEvent::MediaSessionsChanged(_)
             | PlatformEvent::MediaTransportCompleted(_)
@@ -121,7 +123,9 @@ impl RuntimeOrchestrator {
             | PlatformEvent::ExternalMenuPopupStarted { .. }
             | PlatformEvent::ExternalMenuPopupEnded { .. } => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
-            PlatformEvent::Destroyed => RuntimeAction::None,
+            PlatformEvent::DockIconSourcesLoaded(_) | PlatformEvent::Destroyed => {
+                RuntimeAction::None
+            }
         };
         if matches!(
             action,

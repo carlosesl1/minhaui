@@ -145,7 +145,7 @@ impl RuntimeSurfaces {
         let scene_started = diagnostic_started.map(|_| Instant::now());
         self.dock_controller
             .update_surface(dip_surface(windows.dock));
-        let dock_scene = self.dock_controller.scene();
+        let dock_scene = self.dock_scene_for_render(windows.dock);
         let scene_duration = scene_started.map_or(Duration::ZERO, |started| started.elapsed());
         let present_started = diagnostic_started.map(|_| Instant::now());
         let update = present_frame(
@@ -182,7 +182,7 @@ impl RuntimeSurfaces {
     fn rebuild_dock_surface(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
         self.dock_controller
             .update_surface(dip_surface(windows.dock));
-        let scene = self.dock_controller.scene();
+        let scene = self.dock_scene_for_render(windows.dock);
         let (width, height) = windows.dock.surface_physical_size();
         let scenes = ShellScenes {
             topbar: None,

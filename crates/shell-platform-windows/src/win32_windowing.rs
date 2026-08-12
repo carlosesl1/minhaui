@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use shell_renderer::native::DESKTOP_BLUR_WAKE_MESSAGE;
 use shell_renderer::{DipPoint, PhysicalRect};
 use windows::Win32::Foundation::{
     E_UNEXPECTED, HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0,
@@ -18,12 +19,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY,
     WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_GETOBJECT, WM_KEYDOWN,
     WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-    WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+    WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SHOWWINDOW, WM_SIZE, WM_TIMER,
 };
 use windows::core::Result;
 
 use crate::background_apps_worker::BACKGROUND_APPS_WAKE_MESSAGE;
 use crate::brightness_worker::BRIGHTNESS_WAKE_MESSAGE;
+use crate::dock_icon_worker::DOCK_ICON_WAKE_MESSAGE;
 use crate::media_session_worker::MEDIA_SESSION_WAKE_MESSAGE;
 use crate::night_light_worker::NIGHT_LIGHT_WAKE_MESSAGE;
 use crate::quick_settings_worker::QUICK_SETTINGS_WAKE_MESSAGE;
@@ -293,7 +295,15 @@ pub(super) unsafe extern "system" fn window_proc(
         || message == EXTERNAL_MENU_WAKE_MESSAGE
         || message == SHELL_MENU_WAKE_MESSAGE
         || message == QUICK_SETTINGS_WAKE_MESSAGE
+        || message == DOCK_ICON_WAKE_MESSAGE
     {
+        return LRESULT(0);
+    }
+    if message == DESKTOP_BLUR_WAKE_MESSAGE && is_popover_window(hwnd) {
+        queue_event(RoutedPlatformEvent::window(
+            hwnd,
+            PlatformEvent::DesktopBlurReady,
+        ));
         return LRESULT(0);
     }
     if is_position_notification(message, wparam.0) {
@@ -304,6 +314,15 @@ pub(super) unsafe extern "system" fn window_proc(
         return LRESULT(0);
     }
     match message {
+        WM_SHOWWINDOW if is_popover_window(hwnd) && wparam.0 == 0 => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DesktopBlurPrefetch,
+            ));
+            // SAFETY: Default visibility bookkeeping still receives the original
+            // pointer-free message after the prefetch hint has been queued.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         WM_MOUSEWHEEL if is_popover_window(hwnd) => {
             let delta = ((wparam.0 >> 16) as u16) as i16;
             queue_event(RoutedPlatformEvent::window(
