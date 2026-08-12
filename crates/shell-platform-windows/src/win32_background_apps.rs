@@ -22,9 +22,11 @@ use crate::background_apps::{
     BackgroundAppEntry, MAX_NOTIFICATION_REGISTRATIONS, NotificationRegistration, RunningProcess,
     build_background_apps, merge_background_apps,
 };
-use crate::win32_tray_source::{
-    NativeTrayCapture, NativeTrayCaptureOutcome, capture_native_tray_apps,
-};
+#[cfg(not(feature = "experimental-tray-bridge"))]
+use crate::win32_tray_source::NativeTrayCaptureError;
+#[cfg(feature = "experimental-tray-bridge")]
+use crate::win32_tray_source::capture_native_tray_apps;
+use crate::win32_tray_source::{NativeTrayCapture, NativeTrayCaptureOutcome};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum BackgroundAppsError {
@@ -126,10 +128,23 @@ pub(super) fn capture_background_apps(
     capture_background_apps_with(
         generation,
         |generation| {
-            let mut native = capture_native_tray_apps(generation);
-            let bridge = crate::win32_tray_bridge::capture_tray_bridge_apps(generation);
-            native.entries = merge_background_apps(native.entries, bridge);
-            native
+            #[cfg(feature = "experimental-tray-bridge")]
+            {
+                let mut native = capture_native_tray_apps(generation);
+                let bridge = crate::win32_tray_bridge::capture_tray_bridge_apps(generation);
+                native.entries = merge_background_apps(native.entries, bridge);
+                native
+            }
+            #[cfg(not(feature = "experimental-tray-bridge"))]
+            {
+                let _ = generation;
+                NativeTrayCapture {
+                    entries: Vec::new(),
+                    outcome: NativeTrayCaptureOutcome::Unavailable(
+                        NativeTrayCaptureError::Unsupported,
+                    ),
+                }
+            }
         },
         || fallback_capture,
     )

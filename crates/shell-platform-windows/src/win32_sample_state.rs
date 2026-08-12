@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 
-use shell_config::{DockAlignmentPreference, ShellConfigV1};
+use shell_config::{DockAlignmentPreference, ShellConfigV1, TopbarDensityPreference};
 use shell_core::{AppId, DockItem, DockItemId, ShellState, WindowId};
 use shell_renderer::{DockAlignment, DockLayoutConfig, TopbarDensity};
 use windows::core::Result;
@@ -45,7 +45,7 @@ pub(super) fn sample_topbar_controller(
 ) -> Result<TopbarController> {
     TopbarController::new(
         crate::win32_config::state_from_config(config, ShellState::default()),
-        density_for_width(width),
+        density_for_width(width, config.topbar().density()),
     )
     .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))
 }
@@ -70,8 +70,11 @@ pub(super) fn dock_runtime_config(config: &ShellConfigV1) -> DockRuntimeConfig {
         .with_autohide(config.autohide())
 }
 
-pub(super) const fn density_for_width(width: i32) -> TopbarDensity {
-    if width < 700 {
+pub(super) const fn density_for_width(
+    width: i32,
+    preference: TopbarDensityPreference,
+) -> TopbarDensity {
+    if width < 700 || matches!(preference, TopbarDensityPreference::Compact) {
         TopbarDensity::Compact
     } else {
         TopbarDensity::Comfortable
@@ -88,7 +91,9 @@ const fn invalid_arg() -> windows::core::HRESULT {
 
 #[cfg(test)]
 mod tests {
-    use shell_config::{DockAlignmentPreference, DockSettings, ShellConfigV1};
+    use shell_config::{
+        DockAlignmentPreference, DockSettings, ShellConfigV1, TopbarDensityPreference,
+    };
     use shell_renderer::DockAlignment;
 
     use super::dock_runtime_config;
@@ -123,5 +128,21 @@ mod tests {
         assert_eq!(runtime.layout().padding(), 29.0);
         assert_eq!(runtime.dock_height_dip(), 112.0);
         assert!(runtime.autohide());
+    }
+
+    #[test]
+    fn topbar_density_respects_user_preference_and_narrow_safety_fallback() {
+        assert_eq!(
+            super::density_for_width(1_920, TopbarDensityPreference::Compact),
+            shell_renderer::TopbarDensity::Compact
+        );
+        assert_eq!(
+            super::density_for_width(1_920, TopbarDensityPreference::Comfortable),
+            shell_renderer::TopbarDensity::Comfortable
+        );
+        assert_eq!(
+            super::density_for_width(640, TopbarDensityPreference::Comfortable),
+            shell_renderer::TopbarDensity::Compact
+        );
     }
 }

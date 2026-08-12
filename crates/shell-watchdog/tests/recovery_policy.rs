@@ -20,7 +20,24 @@ fn taskbar_policy_stays_off_when_consent_is_missing() {
         when_transaction.startup_action(),
         TaskbarAction::LeaveUntouched
     );
-    assert!(when_transaction.recovery().is_always_available());
+    assert!(!when_transaction.recovery().is_always_available());
+}
+
+#[test]
+fn recovery_does_not_touch_taskbar_when_startup_did_not_mutate_it() {
+    let request = TaskbarRequest::new(
+        TaskbarPolicy::Hide,
+        Consent::Missing,
+        TaskbarMutation::Enabled,
+        SafeModeProfile::normal(),
+    );
+    let transaction = begin_taskbar_transaction(ExplorerTaskbarState::Visible, request);
+
+    assert_eq!(transaction.startup_action(), TaskbarAction::LeaveUntouched);
+    assert_eq!(
+        transaction.restore_action(RecoveryHook::CrashDetected),
+        TaskbarAction::LeaveUntouched
+    );
 }
 
 #[test]

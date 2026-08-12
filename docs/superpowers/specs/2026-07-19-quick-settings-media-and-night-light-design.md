@@ -1,5 +1,10 @@
 # Quick Settings Media Player and Reliable Night Light Design
 
+> **Partially superseded (2026-08-12):** the media design remains relevant, but
+> the stable Night Light behavior is now a route to the documented
+> `ms-settings:nightlight` page. The private CloudStore mutation described below
+> must not be restored in stable builds.
+
 **Date:** 2026-07-19
 
 **Status:** Approved design

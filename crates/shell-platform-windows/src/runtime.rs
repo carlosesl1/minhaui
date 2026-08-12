@@ -72,8 +72,12 @@ impl RuntimeOrchestrator {
             PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated => {
                 RuntimeAction::RepositionAndRebuild
             }
-            PlatformEvent::AppBarPositionChanged => RuntimeAction::None,
+            PlatformEvent::ActivateExistingInstance | PlatformEvent::AppBarPositionChanged => {
+                RuntimeAction::None
+            }
             PlatformEvent::QuickSettingsRefresh(_)
+            | PlatformEvent::DesktopBlurPrefetch
+            | PlatformEvent::DesktopBlurReady
             | PlatformEvent::QuickSettingsWorkerCompleted(_)
             | PlatformEvent::MediaSessionsChanged(_)
             | PlatformEvent::MediaTransportCompleted(_)
@@ -105,7 +109,12 @@ impl RuntimeOrchestrator {
             | PlatformEvent::AppMenuPointerReleased(_)
             | PlatformEvent::AppMenuDismissed => RuntimeAction::None,
             PlatformEvent::DismissTransientOverlays => RuntimeAction::None,
-            PlatformEvent::SettingsKey(_) => RuntimeAction::None,
+            PlatformEvent::SettingsKey(_)
+            | PlatformEvent::SettingsPointerActivated(_)
+            | PlatformEvent::SettingsAutomation(_)
+            | PlatformEvent::SettingsScroll(_)
+            | PlatformEvent::SettingsResized
+            | PlatformEvent::SettingsConfigCommitted(_) => RuntimeAction::None,
             PlatformEvent::DockDrop { .. }
             | PlatformEvent::SyncWindows
             | PlatformEvent::ShellObservationLoaded(_)
@@ -114,7 +123,9 @@ impl RuntimeOrchestrator {
             | PlatformEvent::ExternalMenuPopupStarted { .. }
             | PlatformEvent::ExternalMenuPopupEnded { .. } => RuntimeAction::None,
             PlatformEvent::QaExitRequested | PlatformEvent::CloseRequested => RuntimeAction::Quit,
-            PlatformEvent::Destroyed => RuntimeAction::None,
+            PlatformEvent::DockIconSourcesLoaded(_) | PlatformEvent::Destroyed => {
+                RuntimeAction::None
+            }
         };
         if matches!(
             action,

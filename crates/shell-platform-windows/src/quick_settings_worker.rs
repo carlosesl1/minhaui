@@ -83,18 +83,12 @@ pub(crate) enum QuickSettingsRequestKind {
 }
 
 pub(crate) const fn runs_on_worker(intent: &QuickSettingsIntent) -> bool {
-    matches!(
-        intent,
-        QuickSettingsIntent::SetDoNotDisturbMode(_)
-            | QuickSettingsIntent::SetAudioSessionVolume { .. }
-            | QuickSettingsIntent::SelectAudioOutput(_)
-    )
+    matches!(intent, QuickSettingsIntent::SetAudioSessionVolume { .. })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum QuickSettingsWorkerAction {
     Applied(QuickControlCapability),
-    AudioChanged(AudioPanelSnapshot),
     OpenSystemRoute(SystemRoute),
     NoChange,
     Failed(String),
@@ -108,9 +102,6 @@ impl From<crate::win32_quick_settings_actions::QuickSettingsActionResult>
             crate::win32_quick_settings_actions::QuickSettingsActionResult::Applied(control) => {
                 Self::Applied(control)
             }
-            crate::win32_quick_settings_actions::QuickSettingsActionResult::AudioChanged(
-                snapshot,
-            ) => Self::AudioChanged(snapshot),
             crate::win32_quick_settings_actions::QuickSettingsActionResult::OpenSystemRoute(
                 route,
             ) => Self::OpenSystemRoute(route),
@@ -434,7 +425,7 @@ mod tests {
 
     #[test]
     fn only_blocking_native_intents_are_routed_to_the_worker() {
-        assert!(runs_on_worker(
+        assert!(!runs_on_worker(
             &crate::QuickSettingsIntent::SetDoNotDisturbMode(crate::DoNotDisturbMode::PriorityOnly)
         ));
         assert!(runs_on_worker(
@@ -442,6 +433,9 @@ mod tests {
                 id: crate::AudioSessionId::new(1),
                 value: 72,
             }
+        ));
+        assert!(!runs_on_worker(
+            &crate::QuickSettingsIntent::SelectAudioOutput(crate::AudioOutputId::new(1))
         ));
         assert!(!runs_on_worker(
             &crate::QuickSettingsIntent::OpenSoundSettings

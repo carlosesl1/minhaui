@@ -26,6 +26,7 @@ pub(crate) struct NativeIconCache {
     wic: IWICImagingFactory,
     bitmaps: DomainIconEntries<CachedIcon>,
     encoded_bitmaps: HashMap<u64, ID2D1Bitmap1>,
+    access_epoch: u64,
 }
 
 enum CachedIcon {
@@ -35,6 +36,14 @@ enum CachedIcon {
 
 const MISSING_ICON_RETRY: Duration = Duration::from_secs(5);
 
+// Shared icons are fed by transient surfaces such as background-app and audio
+// lists. Unlike Dock icons, those sources do not have a stable scene whose
+// membership can be retained explicitly, so keep their device-dependent
+// bitmaps under both a cardinality and an approximate GPU-memory budget.
+const SHARED_ICON_CACHE_MAX_ENTRIES: usize = 256;
+const SHARED_ICON_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const CACHE_ENTRY_OVERHEAD_BYTES: usize = 128;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NativeIconDomain {
     Shared,
@@ -42,8 +51,14 @@ enum NativeIconDomain {
 }
 
 struct DomainIconEntries<T> {
-    shared: HashMap<String, T>,
-    dock: HashMap<String, T>,
+    shared: HashMap<String, CacheEntry<T>>,
+    dock: HashMap<String, CacheEntry<T>>,
+}
+
+struct CacheEntry<T> {
+    value: T,
+    estimated_bytes: usize,
+    last_used: u64,
 }
 
 impl<T> Default for DomainIconEntries<T> {
@@ -56,14 +71,14 @@ impl<T> Default for DomainIconEntries<T> {
 }
 
 impl<T> DomainIconEntries<T> {
-    fn get(&self, domain: NativeIconDomain, source: &str) -> Option<&T> {
+    fn get_mut(&mut self, domain: NativeIconDomain, source: &str) -> Option<&mut CacheEntry<T>> {
         match domain {
-            NativeIconDomain::Shared => self.shared.get(source),
-            NativeIconDomain::Dock => self.dock.get(source),
+            NativeIconDomain::Shared => self.shared.get_mut(source),
+            NativeIconDomain::Dock => self.dock.get_mut(source),
         }
     }
 
-    fn map_mut(&mut self, domain: NativeIconDomain) -> &mut HashMap<String, T> {
+    fn map_mut(&mut self, domain: NativeIconDomain) -> &mut HashMap<String, CacheEntry<T>> {
         match domain {
             NativeIconDomain::Shared => &mut self.shared,
             NativeIconDomain::Dock => &mut self.dock,
@@ -81,6 +96,33 @@ fn retain_domain_entries<T>(
         .retain(|source, _| is_active(source.as_str()));
 }
 
+fn prune_lru<T>(
+    entries: &mut HashMap<String, CacheEntry<T>>,
+    max_entries: usize,
+    max_estimated_bytes: usize,
+) {
+    let mut estimated_bytes = entries
+        .values()
+        .map(|entry| entry.estimated_bytes)
+        .fold(0usize, usize::saturating_add);
+    while entries.len() > max_entries || estimated_bytes > max_estimated_bytes {
+        let Some(oldest_source) = entries
+            .iter()
+            .min_by(|(left_source, left), (right_source, right)| {
+                left.last_used
+                    .cmp(&right.last_used)
+                    .then_with(|| left_source.cmp(right_source))
+            })
+            .map(|(source, _)| source.clone())
+        else {
+            break;
+        };
+        if let Some(removed) = entries.remove(&oldest_source) {
+            estimated_bytes = estimated_bytes.saturating_sub(removed.estimated_bytes);
+        }
+    }
+}
+
 impl NativeIconCache {
     pub(crate) fn new(context: &ID2D1DeviceContext) -> Result<Self> {
         // SAFETY: Category 8 (FFI boundary). COM is initialized on the UI thread;
@@ -92,6 +134,7 @@ impl NativeIconCache {
             wic,
             bitmaps: DomainIconEntries::default(),
             encoded_bitmaps: HashMap::new(),
+            access_epoch: 0,
         })
     }
 
@@ -191,20 +234,68 @@ impl NativeIconCache {
     }
 
     fn bitmap_for(&mut self, domain: NativeIconDomain, source: &str) -> Option<ID2D1Bitmap1> {
-        let reload = match self.bitmaps.get(domain, source) {
-            Some(CachedIcon::Bitmap(_)) => false,
-            Some(CachedIcon::Missing(attempted_at)) => attempted_at.elapsed() >= MISSING_ICON_RETRY,
-            None => true,
-        };
-        if reload {
-            let icon = self
-                .load(source)
-                .map_or_else(|_| CachedIcon::Missing(Instant::now()), CachedIcon::Bitmap);
-            self.bitmaps.map_mut(domain).insert(source.to_owned(), icon);
+        let last_used = self.next_access_epoch();
+        if let Some(entry) = self.bitmaps.get_mut(domain, source) {
+            entry.last_used = last_used;
+            match &entry.value {
+                CachedIcon::Bitmap(bitmap) => return Some(bitmap.clone()),
+                CachedIcon::Missing(attempted_at)
+                    if !missing_icon_retry_due(*attempted_at, Instant::now()) =>
+                {
+                    return None;
+                }
+                CachedIcon::Missing(_) => {}
+            }
         }
-        match self.bitmaps.get(domain, source) {
-            Some(CachedIcon::Bitmap(bitmap)) => Some(bitmap.clone()),
-            Some(CachedIcon::Missing(_)) | None => None,
+
+        match self.load(source) {
+            Ok(bitmap) => {
+                let estimated_bytes = estimated_bitmap_bytes(&bitmap, source);
+                if domain == NativeIconDomain::Shared
+                    && estimated_bytes > SHARED_ICON_CACHE_MAX_BYTES
+                {
+                    // An unusually large source can still render, but cannot
+                    // evict the whole cache or permanently exceed its budget.
+                    return Some(bitmap);
+                }
+                self.bitmaps.map_mut(domain).insert(
+                    source.to_owned(),
+                    CacheEntry {
+                        value: CachedIcon::Bitmap(bitmap.clone()),
+                        estimated_bytes,
+                        last_used,
+                    },
+                );
+                self.prune_shared_icons(domain);
+                Some(bitmap)
+            }
+            Err(_) => {
+                self.bitmaps.map_mut(domain).insert(
+                    source.to_owned(),
+                    CacheEntry {
+                        value: CachedIcon::Missing(Instant::now()),
+                        estimated_bytes: estimated_entry_overhead(source),
+                        last_used,
+                    },
+                );
+                self.prune_shared_icons(domain);
+                None
+            }
+        }
+    }
+
+    fn next_access_epoch(&mut self) -> u64 {
+        self.access_epoch = self.access_epoch.saturating_add(1);
+        self.access_epoch
+    }
+
+    fn prune_shared_icons(&mut self, domain: NativeIconDomain) {
+        if domain == NativeIconDomain::Shared {
+            prune_lru(
+                &mut self.bitmaps.shared,
+                SHARED_ICON_CACHE_MAX_ENTRIES,
+                SHARED_ICON_CACHE_MAX_BYTES,
+            );
         }
     }
 
@@ -285,6 +376,26 @@ impl NativeIconCache {
         // and Direct2D retains the returned device-dependent bitmap.
         unsafe { self.context.CreateBitmapFromWicBitmap(&converter, None) }
     }
+}
+
+fn estimated_entry_overhead(source: &str) -> usize {
+    CACHE_ENTRY_OVERHEAD_BYTES.saturating_add(source.len())
+}
+
+fn missing_icon_retry_due(attempted_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(attempted_at) >= MISSING_ICON_RETRY
+}
+
+fn estimated_bitmap_bytes(bitmap: &ID2D1Bitmap1, source: &str) -> usize {
+    // SAFETY: the bitmap is a live COM object and this call only reads its
+    // immutable pixel dimensions. Four bytes per PBGRA pixel approximates the
+    // device allocation; source/key overhead is included to bound negatives
+    // and small icons as well.
+    let size = unsafe { bitmap.GetPixelSize() };
+    (size.width as usize)
+        .saturating_mul(size.height as usize)
+        .saturating_mul(4)
+        .saturating_add(estimated_entry_overhead(source))
 }
 
 #[must_use]
@@ -378,9 +489,16 @@ impl Drop for IconHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
     use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 
-    use super::{DomainIconEntries, NativeIconDomain, aspect_fit_rect, retain_domain_entries};
+    use super::{
+        CacheEntry, CachedIcon, DomainIconEntries, MISSING_ICON_RETRY, NativeIconDomain,
+        SHARED_ICON_CACHE_MAX_BYTES, SHARED_ICON_CACHE_MAX_ENTRIES, aspect_fit_rect,
+        missing_icon_retry_due, prune_lru, retain_domain_entries,
+    };
 
     const OPTICAL_BOX: D2D_RECT_F = D2D_RECT_F {
         left: 0.0,
@@ -394,21 +512,114 @@ mod tests {
         let mut entries = DomainIconEntries::default();
         entries
             .map_mut(NativeIconDomain::Shared)
-            .insert("popover".to_owned(), 1);
+            .insert("popover".to_owned(), entry(1, 1, 1));
         entries
             .map_mut(NativeIconDomain::Dock)
-            .insert("active".to_owned(), 2);
+            .insert("active".to_owned(), entry(2, 1, 1));
         entries
             .map_mut(NativeIconDomain::Dock)
-            .insert("stale".to_owned(), 3);
+            .insert("stale".to_owned(), entry(3, 1, 1));
 
         retain_domain_entries(&mut entries, NativeIconDomain::Dock, |source| {
             source == "active"
         });
 
-        assert_eq!(entries.get(NativeIconDomain::Shared, "popover"), Some(&1));
-        assert_eq!(entries.get(NativeIconDomain::Dock, "active"), Some(&2));
-        assert_eq!(entries.get(NativeIconDomain::Dock, "stale"), None);
+        assert_eq!(
+            entries
+                .get_mut(NativeIconDomain::Shared, "popover")
+                .map(|entry| entry.value),
+            Some(1)
+        );
+        assert_eq!(
+            entries
+                .get_mut(NativeIconDomain::Dock, "active")
+                .map(|entry| entry.value),
+            Some(2)
+        );
+        assert!(entries.get_mut(NativeIconDomain::Dock, "stale").is_none());
+    }
+
+    #[test]
+    fn shared_cache_evicts_least_recently_used_entry_at_item_budget() {
+        let mut entries = HashMap::from([
+            ("old".to_owned(), entry(1, 10, 1)),
+            ("hot".to_owned(), entry(2, 10, 3)),
+            ("new".to_owned(), entry(3, 10, 4)),
+        ]);
+
+        prune_lru(&mut entries, 2, usize::MAX);
+
+        assert!(!entries.contains_key("old"));
+        assert!(entries.contains_key("hot"));
+        assert!(entries.contains_key("new"));
+    }
+
+    #[test]
+    fn shared_cache_evicts_until_estimated_byte_budget_is_met() {
+        let mut entries = HashMap::from([
+            ("oldest".to_owned(), entry(1, 9, 1)),
+            ("middle".to_owned(), entry(2, 8, 2)),
+            ("recent".to_owned(), entry(3, 7, 3)),
+        ]);
+
+        prune_lru(&mut entries, 10, 8);
+
+        assert!(!entries.contains_key("oldest"));
+        assert!(!entries.contains_key("middle"));
+        assert!(entries.contains_key("recent"));
+    }
+
+    #[test]
+    fn shared_cache_tie_break_is_deterministic() {
+        let mut entries = HashMap::from([
+            ("alpha".to_owned(), entry(1, 1, 1)),
+            ("beta".to_owned(), entry(2, 1, 1)),
+        ]);
+
+        prune_lru(&mut entries, 1, usize::MAX);
+
+        assert!(!entries.contains_key("alpha"));
+        assert!(entries.contains_key("beta"));
+    }
+
+    #[test]
+    fn negative_entries_share_the_same_bounded_lru_budget() {
+        let attempted_at = Instant::now();
+        let mut entries = (0..=SHARED_ICON_CACHE_MAX_ENTRIES)
+            .map(|index| {
+                (
+                    format!("missing-{index}"),
+                    CacheEntry {
+                        value: CachedIcon::Missing(attempted_at),
+                        estimated_bytes: 1,
+                        last_used: index as u64,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        prune_lru(
+            &mut entries,
+            SHARED_ICON_CACHE_MAX_ENTRIES,
+            SHARED_ICON_CACHE_MAX_BYTES,
+        );
+
+        assert_eq!(entries.len(), SHARED_ICON_CACHE_MAX_ENTRIES);
+        assert!(!entries.contains_key("missing-0"));
+    }
+
+    #[test]
+    fn negative_entry_retry_uses_a_fixed_ttl() {
+        let attempted_at = Instant::now();
+
+        assert!(!missing_icon_retry_due(
+            attempted_at,
+            attempted_at + MISSING_ICON_RETRY - Duration::from_millis(1)
+        ));
+        assert!(missing_icon_retry_due(
+            attempted_at,
+            attempted_at + MISSING_ICON_RETRY
+        ));
     }
 
     #[test]
@@ -459,5 +670,13 @@ mod tests {
             ),
             None
         );
+    }
+
+    fn entry(value: i32, estimated_bytes: usize, last_used: u64) -> CacheEntry<i32> {
+        CacheEntry {
+            value,
+            estimated_bytes,
+            last_used,
+        }
     }
 }

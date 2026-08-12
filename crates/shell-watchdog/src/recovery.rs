@@ -119,10 +119,10 @@ pub struct RecoveryShortcut {
 
 impl RecoveryShortcut {
     #[must_use]
-    pub const fn always_available() -> Self {
+    pub const fn unavailable() -> Self {
         Self {
-            hotkey_registered: true,
-            shortcut_installed: true,
+            hotkey_registered: false,
+            shortcut_installed: false,
         }
     }
 
@@ -163,12 +163,18 @@ impl TaskbarTransaction {
 
     #[must_use]
     pub const fn restore_action(self, hook: RecoveryHook) -> TaskbarAction {
-        match hook {
-            RecoveryHook::NormalExit
-            | RecoveryHook::CrashDetected
-            | RecoveryHook::FailedStartup
-            | RecoveryHook::Update
-            | RecoveryHook::Uninstall => TaskbarAction::Restore(self.original),
+        match (self.startup_action, hook) {
+            (
+                TaskbarAction::Apply(_),
+                RecoveryHook::NormalExit
+                | RecoveryHook::CrashDetected
+                | RecoveryHook::FailedStartup
+                | RecoveryHook::Update
+                | RecoveryHook::Uninstall,
+            ) => TaskbarAction::Restore(self.original),
+            (TaskbarAction::LeaveUntouched | TaskbarAction::Restore(_), _) => {
+                TaskbarAction::LeaveUntouched
+            }
         }
     }
 }
@@ -181,7 +187,7 @@ pub const fn begin_taskbar_transaction(
     TaskbarTransaction {
         original,
         startup_action: startup_action(request),
-        recovery: RecoveryShortcut::always_available(),
+        recovery: RecoveryShortcut::unavailable(),
         safe_mode: request.safe_mode,
     }
 }

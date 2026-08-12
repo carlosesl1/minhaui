@@ -91,18 +91,25 @@ mod win32_shell_observation;
 mod win32_pointer;
 
 #[cfg(windows)]
-#[allow(
-    unsafe_code,
-    reason = "Windows Notification Facility reads and version-probed quiet-hours interop are isolated here"
-)]
-mod win32_do_not_disturb;
-#[cfg(windows)]
 mod win32_dock_render;
 mod win32_dock_visibility;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 UI Automation COM providers and SAFEARRAY ownership are isolated here"
+)]
+mod win32_settings_uia;
 #[cfg(windows)]
 mod win32_surface_runtime;
 #[cfg(windows)]
 mod win32_topbar_render;
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 topbar overflow menu ownership is isolated here"
+)]
+mod win32_topbar_overflow;
 
 #[cfg(windows)]
 mod win32_event_queue;
@@ -222,6 +229,11 @@ mod dock_controller;
 mod dock_controller_interaction;
 mod dock_controller_sync;
 mod dock_controller_visibility;
+#[allow(
+    unsafe_code,
+    reason = "the owned Dock icon worker initializes COM and posts only a wake message"
+)]
+mod dock_icon_worker;
 mod dock_launch;
 mod dock_placement;
 mod dock_types;
@@ -287,6 +299,10 @@ mod topbar_types;
     reason = "pure tray activation coordination is consumed by the native adapter incrementally"
 )]
 mod tray_activation;
+#[allow(
+    dead_code,
+    reason = "the unsupported tray bridge catalog is compiled only as an experimental compatibility contract"
+)]
 mod tray_bridge_catalog;
 #[allow(
     dead_code,
@@ -321,7 +337,7 @@ mod win32_taskbar_visibility;
     reason = "validated Win32 tray callback forwarding is isolated and wired incrementally"
 )]
 mod win32_tray_activation;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-tray-bridge"))]
 #[allow(
     unsafe_code,
     reason = "Explorer hook installation and shared-memory reads are isolated here"
@@ -330,6 +346,7 @@ mod win32_tray_bridge;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
+    dead_code,
     reason = "bounded Explorer toolbar discovery and remote-memory reads are isolated here"
 )]
 mod win32_tray_source;
@@ -393,13 +410,16 @@ pub(crate) use runtime::{
     DockRenderAction, DockRenderChange, RuntimeAction, RuntimeOrchestrator,
     classify_dock_render_action,
 };
-pub(crate) use settings_controller::{QueuedSettingsAction, SettingsController, SettingsKey};
+pub(crate) use settings_controller::{
+    QueuedSettingsAction, SettingsAutomationAction, SettingsController, SettingsKey,
+};
 #[cfg(test)]
 pub(crate) use settings_controller::{SettingsEdit, SettingsError, SettingsSection};
 pub(crate) use topbar_controller::TopbarController;
 pub(crate) use topbar_types::{
-    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverlayAnchor,
-    TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot, foreground_app_label,
+    NetworkSnapshot, PowerSnapshot, QueuedTopbarAction, TopbarKey, TopbarOverflowItem,
+    TopbarOverlayAnchor, TopbarPointerPhase, TopbarPointerSample, TopbarSnapshot,
+    foreground_app_label,
 };
 #[allow(
     unused_imports,
@@ -412,7 +432,10 @@ pub(crate) use tray_activation::{
     normalize_executable_identity,
 };
 #[cfg(windows)]
-pub use win32::{ShowcaseRunConfig, run_showcase};
+pub use win32::{
+    ShowcaseRunConfig, activate_existing_instance, current_session_id, local_app_data_path,
+    run_showcase,
+};
 pub(crate) use window_preview::{
     PreviewAction, PreviewCapture, PreviewQueuedAction, PreviewUnavailableReason,
     PreviewWindowState,
@@ -424,6 +447,7 @@ use shell_renderer::{DipRect, rounded_content_hit};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PlatformEvent {
+    ActivateExistingInstance,
     TaskbarCreated,
     AppBarPositionChanged,
     DpiChanged(PhysicalRect),
@@ -437,7 +461,10 @@ pub(crate) enum PlatformEvent {
     MediaTransportCompleted(media_session_types::MediaTransportResult),
     NightLightCompleted(night_light_worker::NightLightWorkerResult),
     BrightnessCompleted(brightness_worker::BrightnessWorkerResult),
+    DockIconSourcesLoaded(dock_icon_worker::DockIconResolutionResult),
     DeviceLost,
+    DesktopBlurPrefetch,
+    DesktopBlurReady,
     DockPointer(DockPointerSample),
     DockEdgeProbe,
     DockAnimationFrame,
@@ -478,6 +505,11 @@ pub(crate) enum PlatformEvent {
     AppMenuDismissed,
     DismissTransientOverlays,
     SettingsKey(SettingsKey),
+    SettingsPointerActivated(DipPoint),
+    SettingsAutomation(SettingsAutomationAction),
+    SettingsScroll(isize),
+    SettingsResized,
+    SettingsConfigCommitted(Box<shell_config::ShellConfigV1>),
     SyncWindows,
     ShellObservationLoaded(win32_shell_observation::ShellObservationLoadResult),
     BackgroundAppsLoaded(background_apps_worker::BackgroundAppsLoadResult),

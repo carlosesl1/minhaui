@@ -40,6 +40,7 @@ impl SupervisorConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildEvent {
     HeartbeatReceived,
+    HealthyWindowElapsed,
     HeartbeatMissed,
     ChildCrashed,
 }
@@ -89,7 +90,8 @@ impl SupervisorState {
             return SupervisorAction::EnterSafeMode;
         }
         match event {
-            ChildEvent::HeartbeatReceived => {
+            ChildEvent::HeartbeatReceived => SupervisorAction::Continue,
+            ChildEvent::HealthyWindowElapsed => {
                 self.restart_count = 0;
                 SupervisorAction::Continue
             }

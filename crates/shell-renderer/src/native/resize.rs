@@ -43,13 +43,16 @@ impl CompositionRenderer {
                 &self.d2d_context,
                 logical_surface.width,
                 logical_surface.height,
-                ShowcaseTokens::obsidian_glass().dock_radius,
+                ShowcaseTokens::obsidian_glass()
+                    .with_preferences(self.visual_preferences, self.solid_material)
+                    .dock_radius,
             )?)
         } else {
             None
         };
         surface.liquid_glass = if let Some(profile) = profile_for_role(role) {
-            let tokens = ShowcaseTokens::obsidian_glass();
+            let tokens = ShowcaseTokens::obsidian_glass()
+                .with_preferences(self.visual_preferences, self.solid_material);
             let (glass_width, glass_height, radius) = match profile {
                 LiquidGlassProfile::Dock => (
                     logical_surface.width,

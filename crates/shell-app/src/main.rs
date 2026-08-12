@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -7,7 +8,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("shell-app: bootstrap complete; exiting cleanly");
             Ok(())
         }
-        shell_app::AppMode::Showcase | shell_app::AppMode::WindowSmoke => {
+        shell_app::AppMode::Showcase => {
+            let session_id = shell_platform_windows::current_session_id()?;
+            let lock_path = shell_app::instance_lock_path(
+                &shell_platform_windows::local_app_data_path()?,
+                session_id,
+            );
+            let instance = match shell_app::acquire_instance_lock(&lock_path)? {
+                shell_app::InstanceOwnership::Primary(lock) => lock,
+                shell_app::InstanceOwnership::Existing => {
+                    match shell_platform_windows::activate_existing_instance() {
+                        Ok(()) => return Ok(()),
+                        Err(activation_error) => {
+                            match shell_app::acquire_instance_lock(&lock_path)? {
+                                shell_app::InstanceOwnership::Primary(lock) => lock,
+                                shell_app::InstanceOwnership::Existing => {
+                                    return Err(activation_error.into());
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            let _instance = instance;
+            shell_platform_windows::run_showcase(showcase_run_config(&config)?)?;
+            Ok(())
+        }
+        shell_app::AppMode::WindowSmoke => {
             shell_platform_windows::run_showcase(showcase_run_config(&config)?)?;
             Ok(())
         }
@@ -31,6 +58,7 @@ fn showcase_run_config(
         high_contrast: config.high_contrast,
         reduced_motion: config.reduced_motion || config.safe_mode,
         liquid_glass: config.liquid_glass && !config.safe_mode && !config.high_contrast,
+        watchdog_heartbeat: config.watchdog_child,
     })
 }
 
@@ -39,6 +67,13 @@ mod tests {
     use shell_app::parse_args;
 
     use super::showcase_run_config;
+
+    #[test]
+    fn release_windows_binary_declares_the_gui_subsystem() {
+        assert!(include_str!("main.rs").contains(
+            "#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = \"windows\")]"
+        ));
+    }
 
     #[test]
     fn safe_mode_keeps_hardware_first_and_reduces_motion() {

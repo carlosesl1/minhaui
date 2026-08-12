@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[test]
-fn detailed_audio_panel_keeps_master_apps_outputs_and_settings_in_one_flow() {
+fn detailed_audio_panel_keeps_output_informational_and_settings_actionable() {
     let panel = QuickSettingsAudioPanel::new(
         QuickSettingsSlider::new(QuickControlKind::Volume, "Volume", 42, true),
         vec![QuickSettingsAudioSession::new(
@@ -35,7 +35,7 @@ fn detailed_audio_panel_keeps_master_apps_outputs_and_settings_in_one_flow() {
         layout_quick_settings(&scene, DipRect::new(0.0, 0.0, QUICK_SETTINGS_WIDTH, height));
 
     assert_eq!(layout.audio_sessions().len(), 1);
-    assert_eq!(layout.audio_outputs().len(), 1);
+    assert!(layout.audio_outputs().is_empty());
     assert!(layout.audio_settings_bounds().is_some());
     assert!(layout.content_height() <= 620.0);
 
@@ -80,7 +80,7 @@ fn audio_session_identity_and_slider_share_a_balanced_card_geometry() {
 }
 
 #[test]
-fn detailed_audio_panel_lays_out_every_available_output() {
+fn detailed_audio_panel_never_exposes_endpoints_as_in_app_selectors() {
     let outputs = (0..5)
         .map(|index| {
             QuickSettingsAudioOutput::new(
@@ -107,12 +107,12 @@ fn detailed_audio_panel_lays_out_every_available_output() {
     let layout =
         layout_quick_settings(&scene, DipRect::new(0.0, 0.0, QUICK_SETTINGS_WIDTH, height));
 
-    assert_eq!(layout.audio_outputs().len(), 5);
-    assert_eq!(
-        layout.audio_outputs()[4].id(),
-        QuickSettingsAudioOutputId::new(5)
-    );
+    assert!(layout.audio_outputs().is_empty());
     let settings = layout.audio_settings_bounds().expect("sound settings");
+    assert_eq!(
+        layout.hit_test(DipPoint::new(settings.x + 8.0, settings.y + 8.0)),
+        Some(QuickSettingsHit::AudioSettings)
+    );
     assert!(settings.y + settings.height <= height);
 }
 

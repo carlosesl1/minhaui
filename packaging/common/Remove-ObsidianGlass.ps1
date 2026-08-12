@@ -12,7 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$settingsRoot = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'ObsidianGlass'))
+$settingsRoot = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Minha UI'))
 $localRoot = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\') + '\'
 if (-not $settingsRoot.StartsWith($localRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Settings path escaped the current user LocalAppData directory.'
@@ -40,4 +40,3 @@ switch ($SettingsAction) {
         Write-Host "Settings removal target: $settingsRoot"
     }
 }
-

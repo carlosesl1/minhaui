@@ -43,3 +43,4 @@ precisam de ADR.
 | [0006](0006-shared-diagnostics-policy.md) | Accepted | Política compartilhada de diagnóstico |
 | [0007](0007-topbar-system-actions.md) | Accepted | Ações de sistema da topbar por intents e Adapter Windows |
 | [0008](0008-background-apps-notification-catalog.md) | Accepted | Catálogo de aplicativos da área de notificação sob demanda |
+| [0011](0011-watchdog-process-and-recovery-boundary.md) | Accepted | Watchdog como launcher, supervisor e limite de recuperação |

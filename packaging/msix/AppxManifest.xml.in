@@ -19,7 +19,7 @@
     <Resource uap:Scale="100" />
   </Resources>
   <Applications>
-    <Application Id="ObsidianGlass" Executable="shell-app.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="ObsidianGlass" Executable="shell-watchdog.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         AppListEntry="default"
         DisplayName="Obsidian Glass"
@@ -35,4 +35,3 @@
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>
 </Package>
-

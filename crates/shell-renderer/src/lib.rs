@@ -18,6 +18,8 @@ mod popover_layout;
 mod popover_scene;
 mod quick_settings_layout;
 mod quick_settings_scene;
+mod settings_accessibility;
+mod settings_layout;
 mod settings_scene;
 mod showcase_model;
 mod topbar_layout;
@@ -75,7 +77,6 @@ mod native_showcase_dock;
 #[cfg(windows)]
 mod native_showcase_context_menu;
 
-#[cfg(windows)]
 #[cfg(windows)]
 mod native_showcase_dock_states;
 #[cfg(windows)]
@@ -156,7 +157,21 @@ pub use quick_settings_scene::{
     QuickSettingsPlaybackState, QuickSettingsScene, QuickSettingsSlider, QuickSettingsSound,
     QuickSettingsSubmenu, QuickSettingsTile,
 };
-pub use settings_scene::{QuickControlSettingsRow, SettingsRow, SettingsScene};
+pub use settings_accessibility::{
+    SettingsAccessibilityControlType, SettingsAccessibilityError, SettingsAccessibilityNode,
+    SettingsAccessibilityNodeId, SettingsAccessibilityPattern, SettingsAccessibilitySnapshot,
+    settings_accessibility_snapshot,
+};
+pub use settings_layout::{
+    SETTINGS_CONTENT_MAX_WIDTH, SETTINGS_RAIL_WIDTH, SETTINGS_SPLIT_BREAKPOINT, SettingsHit,
+    SettingsLaidOutControl, SettingsLaidOutNavigation, SettingsLayout, SettingsLayoutMode,
+    layout_settings_scene,
+};
+pub use settings_scene::{
+    QuickControlSettingsRow, SettingsControl, SettingsControlId, SettingsControlKind,
+    SettingsFocus, SettingsNavigationItem, SettingsRow, SettingsScene, SettingsSectionId,
+};
+pub use showcase_model::VisualPreferences;
 pub(crate) use showcase_model::{DockInsetShadow, ShowcaseTokens, dock_inset_shadows};
 #[cfg(test)]
 pub(crate) use showcase_model::{ShowcasePrimitive, ShowcaseState, showcase_primitives};

@@ -226,21 +226,23 @@ pub(super) fn dispatch_event(
 pub(super) fn handle_broadcast_event(
     class: &WindowClass,
     features: SlotFeatures,
-    config: &shell_config::ShellConfigV1,
+    _config: &shell_config::ShellConfigV1,
     observation: &ShellObservation,
     slots: &mut Vec<ShellSlot>,
     event: PlatformEvent,
 ) -> Result<bool> {
     match event {
         PlatformEvent::DisplayChanged => {
-            reconcile_slots(class, slots, features, config, observation)?;
+            let current = crate::win32_config::load_config();
+            reconcile_slots(class, slots, features, &current, observation)?;
             Ok(true)
         }
         PlatformEvent::TaskbarCreated => {
             for slot in slots.iter_mut() {
                 slot.reregister_topbar()?;
             }
-            reconcile_slots(class, slots, features, config, observation)?;
+            let current = crate::win32_config::load_config();
+            reconcile_slots(class, slots, features, &current, observation)?;
             for slot in slots.iter_mut() {
                 if !slot.handle_event(PlatformEvent::TaskbarCreated)? {
                     return Ok(false);

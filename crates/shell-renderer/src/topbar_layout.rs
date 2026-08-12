@@ -1,4 +1,4 @@
-use shell_core::{Popover, TopbarIntent, TopbarModuleKind};
+use shell_core::{TopbarIntent, TopbarModuleKind};
 
 use crate::{DipPoint, DipRect, TopbarDensity, TopbarModuleVisual, TopbarScene};
 
@@ -75,13 +75,14 @@ pub enum TopbarOverflow {
     Collapsed {
         hidden_count: usize,
         bounds: DipRect,
-        intent: TopbarIntent,
+        focused: bool,
     },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TopbarLayout {
     items: Vec<TopbarLaidOutItem>,
+    hidden_modules: Vec<TopbarModuleVisual>,
     overflow: TopbarOverflow,
 }
 
@@ -94,6 +95,28 @@ impl TopbarLayout {
     #[must_use]
     pub const fn overflow(&self) -> TopbarOverflow {
         self.overflow
+    }
+
+    /// Modules omitted from the surface, in their configured visual order.
+    /// Consumers can expose these exact modules through an overflow affordance
+    /// without substituting an unrelated command.
+    #[must_use]
+    pub fn hidden_modules(&self) -> &[TopbarModuleVisual] {
+        &self.hidden_modules
+    }
+
+    #[must_use]
+    pub const fn overflow_bounds(&self) -> Option<DipRect> {
+        match self.overflow {
+            TopbarOverflow::None => None,
+            TopbarOverflow::Collapsed { bounds, .. } => Some(bounds),
+        }
+    }
+
+    #[must_use]
+    pub fn overflow_at(&self, point: DipPoint) -> bool {
+        self.overflow_bounds()
+            .is_some_and(|bounds| contains(bounds, point))
     }
 
     #[must_use]
@@ -113,15 +136,7 @@ impl TopbarLayout {
 
     #[must_use]
     pub fn hit_test(&self, point: DipPoint) -> Option<TopbarIntent> {
-        self.item_at(point)
-            .and_then(TopbarLaidOutItem::intent)
-            .or_else(|| match self.overflow {
-                TopbarOverflow::None => None,
-                TopbarOverflow::Collapsed { bounds, intent, .. } if contains(bounds, point) => {
-                    Some(intent)
-                }
-                TopbarOverflow::Collapsed { .. } => None,
-            })
+        self.item_at(point).and_then(TopbarLaidOutItem::intent)
     }
 }
 
@@ -161,6 +176,7 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
     let right_start = right_edge - status_width;
     let mut min_status_x = left_x + metrics.spacer;
     let mut hidden_count = 0;
+    let mut hidden_modules = Vec::new();
 
     if !status.is_empty() && right_start < min_status_x {
         left_x = shrink_leading_for_overflow(
@@ -195,6 +211,7 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
             let candidate = x - width;
             if candidate < minimum_candidate {
                 hidden_count += 1;
+                hidden_modules.push(visual.clone());
                 continue;
             }
             items.push(TopbarLaidOutItem {
@@ -208,6 +225,7 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
             x = candidate - metrics.gap;
         }
         items.sort_by_key(|item| module_order(scene, item.kind()));
+        hidden_modules.sort_by_key(|visual| module_order(scene, visual.kind()));
     }
 
     let leading_end = items
@@ -219,19 +237,26 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
     let overflow = if hidden_count == 0 {
         TopbarOverflow::None
     } else {
-        let first_status_x = items
-            .iter()
-            .filter(|item| !is_leading(item.kind()))
-            .map(|item| item.bounds().x)
-            .reduce(f32::min)
-            .unwrap_or(right_edge);
-        let overflow_x = first_status_x - metrics.gap - metrics.overflow_width;
-        if overflow_x < leading_end {
-            return TopbarLayout {
-                items,
-                overflow: TopbarOverflow::None,
+        let mut overflow_x =
+            first_status_x(&items, right_edge) - metrics.gap - metrics.overflow_width;
+        while overflow_x < leading_end {
+            let Some((index, _)) = items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| !is_leading(item.kind()))
+                .min_by(|(_, left), (_, right)| left.bounds().x.total_cmp(&right.bounds().x))
+            else {
+                break;
             };
+            let removed = items.remove(index);
+            hidden_modules.push(removed.visual);
+            hidden_count += 1;
+            overflow_x = first_status_x(&items, right_edge) - metrics.gap - metrics.overflow_width;
         }
+        hidden_modules.sort_by_key(|visual| module_order(scene, visual.kind()));
+        overflow_x = overflow_x
+            .max(leading_end)
+            .min(right_edge - metrics.overflow_width);
         TopbarOverflow::Collapsed {
             hidden_count,
             bounds: DipRect::new(
@@ -240,10 +265,23 @@ pub fn layout_topbar_scene(scene: &TopbarScene, surface: DipRect) -> TopbarLayou
                 metrics.overflow_width,
                 metrics.height,
             ),
-            intent: TopbarIntent::Popover(Popover::SystemMenu),
+            focused: scene.focused_overflow(),
         }
     };
-    TopbarLayout { items, overflow }
+    TopbarLayout {
+        items,
+        hidden_modules,
+        overflow,
+    }
+}
+
+fn first_status_x(items: &[TopbarLaidOutItem], right_edge: f32) -> f32 {
+    items
+        .iter()
+        .filter(|item| !is_leading(item.kind()))
+        .map(|item| item.bounds().x)
+        .reduce(f32::min)
+        .unwrap_or(right_edge)
 }
 
 const fn is_leading(kind: TopbarModuleKind) -> bool {

@@ -1,5 +1,4 @@
 use std::collections::hash_map::DefaultHasher;
-use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::ptr::null;
@@ -8,14 +7,14 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, PROPERTYKEY};
 use windows::Win32::Media::Audio::{
     AudioSessionStateActive, AudioSessionStateExpired, DEVICE_STATE_ACTIVE, IAudioSessionControl2,
     IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator,
-    eConsole, eMultimedia, eRender,
+    eMultimedia, eRender,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToString;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
-use windows::core::{GUID, HRESULT, IUnknown_Vtbl, Interface, PCWSTR, PWSTR, Result};
+use windows::core::{GUID, Interface, PWSTR, Result};
 
 use crate::{
     AudioOutputId, AudioOutputSnapshot, AudioPanelSnapshot, AudioSessionId, AudioSessionSnapshot,
@@ -34,30 +33,6 @@ pub(super) fn read() -> Result<AudioPanelSnapshot> {
     let outputs = read_outputs(&enumerator, &default_id)?;
     let sessions = read_sessions(&default)?;
     Ok(AudioPanelSnapshot::new(sessions, outputs, false))
-}
-
-pub(super) fn select_output(id: AudioOutputId) -> Result<AudioPanelSnapshot> {
-    let enumerator = device_enumerator()?;
-    let raw_id = find_output_id(&enumerator, id)?;
-    let policy: IPolicyConfig =
-        // SAFETY: the class id and interface id are the established PolicyConfig COM pair.
-        unsafe { CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL) }?;
-    let wide = raw_id.encode_utf16().chain([0]).collect::<Vec<_>>();
-    for role in [eConsole, eMultimedia] {
-        // SAFETY: the UTF-16 endpoint id is NUL-terminated and live for the synchronous call.
-        unsafe { policy.set_default_endpoint(PCWSTR(wide.as_ptr()), role)? };
-    }
-    // Confirm the multimedia endpoint changed before presenting the selected state.
-    // SAFETY: the enumerator owns the returned endpoint.
-    let selected = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }?;
-    let selected_id = device_id(&selected).unwrap_or_default();
-    if stable_id(&selected_id) != id.value() {
-        return Err(windows::core::Error::new(
-            windows::core::HRESULT(0x8000_4005_u32 as i32),
-            "Windows did not confirm the selected audio output",
-        ));
-    }
-    read()
 }
 
 pub(super) fn set_session_volume(id: AudioSessionId, value: u8) -> Result<()> {
@@ -124,34 +99,13 @@ fn read_outputs(
             if selected {
                 "Current output"
             } else {
-                "Available output"
+                "Manage in Windows Settings"
             },
             selected,
         ));
     }
     result.sort_by_key(|output| !output.selected());
     Ok(result)
-}
-
-fn find_output_id(enumerator: &IMMDeviceEnumerator, id: AudioOutputId) -> Result<String> {
-    // SAFETY: the state mask requests active render endpoints only.
-    let collection = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) }?;
-    // SAFETY: the collection remains live for the duration of enumeration.
-    let count = unsafe { collection.GetCount() }?;
-    for index in 0..count {
-        // SAFETY: `index` is bounded by the count returned above.
-        let device = unsafe { collection.Item(index) }?;
-        let Some(raw_id) = device_id(&device) else {
-            continue;
-        };
-        if stable_id(&raw_id) == id.value() {
-            return Ok(raw_id);
-        }
-    }
-    Err(windows::core::Error::new(
-        windows::core::HRESULT(0x8007_0002_u32 as i32),
-        "The selected audio output is no longer available",
-    ))
 }
 
 fn read_sessions(device: &IMMDevice) -> Result<Vec<AudioSessionSnapshot>> {
@@ -294,49 +248,4 @@ fn stable_id(value: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
-}
-
-const POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
-
-windows::core::imp::define_interface!(
-    IPolicyConfig,
-    IPolicyConfig_Vtbl,
-    0xf8679f50_850a_41cf_9c72_430f290290c8
-);
-windows::core::imp::interface_hierarchy!(IPolicyConfig, windows::core::IUnknown);
-
-impl IPolicyConfig {
-    unsafe fn set_default_endpoint(
-        &self,
-        endpoint_id: PCWSTR,
-        role: windows::Win32::Media::Audio::ERole,
-    ) -> Result<()> {
-        // SAFETY: this method occupies the documented slot in the established PolicyConfig ABI.
-        unsafe {
-            (Interface::vtable(self).SetDefaultEndpoint)(Interface::as_raw(self), endpoint_id, role)
-                .ok()
-        }
-    }
-}
-
-#[repr(C)]
-#[allow(non_camel_case_types, non_snake_case)]
-pub struct IPolicyConfig_Vtbl {
-    base__: IUnknown_Vtbl,
-    GetMixFormat: usize,
-    GetDeviceFormat: usize,
-    ResetDeviceFormat: usize,
-    SetDeviceFormat: usize,
-    GetProcessingPeriod: usize,
-    SetProcessingPeriod: usize,
-    GetShareMode: usize,
-    SetShareMode: usize,
-    GetPropertyValue: usize,
-    SetPropertyValue: usize,
-    SetDefaultEndpoint: unsafe extern "system" fn(
-        this: *mut c_void,
-        endpoint_id: PCWSTR,
-        role: windows::Win32::Media::Audio::ERole,
-    ) -> HRESULT,
-    SetEndpointVisibility: usize,
 }

@@ -46,13 +46,15 @@ fn lays_out_visible_topbar_modules_in_order_with_overflow() -> Result<(), Box<dy
     let crate::TopbarOverflow::Collapsed {
         hidden_count,
         bounds,
-        intent,
+        focused,
     } = layout.overflow()
     else {
         return Err("expected collapsed topbar overflow".into());
     };
     assert_eq!(hidden_count, 1);
-    assert_eq!(intent, TopbarIntent::Popover(Popover::SystemMenu));
+    assert!(!focused);
+    assert_eq!(layout.hidden_modules().len(), 1);
+    assert_eq!(layout.hidden_modules()[0].kind(), TopbarModuleKind::Network);
     assert_eq!(
         layout.hit_test(DipPoint::new(24.0, 16.0)),
         Some(TopbarIntent::Popover(Popover::SystemMenu))
@@ -62,9 +64,62 @@ fn lays_out_visible_topbar_modules_in_order_with_overflow() -> Result<(), Box<dy
             bounds.x + bounds.width / 2.0,
             bounds.y + bounds.height / 2.0
         )),
-        Some(TopbarIntent::Popover(Popover::SystemMenu))
+        None
     );
+    assert!(layout.overflow_at(DipPoint::new(
+        bounds.x + bounds.width / 2.0,
+        bounds.y + bounds.height / 2.0
+    )));
     Ok(())
+}
+
+#[test]
+fn overflow_retains_hidden_modules_in_configured_order_and_can_show_keyboard_focus() {
+    let modules = vec![
+        TopbarModuleVisual::new(
+            TopbarModuleKind::SystemMenu,
+            "Menu",
+            "Minha UI",
+            TopbarModuleStatus::Neutral,
+            Some(TopbarIntent::Popover(Popover::SystemMenu)),
+        ),
+        TopbarModuleVisual::new(
+            TopbarModuleKind::Network,
+            "Network",
+            "Network",
+            TopbarModuleStatus::Good,
+            Some(TopbarIntent::Popover(Popover::Network)),
+        ),
+        TopbarModuleVisual::new(
+            TopbarModuleKind::Volume,
+            "Volume",
+            "Volume",
+            TopbarModuleStatus::Neutral,
+            Some(TopbarIntent::Popover(Popover::Volume)),
+        ),
+        TopbarModuleVisual::new(
+            TopbarModuleKind::Clock,
+            "Clock",
+            "17:33",
+            TopbarModuleStatus::Neutral,
+            Some(TopbarIntent::Popover(Popover::Calendar)),
+        ),
+    ];
+    let scene = TopbarScene::new(TopbarDensity::Compact, modules).with_focused_overflow(true);
+    let layout = layout_topbar_scene(&scene, DipRect::new(0.0, 0.0, 270.0, 32.0));
+
+    assert_eq!(
+        layout
+            .hidden_modules()
+            .iter()
+            .map(TopbarModuleVisual::kind)
+            .collect::<Vec<_>>(),
+        vec![TopbarModuleKind::Network, TopbarModuleKind::Volume]
+    );
+    assert!(matches!(
+        layout.overflow(),
+        crate::TopbarOverflow::Collapsed { focused: true, .. }
+    ));
 }
 
 #[test]

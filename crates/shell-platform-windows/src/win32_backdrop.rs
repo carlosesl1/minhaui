@@ -1,7 +1,7 @@
 use shell_renderer::native::ShowcaseRole;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
-    DWM_SYSTEMBACKDROP_TYPE, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
+    DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE,
     DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
 };
 use windows::core::BOOL;
@@ -9,12 +9,12 @@ use windows::core::BOOL;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BackdropRequest {
     None,
-    Transient,
+    MainWindow,
 }
 
 const fn request_for(role: ShowcaseRole, enabled: bool) -> BackdropRequest {
     match (enabled, role) {
-        (true, ShowcaseRole::Settings) => BackdropRequest::Transient,
+        (true, ShowcaseRole::Settings) => BackdropRequest::MainWindow,
         (false, _)
         | (
             true,
@@ -30,13 +30,13 @@ const fn request_for(role: ShowcaseRole, enabled: bool) -> BackdropRequest {
 const fn value_for(request: BackdropRequest) -> DWM_SYSTEMBACKDROP_TYPE {
     match request {
         BackdropRequest::None => DWMSBT_NONE,
-        BackdropRequest::Transient => DWMSBT_TRANSIENTWINDOW,
+        BackdropRequest::MainWindow => DWMSBT_MAINWINDOW,
     }
 }
 
 pub(super) fn apply_if_supported(hwnd: HWND, role: ShowcaseRole, enabled: bool) -> bool {
     let request = request_for(role, enabled);
-    if request == BackdropRequest::Transient {
+    if request == BackdropRequest::MainWindow {
         let dark_mode = BOOL::from(true);
         // SAFETY: Category 8 (FFI boundary). The live HWND and correctly sized BOOL
         // are read synchronously by the documented DWM dark-mode attribute.
@@ -61,14 +61,14 @@ pub(super) fn apply_if_supported(hwnd: HWND, role: ShowcaseRole, enabled: bool) 
         )
     }
     .is_ok();
-    request == BackdropRequest::Transient && applied
+    request == BackdropRequest::MainWindow && applied
 }
 
 #[cfg(test)]
 mod tests {
     use super::{BackdropRequest, request_for, value_for};
     use shell_renderer::native::ShowcaseRole;
-    use windows::Win32::Graphics::Dwm::{DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW};
+    use windows::Win32::Graphics::Dwm::{DWMSBT_MAINWINDOW, DWMSBT_NONE};
 
     #[test]
     fn custom_alpha_surfaces_never_request_dwm_backdrop() {
@@ -87,7 +87,7 @@ mod tests {
         );
         assert_eq!(
             request_for(ShowcaseRole::Settings, true),
-            BackdropRequest::Transient
+            BackdropRequest::MainWindow
         );
         assert_eq!(
             request_for(ShowcaseRole::Preview, true),
@@ -106,9 +106,6 @@ mod tests {
     #[test]
     fn disabled_backdrop_explicitly_clears_the_existing_window_material() {
         assert_eq!(value_for(BackdropRequest::None), DWMSBT_NONE);
-        assert_eq!(
-            value_for(BackdropRequest::Transient),
-            DWMSBT_TRANSIENTWINDOW
-        );
+        assert_eq!(value_for(BackdropRequest::MainWindow), DWMSBT_MAINWINDOW);
     }
 }

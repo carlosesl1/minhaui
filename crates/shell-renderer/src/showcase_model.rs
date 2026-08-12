@@ -2,6 +2,58 @@
 
 use crate::Rgba8;
 
+/// User-controlled visual preferences that are safe to apply to every native
+/// surface. Values are normalized at the renderer boundary so malformed or
+/// older configuration files cannot create invisible or unusable chrome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VisualPreferences {
+    opacity_percent: u8,
+    corner_radius: u16,
+}
+
+impl VisualPreferences {
+    #[must_use]
+    pub const fn new(opacity_percent: u8, corner_radius: u16) -> Self {
+        Self {
+            opacity_percent: if opacity_percent < 60 {
+                60
+            } else if opacity_percent > 100 {
+                100
+            } else {
+                opacity_percent
+            },
+            corner_radius: if corner_radius < 6 {
+                6
+            } else if corner_radius > 24 {
+                24
+            } else {
+                corner_radius
+            },
+        }
+    }
+
+    #[must_use]
+    pub const fn opacity_percent(self) -> u8 {
+        self.opacity_percent
+    }
+
+    #[must_use]
+    pub const fn corner_radius(self) -> u16 {
+        self.corner_radius
+    }
+
+    pub(crate) const fn apply_background_alpha(self, mut color: Rgba8) -> Rgba8 {
+        color.a = ((color.a as u16 * self.opacity_percent as u16 + 50) / 100) as u8;
+        color
+    }
+}
+
+impl Default for VisualPreferences {
+    fn default() -> Self {
+        Self::new(94, 18)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(test)]
 pub enum ShowcaseState {
@@ -119,6 +171,55 @@ impl ShowcaseTokens {
         tokens.dock_veil = Rgba8::new(0x00, 0x00, 0x00, 0x00);
         tokens.topbar_tint = Rgba8::new(0x1C, 0x21, 0x29, 0xFF);
         tokens
+    }
+
+    #[must_use]
+    pub(crate) fn with_preferences(
+        mut self,
+        preferences: VisualPreferences,
+        solid_material: bool,
+    ) -> Self {
+        if !solid_material {
+            self.surface_base = preferences.apply_background_alpha(self.surface_base);
+            self.surface_raised = preferences.apply_background_alpha(self.surface_raised);
+            self.surface_hover = preferences.apply_background_alpha(self.surface_hover);
+            self.surface_pressed = preferences.apply_background_alpha(self.surface_pressed);
+            self.surface_selected = preferences.apply_background_alpha(self.surface_selected);
+            self.dock_luminance = preferences.apply_background_alpha(self.dock_luminance);
+            self.dock_veil = preferences.apply_background_alpha(self.dock_veil);
+            self.dock_reflection = preferences.apply_background_alpha(self.dock_reflection);
+            self.topbar_tint = preferences.apply_background_alpha(self.topbar_tint);
+        }
+        let radius = preferences.corner_radius as f32;
+        self.dock_radius = radius;
+        self.popover_radius = radius;
+        self.control_radius = (radius / 3.0).clamp(4.0, 8.0);
+        self
+    }
+}
+
+#[cfg(test)]
+mod visual_preferences_tests {
+    use super::{ShowcaseTokens, VisualPreferences};
+
+    #[test]
+    fn preferences_are_bounded_before_the_native_renderer_uses_them() {
+        assert_eq!(VisualPreferences::new(0, 0), VisualPreferences::new(60, 6));
+        assert_eq!(
+            VisualPreferences::new(u8::MAX, u16::MAX),
+            VisualPreferences::new(100, 24)
+        );
+    }
+
+    #[test]
+    fn transparent_tokens_apply_opacity_without_fading_text() {
+        let base = ShowcaseTokens::obsidian_glass();
+        let customized = base.with_preferences(VisualPreferences::new(60, 22), false);
+
+        assert!(customized.surface_base.a < base.surface_base.a);
+        assert_eq!(customized.text_primary, base.text_primary);
+        assert_eq!(customized.dock_radius, 22.0);
+        assert_eq!(customized.popover_radius, 22.0);
     }
 }
 

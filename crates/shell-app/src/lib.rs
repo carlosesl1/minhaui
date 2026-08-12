@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io;
+use std::path::{Path, PathBuf};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppConfig {
     pub mode: AppMode,
@@ -11,6 +15,27 @@ pub struct AppConfig {
     pub high_contrast: bool,
     pub reduced_motion: bool,
     pub liquid_glass: bool,
+    pub watchdog_child: bool,
+}
+
+/// Owns the per-user lock for the lifetime of the primary shell process.
+#[derive(Debug)]
+pub struct InstanceLock {
+    _file: File,
+}
+
+/// Result of attempting to become the primary shell process.
+#[derive(Debug)]
+pub enum InstanceOwnership {
+    Primary(InstanceLock),
+    Existing,
+}
+
+impl InstanceOwnership {
+    #[must_use]
+    pub const fn is_primary(&self) -> bool {
+        matches!(self, Self::Primary(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +67,35 @@ pub const fn crate_identity() -> &'static str {
     "shell-app"
 }
 
+/// Returns the persistent per-user lock file used by the shell process.
+#[must_use]
+pub fn instance_lock_path(root: &Path, session_id: u32) -> PathBuf {
+    root.join("Minha UI")
+        .join(format!("shell-app-session-{session_id}.lock"))
+}
+
+/// Atomically acquires a per-user process lock.
+///
+/// The lock file intentionally remains on disk. The operating system releases
+/// the advisory lock when the process exits, including abnormal termination,
+/// so a stale file never acts as a stale owner.
+pub fn acquire_instance_lock(path: &Path) -> io::Result<InstanceOwnership> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(InstanceOwnership::Primary(InstanceLock { _file: file })),
+        Err(TryLockError::WouldBlock) => Ok(InstanceOwnership::Existing),
+        Err(TryLockError::Error(error)) => Err(error),
+    }
+}
+
 #[must_use]
 pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
     let mut mode = AppMode::Showcase;
@@ -53,6 +107,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
     let mut high_contrast = false;
     let mut reduced_motion = false;
     let mut liquid_glass = true;
+    let mut watchdog_child = false;
     let mut index = 1;
 
     while index < args.len() {
@@ -67,6 +122,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
             "--high-contrast" => high_contrast = true,
             "--reduced-motion" => reduced_motion = true,
             "--liquid-glass" => liquid_glass = true,
+            "--watchdog-child" => watchdog_child = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -91,6 +147,7 @@ pub fn parse_args<const N: usize>(args: [&str; N]) -> AppConfig {
         high_contrast,
         reduced_motion,
         liquid_glass,
+        watchdog_child,
     }
 }
 
@@ -111,6 +168,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
     let mut high_contrast = false;
     let mut reduced_motion = false;
     let mut liquid_glass = true;
+    let mut watchdog_child = false;
     let mut index = 1;
 
     while index < args.len() {
@@ -125,6 +183,7 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
             "--high-contrast" => high_contrast = true,
             "--reduced-motion" => reduced_motion = true,
             "--liquid-glass" => liquid_glass = true,
+            "--watchdog-child" => watchdog_child = true,
             "--qa-exit-ms" => {
                 if let Some(raw) = args
                     .get(index + 1)
@@ -149,5 +208,6 @@ pub fn parse_arg_slice(args: &[String]) -> AppConfig {
         high_contrast,
         reduced_motion,
         liquid_glass,
+        watchdog_child,
     }
 }

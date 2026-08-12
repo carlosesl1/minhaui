@@ -1,5 +1,10 @@
 # Reliable Night Light Implementation Plan
 
+> **Superseded (2026-08-12):** the stable product no longer reads or writes the
+> undocumented CloudStore contract. Night Light now opens Microsoft's documented
+> `ms-settings:nightlight` page. Keep this plan only as historical context; do not
+> re-enable its registry strategy in a stable build.
+
 > **Execution:** implement after the media player plan. Keep this delivery independent so failures in the undocumented Windows CloudStore seam cannot destabilize media or other Quick Settings controls.
 
 **Goal:** Make rapid Night light clicks deterministic: one native write at a time, latest desired state wins, the UI never lies about confirmed state, and Windows registry records receive strictly increasing timestamps.

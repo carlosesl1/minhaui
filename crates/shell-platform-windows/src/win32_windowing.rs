@@ -1,35 +1,37 @@
 use std::sync::atomic::Ordering;
 
+use shell_renderer::native::DESKTOP_BLUR_WAKE_MESSAGE;
 use shell_renderer::{DipPoint, PhysicalRect};
 use windows::Win32::Foundation::{
     E_UNEXPECTED, HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0,
-    WPARAM,
+    WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_DOWN, VK_ESCAPE, VK_F10, VK_LEFT,
-    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F10,
+    VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DispatchMessageW, GetMessageW, MSG, MWMO_INPUTAVAILABLE,
     MsgWaitForMultipleObjectsEx, PBT_APMRESUMEAUTOMATIC, PM_REMOVE, PeekMessageW, PostQuitMessage,
     QS_ALLINPUT, SWP_NOACTIVATE, SWP_NOZORDER, SetTimer, SetWindowPos, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY,
-    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_POWERBROADCAST,
-    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER,
+    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_GETOBJECT, WM_KEYDOWN,
+    WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
+    WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SHOWWINDOW, WM_SIZE, WM_TIMER,
 };
 use windows::core::Result;
 
 use crate::background_apps_worker::BACKGROUND_APPS_WAKE_MESSAGE;
 use crate::brightness_worker::BRIGHTNESS_WAKE_MESSAGE;
+use crate::dock_icon_worker::DOCK_ICON_WAKE_MESSAGE;
 use crate::media_session_worker::MEDIA_SESSION_WAKE_MESSAGE;
 use crate::night_light_worker::NIGHT_LIGHT_WAKE_MESSAGE;
 use crate::quick_settings_worker::QUICK_SETTINGS_WAKE_MESSAGE;
 use crate::shell_menu_worker::SHELL_MENU_WAKE_MESSAGE;
 use crate::win32::{
-    DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID,
+    ACTIVATE_INSTANCE, DOCK_ANIMATION_TIMER_ID, DOCK_EDGE_PROBE_TIMER_ID, DRAG_ESCAPE_TIMER_ID,
     EXTERNAL_MENU_TIMER_ID, LIVE_WINDOWS, PREVIEW_TIMER_ID, SYNC_TIMER_ID, TASKBAR_CREATED,
     TIMER_ID,
 };
@@ -41,6 +43,7 @@ use crate::win32_event_queue::{
 use crate::win32_external_menu_events::EXTERNAL_MENU_WAKE_MESSAGE;
 use crate::win32_hit_test::hit_test;
 use crate::win32_pointer::{client_point, track_mouse_leave};
+use crate::win32_settings_uia::SETTINGS_UIA_WAKE_MESSAGE;
 pub(super) use crate::win32_work_area::{
     monitor_placement_inputs, window_monitor_bounds, window_monitor_id, window_work_area,
 };
@@ -66,12 +69,31 @@ pub(super) enum MessageLoopAction<'waitables> {
     Dispatch(RoutedPlatformEvent),
 }
 
+const NATIVE_MESSAGE_BATCH_LIMIT: usize = 32;
+const ROUTED_EVENT_BATCH_LIMIT: usize = 64;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MessageWaitWake {
     DockFrame(usize),
     Message,
+    TimedOut,
     Failed,
     Unexpected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingMessageBatch {
+    Empty,
+    Drained,
+    BudgetExhausted,
+    Quit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchBatch {
+    Drained,
+    BudgetExhausted,
+    Stop,
 }
 
 pub(super) fn message_loop<F>(mut handle_action: F) -> Result<()>
@@ -81,26 +103,33 @@ where
     let mut message = MSG::default();
     let mut waitables = Vec::new();
     let mut handles = Vec::new();
+    let mut routed_events_pending = false;
     loop {
-        // Favor queued input over an already-signaled frame handle so the next
-        // dock frame consumes the freshest pointer sample.
-        // SAFETY: Category 8 (FFI boundary). `message` is writable, and this call
-        // removes at most one message owned by the current UI thread.
-        if unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
-            if message.message == WM_QUIT {
-                return Ok(());
-            }
-            dispatch_message(&message);
-            if !dispatch_routed_events(&mut handle_action)? {
-                return Ok(());
+        // Alternate bounded native and routed batches. Processing several native
+        // messages first lets the routed queue coalesce mouse-move floods, while
+        // both limits prevent either source from monopolizing the UI thread.
+        let pending_messages = dispatch_pending_messages(&mut message);
+        if pending_messages == PendingMessageBatch::Quit {
+            return Ok(());
+        }
+        if pending_messages != PendingMessageBatch::Empty || routed_events_pending {
+            match dispatch_routed_events(&mut handle_action)? {
+                DispatchBatch::Drained => routed_events_pending = false,
+                DispatchBatch::BudgetExhausted => routed_events_pending = true,
+                DispatchBatch::Stop => return Ok(()),
             }
         }
+        let work_pending =
+            pending_messages == PendingMessageBatch::BudgetExhausted || routed_events_pending;
 
         waitables.clear();
         if !handle_action(MessageLoopAction::CollectDockFrameWaitables(&mut waitables))? {
             return Ok(());
         }
         if waitables.is_empty() {
+            if work_pending {
+                continue;
+            }
             // SAFETY: Category 8 (FFI boundary). `message` is writable for the call
             // and no HWND filter means the idle UI thread sleeps until real work.
             let status = unsafe { GetMessageW(&mut message, None, 0, 0) };
@@ -109,9 +138,7 @@ where
                 0 => return Ok(()),
                 _ => {
                     dispatch_message(&message);
-                    if !dispatch_routed_events(&mut handle_action)? {
-                        return Ok(());
-                    }
+                    routed_events_pending = true;
                 }
             }
             continue;
@@ -125,7 +152,7 @@ where
         let wake = unsafe {
             MsgWaitForMultipleObjectsEx(
                 Some(handles.as_slice()),
-                INFINITE,
+                if work_pending { 0 } else { INFINITE },
                 QS_ALLINPUT,
                 MWMO_INPUTAVAILABLE,
             )
@@ -139,11 +166,10 @@ where
                 )))? {
                     return Ok(());
                 }
-                if !dispatch_routed_events(&mut handle_action)? {
-                    return Ok(());
-                }
+                routed_events_pending = true;
             }
             MessageWaitWake::Message => {}
+            MessageWaitWake::TimedOut => {}
             MessageWaitWake::Failed => return Err(windows::core::Error::from_thread()),
             MessageWaitWake::Unexpected => {
                 return Err(windows::core::Error::new(
@@ -155,6 +181,27 @@ where
     }
 }
 
+fn dispatch_pending_messages(message: &mut MSG) -> PendingMessageBatch {
+    let mut dispatched = 0;
+    while dispatched < NATIVE_MESSAGE_BATCH_LIMIT {
+        // SAFETY: Category 8 (FFI boundary). `message` is writable, and each call
+        // removes at most one message owned by the current UI thread.
+        if !unsafe { PeekMessageW(message, None, 0, 0, PM_REMOVE) }.as_bool() {
+            return if dispatched == 0 {
+                PendingMessageBatch::Empty
+            } else {
+                PendingMessageBatch::Drained
+            };
+        }
+        if message.message == WM_QUIT {
+            return PendingMessageBatch::Quit;
+        }
+        dispatch_message(message);
+        dispatched += 1;
+    }
+    PendingMessageBatch::BudgetExhausted
+}
+
 fn dispatch_message(message: &MSG) {
     // SAFETY: Category 8 (FFI boundary). The message was initialized by
     // PeekMessageW/GetMessageW and remains valid through synchronous dispatch.
@@ -163,21 +210,38 @@ fn dispatch_message(message: &MSG) {
     unsafe { DispatchMessageW(message) };
 }
 
-fn dispatch_routed_events<F>(handle_action: &mut F) -> Result<bool>
+fn dispatch_routed_events<F>(handle_action: &mut F) -> Result<DispatchBatch>
 where
     F: for<'waitables> FnMut(MessageLoopAction<'waitables>) -> Result<bool>,
 {
-    while let Some(event) = next_event() {
-        if !handle_action(MessageLoopAction::Dispatch(event))? {
-            return Ok(false);
+    dispatch_batch(ROUTED_EVENT_BATCH_LIMIT, next_event, |event| {
+        handle_action(MessageLoopAction::Dispatch(event))
+    })
+}
+
+fn dispatch_batch<T>(
+    limit: usize,
+    mut next: impl FnMut() -> Option<T>,
+    mut dispatch: impl FnMut(T) -> Result<bool>,
+) -> Result<DispatchBatch> {
+    debug_assert!(limit > 0);
+    for _ in 0..limit {
+        let Some(event) = next() else {
+            return Ok(DispatchBatch::Drained);
+        };
+        if !dispatch(event)? {
+            return Ok(DispatchBatch::Stop);
         }
     }
-    Ok(true)
+    Ok(DispatchBatch::BudgetExhausted)
 }
 
 const fn classify_message_wait_wake(wake: WAIT_EVENT, frame_count: usize) -> MessageWaitWake {
     if wake.0 == WAIT_FAILED.0 {
         return MessageWaitWake::Failed;
+    }
+    if wake.0 == WAIT_TIMEOUT.0 {
+        return MessageWaitWake::TimedOut;
     }
     let offset = wake.0.wrapping_sub(WAIT_OBJECT_0.0) as usize;
     if offset < frame_count {
@@ -204,11 +268,25 @@ pub(super) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let activate_instance = ACTIVATE_INSTANCE.load(Ordering::Acquire);
+    if activate_instance != 0 && message == activate_instance {
+        queue_event(RoutedPlatformEvent::window(
+            hwnd,
+            PlatformEvent::ActivateExistingInstance,
+        ));
+        return LRESULT(1);
+    }
     if message == TASKBAR_CREATED.load(Ordering::Acquire) {
         queue_event(RoutedPlatformEvent::broadcast(
             PlatformEvent::TaskbarCreated,
         ));
         return LRESULT(0);
+    }
+    if message == WM_GETOBJECT
+        && is_settings_window(hwnd)
+        && let Some(result) = crate::win32_settings_uia::handle_wm_getobject(hwnd, wparam, lparam)
+    {
+        return result;
     }
     if message == BACKGROUND_APPS_WAKE_MESSAGE
         || message == MEDIA_SESSION_WAKE_MESSAGE
@@ -217,7 +295,15 @@ pub(super) unsafe extern "system" fn window_proc(
         || message == EXTERNAL_MENU_WAKE_MESSAGE
         || message == SHELL_MENU_WAKE_MESSAGE
         || message == QUICK_SETTINGS_WAKE_MESSAGE
+        || message == DOCK_ICON_WAKE_MESSAGE
     {
+        return LRESULT(0);
+    }
+    if message == DESKTOP_BLUR_WAKE_MESSAGE && is_popover_window(hwnd) {
+        queue_event(RoutedPlatformEvent::window(
+            hwnd,
+            PlatformEvent::DesktopBlurReady,
+        ));
         return LRESULT(0);
     }
     if is_position_notification(message, wparam.0) {
@@ -228,11 +314,28 @@ pub(super) unsafe extern "system" fn window_proc(
         return LRESULT(0);
     }
     match message {
+        WM_SHOWWINDOW if is_popover_window(hwnd) && wparam.0 == 0 => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::DesktopBlurPrefetch,
+            ));
+            // SAFETY: Default visibility bookkeeping still receives the original
+            // pointer-free message after the prefetch hint has been queued.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         WM_MOUSEWHEEL if is_popover_window(hwnd) => {
             let delta = ((wparam.0 >> 16) as u16) as i16;
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
                 PlatformEvent::PopoverScroll(-isize::from(delta.signum())),
+            ));
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL if is_settings_window(hwnd) => {
+            let delta = ((wparam.0 >> 16) as u16) as i16;
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SettingsScroll(-isize::from(delta.signum())),
             ));
             LRESULT(0)
         }
@@ -490,10 +593,10 @@ pub(super) unsafe extern "system" fn window_proc(
             // required after observing the unchanged popup activation message.
             unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
         }
-        WM_KILLFOCUS if is_settings_window(hwnd) => {
+        WM_LBUTTONUP if is_settings_window(hwnd) => {
             queue_event(RoutedPlatformEvent::window(
                 hwnd,
-                PlatformEvent::SettingsKey(SettingsKey::Escape),
+                PlatformEvent::SettingsPointerActivated(client_point(hwnd, lparam)),
             ));
             LRESULT(0)
         }
@@ -584,7 +687,19 @@ pub(super) unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_NCHITTEST if is_settings_window(hwnd) => {
+            // SAFETY: Settings is a standard resizable top-level window; default
+            // non-client hit testing owns its caption, resize borders and buttons.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         WM_NCHITTEST => hit_test(hwnd, lparam),
+        WM_SIZE if is_settings_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SettingsResized,
+            ));
+            LRESULT(0)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_WINDOWPOSCHANGED if is_topbar_window(hwnd) => {
             notify_window_position(hwnd);
             // SAFETY: Category 8 (FFI boundary). Default handling remains required
@@ -703,14 +818,25 @@ pub(super) unsafe extern "system" fn window_proc(
             ));
             LRESULT(0)
         }
+        WM_CLOSE if is_settings_window(hwnd) => {
+            queue_event(RoutedPlatformEvent::window(
+                hwnd,
+                PlatformEvent::SettingsKey(SettingsKey::Dismiss),
+            ));
+            LRESULT(0)
+        }
         WM_CLOSE => {
             queue_event(RoutedPlatformEvent::broadcast(
                 PlatformEvent::CloseRequested,
             ));
             LRESULT(0)
         }
+        SETTINGS_UIA_WAKE_MESSAGE if is_settings_window(hwnd) => LRESULT(0),
         WM_DESTROY => {
             set_dragging(hwnd, false);
+            if is_settings_window(hwnd) {
+                crate::win32_settings_uia::unregister(hwnd);
+            }
             if LIVE_WINDOWS.fetch_sub(1, Ordering::AcqRel) == 1 {
                 // SAFETY: Category 8 (FFI boundary). The final owned HWND has been
                 // destroyed, so posting quit deterministically terminates this loop.
@@ -824,6 +950,11 @@ fn shift_pressed() -> bool {
     unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 }
 }
 
+fn control_pressed() -> bool {
+    // SAFETY: GetAsyncKeyState only reads process-global keyboard state.
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 }
+}
+
 fn dock_key(wparam: WPARAM) -> Option<DockKey> {
     let code = wparam.0 as u16;
     if code == VK_TAB.0 || code == VK_DOWN.0 {
@@ -858,7 +989,11 @@ fn topbar_key(wparam: WPARAM) -> Option<TopbarKey> {
 
 fn settings_key(wparam: WPARAM) -> Option<SettingsKey> {
     let code = wparam.0 as u16;
-    if code == VK_TAB.0 || code == VK_DOWN.0 {
+    if code == VK_RETURN.0 && control_pressed() {
+        Some(SettingsKey::Apply)
+    } else if code == VK_TAB.0 && shift_pressed() {
+        Some(SettingsKey::Previous)
+    } else if code == VK_TAB.0 || code == VK_DOWN.0 {
         Some(SettingsKey::Next)
     } else if code == VK_UP.0 {
         Some(SettingsKey::Previous)
@@ -877,12 +1012,17 @@ fn settings_key(wparam: WPARAM) -> Option<SettingsKey> {
 
 #[cfg(test)]
 mod drag_capture_tests {
+    use std::collections::VecDeque;
+
     use crate::DockPointerPhase;
-    use windows::Win32::Foundation::{WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0};
+    use windows::Win32::Foundation::{WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::UI::Controls::WM_MOUSELEAVE;
     use windows::Win32::UI::WindowsAndMessaging::{WM_CANCELMODE, WM_CAPTURECHANGED};
 
-    use super::{MessageWaitWake, classify_message_wait_wake, dock_capture_termination};
+    use super::{
+        DispatchBatch, MessageWaitWake, classify_message_wait_wake, dispatch_batch,
+        dock_capture_termination,
+    };
 
     #[test]
     fn capture_keeps_drag_alive_on_leave_and_cancels_on_native_termination() {
@@ -927,5 +1067,61 @@ mod drag_capture_tests {
             classify_message_wait_wake(WAIT_EVENT(WAIT_OBJECT_0.0 + 3), 1),
             MessageWaitWake::Unexpected
         );
+        assert_eq!(
+            classify_message_wait_wake(WAIT_TIMEOUT, 1),
+            MessageWaitWake::TimedOut
+        );
+    }
+
+    #[test]
+    fn routed_dispatch_budget_preserves_remaining_fifo_work() {
+        let mut queued = VecDeque::from([1_u8, 2, 3, 4]);
+        let mut handled = Vec::new();
+
+        let first = dispatch_batch(
+            2,
+            || queued.pop_front(),
+            |event| {
+                handled.push(event);
+                Ok(true)
+            },
+        )
+        .expect("first batch");
+        assert_eq!(first, DispatchBatch::BudgetExhausted);
+        assert_eq!(handled, vec![1, 2]);
+        assert_eq!(queued, VecDeque::from([3, 4]));
+
+        let second = dispatch_batch(
+            4,
+            || queued.pop_front(),
+            |event| {
+                handled.push(event);
+                Ok(true)
+            },
+        )
+        .expect("second batch");
+        assert_eq!(second, DispatchBatch::Drained);
+        assert_eq!(handled, vec![1, 2, 3, 4]);
+        assert!(queued.is_empty());
+    }
+
+    #[test]
+    fn routed_dispatch_stop_does_not_consume_later_work() {
+        let mut queued = VecDeque::from([1_u8, 2, 3]);
+        let mut handled = Vec::new();
+
+        let result = dispatch_batch(
+            8,
+            || queued.pop_front(),
+            |event| {
+                handled.push(event);
+                Ok(event != 2)
+            },
+        )
+        .expect("stopped batch");
+
+        assert_eq!(result, DispatchBatch::Stop);
+        assert_eq!(handled, vec![1, 2]);
+        assert_eq!(queued, VecDeque::from([3]));
     }
 }

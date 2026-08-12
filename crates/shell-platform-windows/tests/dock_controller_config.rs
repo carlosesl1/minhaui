@@ -177,3 +177,44 @@ fn native_context_menu_ids_map_to_controller_commands() {
     );
     assert_eq!(ContextMenuCommand::from_native_id(404), None);
 }
+
+#[test]
+fn live_config_update_changes_geometry_and_autohide_without_recreating_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = DockController::new(state()?, DockRuntimeConfig::default())?;
+    let before_generation = controller.visual_generation();
+    let updated = DockRuntimeConfig::new(DockAlignment::Left)
+        .with_item_size(58.0)
+        .with_spacing(14.0)
+        .with_magnified_item_size(76.0)
+        .with_autohide(true);
+
+    controller.update_config(updated)?;
+
+    assert_eq!(controller.config(), updated);
+    assert!(controller.state().dock().enabled());
+    assert!(controller.visual_generation() > before_generation);
+    assert_eq!(controller.state().dock_items().len(), 2);
+    Ok(())
+}
+
+#[test]
+fn live_config_update_keeps_fullscreen_autohide_active() -> Result<(), Box<dyn std::error::Error>> {
+    let mut controller =
+        DockController::new(state()?, DockRuntimeConfig::default().with_autohide(false))?;
+    controller.set_fullscreen_autohide(true)?;
+    assert!(controller.state().dock().enabled());
+    assert!(!controller.state().dock().is_revealed());
+
+    let updated = DockRuntimeConfig::new(DockAlignment::Right)
+        .with_item_size(58.0)
+        .with_spacing(14.0)
+        .with_magnified_item_size(76.0)
+        .with_autohide(false);
+    controller.update_config(updated)?;
+
+    assert_eq!(controller.config(), updated);
+    assert!(controller.state().dock().enabled());
+    assert!(!controller.state().dock().is_revealed());
+    Ok(())
+}

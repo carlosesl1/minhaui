@@ -148,6 +148,27 @@ impl ShellConfigV1 {
     }
 
     #[must_use]
+    pub fn with_taskbar_policy(&self, taskbar_policy: TaskbarPolicy) -> Self {
+        let mut config = self.clone();
+        config.taskbar_policy = taskbar_policy;
+        config
+    }
+
+    #[must_use]
+    pub fn with_accessibility(&self, accessibility: Accessibility) -> Self {
+        let mut config = self.clone();
+        config.accessibility = accessibility;
+        config
+    }
+
+    #[must_use]
+    pub fn with_performance(&self, performance: PerformancePreset) -> Self {
+        let mut config = self.clone();
+        config.performance = performance;
+        config
+    }
+
+    #[must_use]
     pub fn with_dock(&self, dock: DockSettings) -> Self {
         let mut config = self.clone();
         config.dock = dock;
@@ -222,6 +243,12 @@ impl ShellConfigV1 {
         &self.topbar
     }
     #[must_use]
+    pub fn with_topbar(&self, topbar: TopbarSettings) -> Self {
+        let mut config = self.clone();
+        config.topbar = topbar;
+        config
+    }
+    #[must_use]
     pub const fn quick_settings(&self) -> &QuickSettingsSettings {
         &self.quick_settings
     }
@@ -236,12 +263,24 @@ impl ShellConfigV1 {
         self.behavior
     }
     #[must_use]
+    pub fn with_behavior(&self, behavior: BehaviorSettings) -> Self {
+        let mut config = self.clone();
+        config.behavior = behavior;
+        config
+    }
+    #[must_use]
     pub const fn appearance(&self) -> &AppearanceSettings {
         &self.appearance
     }
     #[must_use]
     pub const fn advanced(&self) -> AdvancedSettings {
         self.advanced
+    }
+    #[must_use]
+    pub fn with_advanced(&self, advanced: AdvancedSettings) -> Self {
+        let mut config = self.clone();
+        config.advanced = advanced;
+        config
     }
 }
 

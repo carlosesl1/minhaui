@@ -12,26 +12,30 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::Shell::DragAcceptFiles;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowRect,
-    HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, RegisterClassExW, SW_HIDE,
-    SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SetForegroundWindow, SetWindowPos, ShowWindow, UnregisterClassW, WINDOW_EX_STYLE,
-    WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CHANGEFILTERSTRUCT, CS_HREDRAW, CS_VREDRAW, ChangeWindowMessageFilterEx, CreateWindowExW,
+    DefWindowProcW, DestroyWindow, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
+    GetClientRect, GetForegroundWindow, GetWindowRect, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST,
+    IsWindowVisible, MSGFLT_ALLOW, RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
+    ShowWindow, UnregisterClassW, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSEXW,
+    WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
 use crate::win32::{
-    LIVE_WINDOWS, register_app_menu_window, register_dock_window, register_popover_window,
-    register_preview_window, register_settings_window, register_topbar_window,
-    unregister_app_menu_window, unregister_dock_window, unregister_popover_window,
-    unregister_preview_window, unregister_settings_window, unregister_topbar_window,
+    ACTIVATE_INSTANCE, LIVE_WINDOWS, register_app_menu_window, register_dock_window,
+    register_popover_window, register_preview_window, register_settings_window,
+    register_topbar_window, unregister_app_menu_window, unregister_dock_window,
+    unregister_popover_window, unregister_preview_window, unregister_settings_window,
+    unregister_topbar_window,
 };
 use crate::win32_backdrop::apply_if_supported;
 use crate::win32_windowing::window_proc;
 use crate::{DockEdgeGeometry, DockPhysicalPlacement, DockRuntimeConfig, NativeWindowId};
 
-const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.Window.v1");
+pub(super) const CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.Window.v1");
+pub(super) const SETTINGS_TITLE: PCWSTR = w!("Minha UI Settings");
 pub(super) const THUMBNAIL_HOST_CLASS_NAME: PCWSTR = w!("MinhaUi.NativeShell.ThumbnailHost.v1");
 
 pub(super) struct WindowClass {
@@ -234,9 +238,14 @@ impl OwnedWindow {
             ShowcaseRole::Popover => (w!("Minha UI Popover"), "Minha UI Popover"),
             ShowcaseRole::AppMenu => (w!("Minha UI App Menu"), "Minha UI App Menu"),
             ShowcaseRole::Preview => (w!("Minha UI Preview"), "Minha UI Preview"),
-            ShowcaseRole::Settings => (w!("Minha UI Settings"), "Minha UI Settings"),
+            ShowcaseRole::Settings => (SETTINGS_TITLE, "Minha UI Settings"),
         };
         let ex_style = window_ex_style(role);
+        let style = if role == ShowcaseRole::Settings {
+            WS_OVERLAPPEDWINDOW
+        } else {
+            WS_POPUP
+        };
         // SAFETY: Category 8 (FFI boundary). The class is registered, parameters are
         // value types or static strings, and no application pointer crosses the API.
         let hwnd = unsafe {
@@ -244,7 +253,7 @@ impl OwnedWindow {
                 ex_style,
                 CLASS_NAME,
                 title_wide,
-                WS_POPUP,
+                style,
                 work.x,
                 work.y,
                 1,
@@ -273,7 +282,10 @@ impl OwnedWindow {
             ShowcaseRole::Popover => register_popover_window(hwnd),
             ShowcaseRole::AppMenu => register_app_menu_window(hwnd),
             ShowcaseRole::Preview => register_preview_window(hwnd),
-            ShowcaseRole::Settings => register_settings_window(hwnd),
+            ShowcaseRole::Settings => {
+                register_settings_window(hwnd);
+                allow_lower_integrity_instance_activation(hwnd);
+            }
         }
         // SAFETY: Category 8 (FFI boundary). `hwnd` was created successfully above
         // and therefore has a stable effective DPI on the primary monitor.
@@ -448,7 +460,13 @@ impl OwnedWindow {
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE) };
     }
 
-    pub(super) fn show_activating(&self) {
+    pub(super) fn is_visible(&self) -> bool {
+        // SAFETY: Category 8 (FFI boundary). The owned HWND remains live and
+        // this query has no side effects.
+        unsafe { IsWindowVisible(self.hwnd) }.as_bool()
+    }
+
+    pub(super) fn show_activating(&self) -> bool {
         // SAFETY: Category 8 (FFI boundary). The owned panel HWND is live and
         // activation lets Escape and focus-loss dismissal reach its window proc.
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOW) };
@@ -458,6 +476,24 @@ impl OwnedWindow {
         // SAFETY: Category 8 (FFI boundary). The popup belongs to this UI thread;
         // assigning keyboard focus makes deactivation observable and reversible.
         let _ = unsafe { SetFocus(Some(self.hwnd)) };
+        // SAFETY: Category 8 (FFI boundary). Reading the current foreground HWND
+        // is side-effect free and lets callers provide a non-disruptive fallback
+        // when Windows intentionally refuses foreground transfer.
+        unsafe { GetForegroundWindow() == self.hwnd }
+    }
+
+    pub(super) fn flash_until_foreground(&self) {
+        let request = FLASHWINFO {
+            cbSize: u32::try_from(std::mem::size_of::<FLASHWINFO>()).unwrap_or(u32::MAX),
+            hwnd: self.hwnd,
+            dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+            uCount: 0,
+            dwTimeout: 0,
+        };
+        // SAFETY: Category 8 (FFI boundary). The request is a fully initialized
+        // value pointing at this live top-level Settings HWND. TIMERNOFG stops
+        // automatically after the window reaches the foreground.
+        let _ = unsafe { FlashWindowEx(&request) };
     }
 
     pub(super) fn restore_focus(&self) {
@@ -566,6 +602,17 @@ impl OwnedWindow {
             let height = physical_from_dip(self.dock_height_dip, self.dpi);
             return (width.max(1) as u32, height.max(1) as u32);
         }
+        if self.role == ShowcaseRole::Settings {
+            let mut client = windows::Win32::Foundation::RECT::default();
+            // SAFETY: The Settings HWND is live and `client` is writable storage
+            // for the synchronous client-area query.
+            if unsafe { GetClientRect(self.hwnd, &mut client) }.is_ok() {
+                return (
+                    (client.right - client.left).max(1) as u32,
+                    (client.bottom - client.top).max(1) as u32,
+                );
+            }
+        }
         (
             self.rect.width.max(1) as u32,
             self.rect.height.max(1) as u32,
@@ -602,8 +649,24 @@ fn window_ex_style(role: ShowcaseRole) -> WINDOW_EX_STYLE {
         ShowcaseRole::Popover | ShowcaseRole::AppMenu => {
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP
         }
-        ShowcaseRole::Preview | ShowcaseRole::Settings => WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        ShowcaseRole::Preview => WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        ShowcaseRole::Settings => WINDOW_EX_STYLE::default(),
     }
+}
+
+fn allow_lower_integrity_instance_activation(hwnd: HWND) {
+    let message = ACTIVATE_INSTANCE.load(std::sync::atomic::Ordering::Acquire);
+    if message == 0 {
+        return;
+    }
+    let mut filter = CHANGEFILTERSTRUCT {
+        cbSize: u32::try_from(std::mem::size_of::<CHANGEFILTERSTRUCT>()).unwrap_or(u32::MAX),
+        ..Default::default()
+    };
+    // SAFETY: Category 8 (FFI boundary). This narrowly permits one registered,
+    // pointer-free message on the Settings HWND. Its only effect is revealing
+    // the app's own Settings window; all other UIPI filtering remains intact.
+    let _ = unsafe { ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, Some(&mut filter)) };
 }
 
 impl Drop for OwnedWindow {
@@ -687,14 +750,15 @@ fn preview_initial_rect(work: PhysicalRect, dpi: Dpi) -> PhysicalRect {
 }
 
 fn settings_rect(work: PhysicalRect, dpi: Dpi) -> PhysicalRect {
-    let scale = dpi.scale();
-    let width = shell_renderer::physical_from_dip(992.0, dpi).min(work.width - 32);
-    let height = shell_renderer::physical_from_dip(620.0, dpi).min(work.height - 32);
+    let available_width = work.width.saturating_sub(32).max(1);
+    let available_height = work.height.saturating_sub(32).max(1);
+    let width = shell_renderer::physical_from_dip(992.0, dpi).min(available_width);
+    let height = shell_renderer::physical_from_dip(620.0, dpi).min(available_height);
     PhysicalRect::new(
         work.x + (work.width - width) / 2,
         work.y + (work.height - height) / 2,
-        width.max((480.0 * scale).round() as i32),
-        height.max((360.0 * scale).round() as i32),
+        width,
+        height,
     )
 }
 
@@ -703,7 +767,9 @@ mod tests {
     use shell_renderer::{PhysicalRect, native::ShowcaseRole};
     use windows::Win32::UI::WindowsAndMessaging::WS_EX_NOREDIRECTIONBITMAP;
 
-    use super::{external_menu_placement, external_menu_popover_is_topmost, window_ex_style};
+    use super::{
+        external_menu_placement, external_menu_popover_is_topmost, settings_rect, window_ex_style,
+    };
 
     #[test]
     fn custom_alpha_windows_use_no_redirection_bitmap() {
@@ -732,5 +798,16 @@ mod tests {
             external_menu_placement(241, 134, popover_edge_at_row, work),
             PhysicalRect::new(1_991, 153, 241, 134),
         );
+    }
+
+    #[test]
+    fn settings_never_exceeds_a_small_monitor_work_area() {
+        let work = PhysicalRect::new(-800, 0, 800, 600);
+        let rect = settings_rect(work, shell_renderer::Dpi::from_raw(192));
+
+        assert!(rect.width <= work.width);
+        assert!(rect.height <= work.height);
+        assert!(rect.x >= work.x);
+        assert!(rect.y >= work.y);
     }
 }

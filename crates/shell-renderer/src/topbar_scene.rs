@@ -71,6 +71,7 @@ pub struct TopbarScene {
     density: TopbarDensity,
     modules: Vec<TopbarModuleVisual>,
     focused_module: Option<TopbarModuleKind>,
+    focused_overflow: bool,
     hovered_module: Option<TopbarModuleKind>,
     pressed_module: Option<TopbarModuleKind>,
     active_module: Option<TopbarModuleKind>,
@@ -84,6 +85,7 @@ impl TopbarScene {
             density,
             modules,
             focused_module: None,
+            focused_overflow: false,
             hovered_module: None,
             pressed_module: None,
             active_module: None,
@@ -104,6 +106,11 @@ impl TopbarScene {
     #[must_use]
     pub const fn focused_module(&self) -> Option<TopbarModuleKind> {
         self.focused_module
+    }
+
+    #[must_use]
+    pub const fn focused_overflow(&self) -> bool {
+        self.focused_overflow
     }
 
     #[must_use]
@@ -129,6 +136,12 @@ impl TopbarScene {
     #[must_use]
     pub const fn with_focused_module(mut self, focused_module: Option<TopbarModuleKind>) -> Self {
         self.focused_module = focused_module;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_focused_overflow(mut self, focused_overflow: bool) -> Self {
+        self.focused_overflow = focused_overflow;
         self
     }
 

@@ -1,34 +1,99 @@
 #![deny(unsafe_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use shell_core::{DockItem, DockItemId, DockLayoutEntry, PinState, RunningState, ShellState};
 use shell_renderer::{DockIcon, DockItemVisual, RunningIndicator};
 
+use crate::dock_icon_worker::{
+    DockIconCandidate, DockIconResolutionRequest, DockIconResolutionResult,
+};
+
 #[derive(Default)]
 pub(crate) struct DockIconSourceCache {
     entries: HashMap<DockItemId, CachedIconSource>,
+    pending_request: Option<DockIconResolutionRequest>,
+    latest_generation: u64,
 }
 
 struct CachedIconSource {
     fingerprint: String,
     icon: DockIcon,
+    candidate: DockIconCandidate,
+    state: IconResolutionState,
 }
 
-trait IconSourceResolver {
-    fn window_icon_source(&self, window: shell_core::WindowId) -> Option<String>;
-    fn resolve_icon_source(&self, source: &str) -> Option<String>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IconResolutionState {
+    Unresolved,
+    Pending(u64),
+    Resolved,
 }
 
-struct WindowsIconSourceResolver;
+static NEXT_ICON_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-impl IconSourceResolver for WindowsIconSourceResolver {
-    fn window_icon_source(&self, window: shell_core::WindowId) -> Option<String> {
-        crate::win32_app_identity::window_icon_source(window)
+impl DockIconSourceCache {
+    pub(crate) fn take_pending_request(&mut self) -> Option<DockIconResolutionRequest> {
+        self.pending_request.take()
     }
 
-    fn resolve_icon_source(&self, source: &str) -> Option<String> {
-        crate::win32_app_identity::resolve_icon_source(source)
+    pub(crate) fn complete(&mut self, result: &DockIconResolutionResult) -> bool {
+        if result.generation() != self.latest_generation {
+            return false;
+        }
+        let mut changed = false;
+        for resolved in result.icons() {
+            let Some(cached) = self.entries.get_mut(&resolved.item()) else {
+                continue;
+            };
+            if cached.fingerprint != resolved.fingerprint()
+                || cached.state != IconResolutionState::Pending(result.generation())
+            {
+                continue;
+            }
+            let icon = resolved
+                .source()
+                .map_or(DockIcon::SystemFallback, |source| {
+                    DockIcon::windows_executable(source)
+                });
+            changed |= cached.icon != icon;
+            cached.icon = icon;
+            cached.state = IconResolutionState::Resolved;
+        }
+        changed
+    }
+
+    pub(crate) fn abandon(&mut self, generation: u64) {
+        if generation != self.latest_generation {
+            return;
+        }
+        for entry in self.entries.values_mut() {
+            if entry.state == IconResolutionState::Pending(generation) {
+                entry.state = IconResolutionState::Resolved;
+            }
+        }
+    }
+
+    fn queue_unresolved(&mut self) {
+        if !self
+            .entries
+            .values()
+            .any(|entry| entry.state == IconResolutionState::Unresolved)
+        {
+            return;
+        }
+        self.latest_generation = NEXT_ICON_GENERATION.fetch_add(1, Ordering::Relaxed).max(1);
+        let generation = self.latest_generation;
+        let mut candidates = Vec::new();
+        for entry in self.entries.values_mut() {
+            if entry.state != IconResolutionState::Resolved {
+                entry.state = IconResolutionState::Pending(generation);
+                candidates.push(entry.candidate.clone());
+            }
+        }
+        candidates.sort_by_key(|candidate| candidate.item().value());
+        self.pending_request = Some(DockIconResolutionRequest::new(generation, candidates));
     }
 }
 
@@ -37,22 +102,6 @@ pub(crate) fn visual_items(
     layout: &[DockLayoutEntry],
     launch_targets: &HashMap<DockItemId, String>,
     icon_sources: &mut DockIconSourceCache,
-) -> Vec<DockItemVisual> {
-    visual_items_with_resolver(
-        state,
-        layout,
-        launch_targets,
-        icon_sources,
-        &WindowsIconSourceResolver,
-    )
-}
-
-fn visual_items_with_resolver(
-    state: &ShellState,
-    layout: &[DockLayoutEntry],
-    launch_targets: &HashMap<DockItemId, String>,
-    icon_sources: &mut DockIconSourceCache,
-    resolver: &impl IconSourceResolver,
 ) -> Vec<DockItemVisual> {
     icon_sources
         .entries
@@ -63,7 +112,7 @@ fn visual_items_with_resolver(
         match entry {
             DockLayoutEntry::App(id) => {
                 if let Some(item) = state.dock_items().iter().find(|item| item.id() == id) {
-                    visuals.push(app_visual(item, launch_targets, icon_sources, resolver));
+                    visuals.push(app_visual(item, launch_targets, icon_sources));
                 }
             }
             DockLayoutEntry::Separator(id) => {
@@ -71,6 +120,7 @@ fn visual_items_with_resolver(
             }
         }
     }
+    icon_sources.queue_unresolved();
     visuals
 }
 
@@ -116,13 +166,12 @@ fn app_visual(
     item: &DockItem,
     launch_targets: &HashMap<DockItemId, String>,
     icon_sources: &mut DockIconSourceCache,
-    resolver: &impl IconSourceResolver,
 ) -> DockItemVisual {
     DockItemVisual::app_with_icon(
         item.id().value(),
         visual_label(item),
         indicator(item),
-        visual_icon(item, launch_targets, icon_sources, resolver),
+        visual_icon(item, launch_targets, icon_sources),
     )
 }
 
@@ -130,7 +179,6 @@ fn visual_icon(
     item: &DockItem,
     launch_targets: &HashMap<DockItemId, String>,
     icon_sources: &mut DockIconSourceCache,
-    resolver: &impl IconSourceResolver,
 ) -> DockIcon {
     let window = match item.running() {
         RunningState::Running { window, .. } => Some(*window),
@@ -143,31 +191,18 @@ fn visual_icon(
     {
         return cached.icon.clone();
     }
-    let window_source = window.and_then(|window| resolver.window_icon_source(window));
-    let source = preferred_icon_source(item.pin(), launch_target, window_source);
-    let icon = source
-        .as_deref()
-        .and_then(|source| resolver.resolve_icon_source(source))
-        .or(source)
-        .map_or(DockIcon::SystemFallback, |source| {
-            DockIcon::windows_executable(&source)
-        });
+    let candidate = DockIconCandidate::new(item.id(), fingerprint.clone(), window, launch_target);
+    let icon = DockIcon::SystemFallback;
     icon_sources.entries.insert(
         item.id(),
         CachedIconSource {
             fingerprint,
             icon: icon.clone(),
+            candidate,
+            state: IconResolutionState::Unresolved,
         },
     );
     icon
-}
-
-fn preferred_icon_source(
-    _pin: PinState,
-    launch_target: Option<String>,
-    window_source: Option<String>,
-) -> Option<String> {
-    window_source.or(launch_target)
 }
 
 fn icon_fingerprint(
@@ -209,35 +244,16 @@ fn visual_label(item: &DockItem) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::collections::HashMap;
 
-    use shell_core::{AppId, DockItem, DockItemId, PinState, ShellState, WindowId};
+    use shell_core::{AppId, DockItem, DockItemId, ShellState, WindowId};
+    use shell_renderer::DockIcon;
 
-    use super::{
-        DockIconSourceCache, IconSourceResolver, icon_fingerprint, preferred_icon_source,
-        visual_items_with_resolver,
-    };
-
-    struct CountingResolver {
-        window_calls: Cell<usize>,
-        canonical_calls: Cell<usize>,
-    }
-
-    impl IconSourceResolver for CountingResolver {
-        fn window_icon_source(&self, _window: WindowId) -> Option<String> {
-            self.window_calls.set(self.window_calls.get() + 1);
-            Some(r"C:\Apps\Browser\browser.exe".to_owned())
-        }
-
-        fn resolve_icon_source(&self, source: &str) -> Option<String> {
-            self.canonical_calls.set(self.canonical_calls.get() + 1);
-            Some(source.to_owned())
-        }
-    }
+    use super::{DockIconSourceCache, IconResolutionState, icon_fingerprint, visual_items};
+    use crate::dock_icon_worker::{DockIconResolutionResult, ResolvedDockIcon};
 
     #[test]
-    fn stable_icon_cache_skips_identity_and_package_resolution_on_later_frames() {
+    fn stable_icon_cache_queues_one_batch_and_returns_a_fallback_immediately() {
         let item = DockItem::running_unpinned(
             DockItemId::new(7),
             AppId::parse("browser.exe").expect("valid app id"),
@@ -247,54 +263,95 @@ mod tests {
         );
         let state = ShellState::default().with_dock_items(vec![item]);
         let mut cache = DockIconSourceCache::default();
-        let resolver = CountingResolver {
-            window_calls: Cell::new(0),
-            canonical_calls: Cell::new(0),
-        };
 
         for _ in 0..3 {
-            let visuals = visual_items_with_resolver(
-                &state,
-                state.dock_layout(),
-                &HashMap::new(),
-                &mut cache,
-                &resolver,
-            );
+            let visuals = visual_items(&state, state.dock_layout(), &HashMap::new(), &mut cache);
             assert_eq!(visuals.len(), 1);
+            assert_eq!(visuals[0].icon(), &DockIcon::SystemFallback);
         }
 
-        assert_eq!(resolver.window_calls.get(), 1);
-        assert_eq!(resolver.canonical_calls.get(), 1);
-    }
-
-    #[test]
-    fn pinned_running_app_uses_its_canonical_window_icon_source() {
-        let source = preferred_icon_source(
-            PinState::Pinned,
-            Some("vivaldi.exe".to_owned()),
-            Some("C:\\Apps\\Vivaldi\\vivaldi.exe".to_owned()),
-        );
-
-        assert_eq!(source.as_deref(), Some("C:\\Apps\\Vivaldi\\vivaldi.exe"));
-    }
-
-    #[test]
-    fn pinning_a_running_app_does_not_change_its_canonical_icon_source() {
-        let launch_target = Some("vivaldi.exe".to_owned());
-        let canonical_icon =
-            Some("shell:AppsFolder\\\\Vivaldi.WMOW6CEHCLPDQ4UVKQKEJN7FEI".to_owned());
-
-        let before = preferred_icon_source(
-            PinState::Unpinned,
-            launch_target.clone(),
-            canonical_icon.clone(),
-        );
-        let after = preferred_icon_source(PinState::Pinned, launch_target, canonical_icon);
-
+        let request = cache
+            .take_pending_request()
+            .unwrap_or_else(|| panic!("first visual pass did not queue icon resolution"));
+        assert!(request.generation() > 0);
+        assert!(cache.take_pending_request().is_none());
         assert_eq!(
-            after, before,
-            "pin transition replaced the branded app icon"
+            cache
+                .entries
+                .get(&DockItemId::new(7))
+                .map(|entry| entry.state),
+            Some(IconResolutionState::Pending(request.generation()))
         );
+    }
+
+    #[test]
+    fn current_completion_promotes_placeholder_and_stale_completion_is_ignored() {
+        let item = DockItem::running_unpinned(
+            DockItemId::new(7),
+            AppId::parse("browser.exe").expect("valid app id"),
+            WindowId::new(42),
+            true,
+            false,
+        );
+        let state = ShellState::default().with_dock_items(vec![item]);
+        let mut cache = DockIconSourceCache::default();
+        let _ = visual_items(&state, state.dock_layout(), &HashMap::new(), &mut cache);
+        let request = cache
+            .take_pending_request()
+            .unwrap_or_else(|| panic!("icon request missing"));
+        let fingerprint = cache
+            .entries
+            .get(&DockItemId::new(7))
+            .map(|entry| entry.fingerprint.clone())
+            .unwrap_or_else(|| panic!("cached item missing"));
+
+        let stale = DockIconResolutionResult::new(
+            request.generation() + 1,
+            vec![ResolvedDockIcon::new(
+                DockItemId::new(7),
+                fingerprint.clone(),
+                Some("wrong.exe".to_owned()),
+            )],
+        );
+        assert!(!cache.complete(&stale));
+        let current = DockIconResolutionResult::new(
+            request.generation(),
+            vec![ResolvedDockIcon::new(
+                DockItemId::new(7),
+                fingerprint,
+                Some(r"C:\Apps\Browser\browser.exe".to_owned()),
+            )],
+        );
+        assert!(cache.complete(&current));
+
+        let visuals = visual_items(&state, state.dock_layout(), &HashMap::new(), &mut cache);
+        assert_eq!(
+            visuals[0].icon(),
+            &DockIcon::windows_executable(r"C:\Apps\Browser\browser.exe")
+        );
+        assert!(cache.take_pending_request().is_none());
+    }
+
+    #[test]
+    fn unavailable_worker_resolves_the_placeholder_without_requeueing() {
+        let item = DockItem::pinned(
+            DockItemId::new(7),
+            AppId::parse("browser.exe").expect("valid app id"),
+        );
+        let state = ShellState::default().with_dock_items(vec![item]);
+        let mut targets = HashMap::new();
+        targets.insert(DockItemId::new(7), "browser.exe".to_owned());
+        let mut cache = DockIconSourceCache::default();
+        let _ = visual_items(&state, state.dock_layout(), &targets, &mut cache);
+        let request = cache
+            .take_pending_request()
+            .unwrap_or_else(|| panic!("icon request missing"));
+
+        cache.abandon(request.generation());
+        let visuals = visual_items(&state, state.dock_layout(), &targets, &mut cache);
+
+        assert_eq!(visuals[0].icon(), &DockIcon::SystemFallback);
+        assert!(cache.take_pending_request().is_none());
     }
 
     #[test]

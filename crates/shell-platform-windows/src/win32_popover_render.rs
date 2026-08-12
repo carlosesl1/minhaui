@@ -3,8 +3,8 @@
 use shell_core::Popover;
 use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
 use shell_renderer::{
-    PhysicalRect, PopoverSurfaceSize, context_menu_height_for_entries, physical_from_dip,
-    popover_surface_size, quick_settings_surface_size,
+    PhysicalRect, PopoverSurfaceSize, context_menu_height_for_entries, layout_settings_scene,
+    physical_from_dip, popover_surface_size, quick_settings_surface_size,
 };
 use windows::core::Result;
 
@@ -20,17 +20,27 @@ use crate::{
 
 const POPOVER_SURFACE_ROLE: ShowcaseRole = ShowcaseRole::Popover;
 
+pub(super) struct QuickSettingsWorkerWindows<'a> {
+    pub(super) topbar: &'a OwnedWindow,
+    pub(super) dock: &'a OwnedWindow,
+    pub(super) popover: &'a mut OwnedWindow,
+    pub(super) preview: &'a OwnedWindow,
+    pub(super) settings: &'a OwnedWindow,
+}
+
 impl RuntimeSurfaces {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn complete_quick_settings_worker(
         &mut self,
         result: crate::quick_settings_worker::QuickSettingsWorkerResult,
-        topbar: &OwnedWindow,
-        dock: &mut OwnedWindow,
-        popover: &mut OwnedWindow,
-        preview: &OwnedWindow,
-        settings: &mut OwnedWindow,
+        windows: QuickSettingsWorkerWindows<'_>,
     ) -> Result<bool> {
+        let QuickSettingsWorkerWindows {
+            topbar,
+            dock,
+            popover,
+            preview,
+            settings,
+        } = windows;
         let (generation, payload) = result.into_parts();
         if generation != self.quick_settings_generation
             && matches!(
@@ -61,13 +71,6 @@ impl RuntimeSurfaces {
                     crate::quick_settings_worker::QuickSettingsWorkerAction::Applied(control) => {
                         self.quick_settings_controller
                             .apply_capability_update(control);
-                    }
-                    crate::quick_settings_worker::QuickSettingsWorkerAction::AudioChanged(
-                        snapshot,
-                    ) => {
-                        self.quick_settings_audio_cache = snapshot.clone();
-                        self.quick_settings_controller.replace_audio_panel(snapshot);
-                        reflow = true;
                     }
                     crate::quick_settings_worker::QuickSettingsWorkerAction::OpenSystemRoute(
                         route,
@@ -114,12 +117,13 @@ impl RuntimeSurfaces {
     pub(super) fn apply_topbar_actions(
         &mut self,
         actions: &[QueuedTopbarAction],
-        topbar: &OwnedWindow,
+        topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
         popover: &mut OwnedWindow,
-        preview: &OwnedWindow,
+        preview: &mut OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<()> {
+        let mut follow_up = Vec::new();
         for action in actions {
             match action {
                 QueuedTopbarAction::OpenPopover {
@@ -141,7 +145,7 @@ impl RuntimeSurfaces {
                         popover.hide();
                         continue;
                     }
-                    settings.hide();
+                    self.dismiss_settings(topbar, dock, popover, preview, settings)?;
                     self.active_topbar_anchor = Some(*anchor);
                     let active_module = match anchor {
                         TopbarOverlayAnchor::Module(kind) => Some(*kind),
@@ -248,13 +252,35 @@ impl RuntimeSurfaces {
                         );
                     }
                 }
+                QueuedTopbarAction::OpenOverflow { items } => {
+                    let Some(bounds) = self.topbar_controller.overflow_bounds() else {
+                        continue;
+                    };
+                    let point = windows::Win32::Foundation::POINT {
+                        x: physical_from_dip(bounds.x, topbar.dpi()),
+                        y: physical_from_dip(bounds.y + bounds.height, topbar.dpi()),
+                    };
+                    if let Some(kind) = crate::win32_topbar_overflow::track_topbar_overflow(
+                        topbar.hwnd,
+                        point,
+                        items,
+                    ) {
+                        follow_up.extend(
+                            self.topbar_controller
+                                .activate_overflow_item(kind)
+                                .map_err(|error| {
+                                    windows::core::Error::new(invalid_arg(), error.to_string())
+                                })?,
+                        );
+                    }
+                }
                 QueuedTopbarAction::OpenSearch => {
                     self.cleanup_external_menu_state();
                     self.clear_active_topbar_module();
                     self.popover_controller.dismiss();
                     self.quick_settings_controller.dismiss();
                     popover.hide();
-                    settings.hide();
+                    self.dismiss_settings(topbar, dock, popover, preview, settings)?;
                     record_system_action(
                         "topbar.search",
                         crate::win32_system_actions::open_search(),
@@ -263,6 +289,9 @@ impl RuntimeSurfaces {
                 QueuedTopbarAction::RedrawTopbar => {}
             }
         }
+        if !follow_up.is_empty() {
+            self.apply_topbar_actions(&follow_up, topbar, dock, popover, preview, settings)?;
+        }
         Ok(())
     }
 
@@ -270,10 +299,10 @@ impl RuntimeSurfaces {
     pub(super) fn open_dock_context_menu(
         &mut self,
         point: shell_renderer::DipPoint,
-        topbar: &OwnedWindow,
+        topbar: &mut OwnedWindow,
         dock: &mut OwnedWindow,
         popover: &mut OwnedWindow,
-        preview: &OwnedWindow,
+        preview: &mut OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<()> {
         self.cleanup_external_menu_state();
@@ -283,7 +312,7 @@ impl RuntimeSurfaces {
         self.popover_controller.dismiss();
         self.quick_settings_controller.dismiss();
         popover.set_backdrop_enabled(false);
-        settings.hide();
+        self.dismiss_settings(topbar, dock, popover, preview, settings)?;
         let before = self.dock_controller.state().clone();
         let visual_before = self.dock_controller.visual_generation();
         let hold_actions = self
@@ -698,17 +727,6 @@ impl RuntimeSurfaces {
                             self.quick_settings_controller.apply_capability_update(control);
                             redraw_popover = true;
                         }
-                        crate::win32_quick_settings_actions::QuickSettingsActionResult::AudioChanged(snapshot) => {
-                            self.quick_settings_audio_cache = snapshot.clone();
-                            self.quick_settings_controller.replace_audio_panel(snapshot);
-                            self.quick_settings_generation =
-                                self.quick_settings_worker.request_refresh(
-                                    false,
-                                    crate::win32_event_queue::native_window_id(topbar.hwnd),
-                                );
-                            redraw_popover = true;
-                            reflow_popover = true;
-                        }
                         crate::win32_quick_settings_actions::QuickSettingsActionResult::OpenSystemRoute(route) => {
                             let result = crate::win32_system_actions::apply(
                                 &PopoverAction::OpenSystemRoute(route),
@@ -782,7 +800,11 @@ impl RuntimeSurfaces {
             settings,
         };
         let window_size = settings.surface_physical_size();
+        self.settings_controller
+            .update_surface(crate::win32_dock_render::dip_surface(settings));
         let scene = self.settings_controller.scene();
+        let layout = layout_settings_scene(&scene, crate::win32_dock_render::dip_surface(settings));
+        crate::win32_settings_uia::publish(settings.hwnd, &scene, &layout, settings.dpi())?;
         let scenes = ShellScenes {
             topbar: None,
             dock: None,
@@ -792,19 +814,18 @@ impl RuntimeSurfaces {
             settings: Some(&scene),
             preview: None,
         };
-        let update = present_frame(
-            &mut self.surface_runtime,
-            SurfaceFrame {
-                target: SurfaceTarget {
-                    hwnd: settings.hwnd,
-                    role: ShowcaseRole::Settings,
-                    metrics: SurfaceMetrics::new(window_size.0, window_size.1, settings.dpi()),
-                },
-                scenes,
+        let frame = SurfaceFrame {
+            target: SurfaceTarget {
+                hwnd: settings.hwnd,
+                role: ShowcaseRole::Settings,
+                metrics: SurfaceMetrics::new(window_size.0, window_size.1, settings.dpi()),
             },
-            SurfaceSizeChange::Resize,
-        );
-        self.complete_surface_update(update, windows)
+            scenes,
+        };
+        let update = present_frame(&mut self.surface_runtime, frame, SurfaceSizeChange::Resize);
+        self.complete_surface_update_with_one_retry(update, windows, |runtime| {
+            present_frame(runtime, frame, SurfaceSizeChange::Resize)
+        })
     }
 
     pub(super) fn redraw_popover(
@@ -879,10 +900,11 @@ impl RuntimeSurfaces {
         topbar: &OwnedWindow,
         anchor: TopbarOverlayAnchor,
     ) -> PhysicalRect {
-        let TopbarOverlayAnchor::Module(kind) = anchor else {
-            return topbar.rect;
+        let bounds = match anchor {
+            TopbarOverlayAnchor::Module(kind) => self.topbar_controller.module_bounds(kind),
+            TopbarOverlayAnchor::Overflow => self.topbar_controller.overflow_bounds(),
         };
-        let Some(bounds) = self.topbar_controller.module_bounds(kind) else {
+        let Some(bounds) = bounds else {
             return topbar.rect;
         };
         PhysicalRect::new(

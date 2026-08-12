@@ -87,6 +87,24 @@ impl DockController {
         self.config
     }
 
+    pub fn update_config(
+        &mut self,
+        config: DockRuntimeConfig,
+    ) -> Result<Vec<crate::QueuedDockAction>, DockControllerError> {
+        let effective_autohide = config.autohide() || self.fullscreen_autohide;
+        let actions = if self.state.dock().enabled() != effective_autohide {
+            self.apply(ShellEvent::EnableAutohide(effective_autohide))?
+        } else {
+            Vec::new()
+        };
+        if self.config != config {
+            self.config = config;
+            self.invalidate_hit_layout();
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
+        Ok(actions)
+    }
+
     #[must_use]
     #[cfg(test)]
     pub const fn animator(&self) -> DockAnimator {
@@ -287,6 +305,28 @@ impl DockController {
     pub(crate) fn invalidate_model_caches(&self) {
         self.visual_items.replace(None);
         self.invalidate_hit_layout();
+    }
+
+    pub(crate) fn take_icon_resolution_request(
+        &self,
+    ) -> Option<crate::dock_icon_worker::DockIconResolutionRequest> {
+        self.icon_sources.borrow_mut().take_pending_request()
+    }
+
+    pub(crate) fn complete_icon_resolution(
+        &mut self,
+        result: &crate::dock_icon_worker::DockIconResolutionResult,
+    ) -> bool {
+        let changed = self.icon_sources.borrow_mut().complete(result);
+        if changed {
+            self.visual_items.replace(None);
+            self.visual_generation = self.visual_generation.wrapping_add(1);
+        }
+        changed
+    }
+
+    pub(crate) fn abandon_icon_resolution(&self, generation: u64) {
+        self.icon_sources.borrow_mut().abandon(generation);
     }
 
     pub(crate) fn visual_items_for_layout(

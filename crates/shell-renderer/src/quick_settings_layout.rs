@@ -504,18 +504,10 @@ pub fn layout_quick_settings(scene: &QuickSettingsScene, surface: DipRect) -> Qu
             None
         };
 
-        y += AUDIO_SECTION_LABEL_HEIGHT;
-        let mut audio_outputs = Vec::new();
-        for output in audio.outputs() {
-            audio_outputs.push(QuickSettingsLaidOutAudioOutput {
-                id: output.id(),
-                bounds: DipRect::new(content.x, y, content.width, AUDIO_OUTPUT_HEIGHT),
-            });
-            y += AUDIO_OUTPUT_HEIGHT + 4.0;
-        }
-        if !audio_outputs.is_empty() {
-            y -= 4.0;
-        }
+        // Endpoint switching is owned by Windows Settings. The scene retains the
+        // current endpoint for informational rendering, but exposes no row that
+        // could be mistaken for an in-app selector.
+        let audio_outputs = Vec::new();
         let audio_spatial_bounds = audio.spatial_audio().then(|| {
             y += GAP;
             let bounds = DipRect::new(content.x, y, content.width, AUDIO_OUTPUT_HEIGHT);

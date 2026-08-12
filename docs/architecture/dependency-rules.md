@@ -73,7 +73,9 @@ Qualquer nova aresta, nova crate ou inversão exige ADR antes da implementação
 
 - Supervisão, recuperação e restauração independente do processo principal.
 - Não depende da plataforma ou do renderer.
-- Sem `unsafe`.
+- Regras, journal e supervisão permanecem sem `unsafe`.
+- O Adapter privado de restauração Win32 pode usar `unsafe` somente no módulo
+  isolado aprovado pelo ADR-0011, com invariantes documentadas e testes nativos.
 
 ## Interface pública
 

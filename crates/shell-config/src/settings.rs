@@ -55,6 +55,11 @@ impl DockSettings {
     }
 
     #[must_use]
+    pub const fn animation_ms(&self) -> u16 {
+        self.animation_ms
+    }
+
+    #[must_use]
     pub const fn with_item_size(mut self, value: u16) -> Self {
         self.item_size = value;
         self
@@ -75,6 +80,12 @@ impl DockSettings {
     #[must_use]
     pub const fn with_magnification(mut self, value: u16) -> Self {
         self.magnification = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_animation_ms(mut self, value: u16) -> Self {
+        self.animation_ms = value;
         self
     }
 
@@ -113,6 +124,12 @@ impl TopbarSettings {
     pub const fn density(&self) -> TopbarDensityPreference {
         self.density
     }
+
+    #[must_use]
+    pub const fn with_density(mut self, value: TopbarDensityPreference) -> Self {
+        self.density = value;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +166,21 @@ impl AppearanceSettings {
     }
 
     #[must_use]
+    pub const fn opacity(&self) -> u8 {
+        self.opacity
+    }
+
+    #[must_use]
+    pub const fn shadow(&self) -> u8 {
+        self.shadow
+    }
+
+    #[must_use]
+    pub const fn radius(&self) -> u16 {
+        self.radius
+    }
+
+    #[must_use]
     pub fn with_theme(mut self, theme: ThemePayload) -> Self {
         self.theme = theme;
         self
@@ -157,6 +189,24 @@ impl AppearanceSettings {
     #[must_use]
     pub const fn with_blur(mut self, value: u8) -> Self {
         self.blur = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_opacity(mut self, value: u8) -> Self {
+        self.opacity = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_shadow(mut self, value: u8) -> Self {
+        self.shadow = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_radius(mut self, value: u16) -> Self {
+        self.radius = value;
         self
     }
 
@@ -176,6 +226,30 @@ pub struct BehaviorSettings {
     reduced_motion: bool,
 }
 
+impl BehaviorSettings {
+    #[must_use]
+    pub const fn startup(self) -> bool {
+        self.startup
+    }
+
+    #[must_use]
+    pub const fn reduced_motion(self) -> bool {
+        self.reduced_motion
+    }
+
+    #[must_use]
+    pub const fn with_startup(mut self, value: bool) -> Self {
+        self.startup = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_reduced_motion(mut self, value: bool) -> Self {
+        self.reduced_motion = value;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdvancedSettings {
@@ -189,5 +263,29 @@ impl Default for AdvancedSettings {
             recovery_enabled: true,
             diagnostics_enabled: false,
         }
+    }
+}
+
+impl AdvancedSettings {
+    #[must_use]
+    pub const fn recovery_enabled(self) -> bool {
+        self.recovery_enabled
+    }
+
+    #[must_use]
+    pub const fn diagnostics_enabled(self) -> bool {
+        self.diagnostics_enabled
+    }
+
+    #[must_use]
+    pub const fn with_recovery_enabled(mut self, value: bool) -> Self {
+        self.recovery_enabled = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_diagnostics_enabled(mut self, value: bool) -> Self {
+        self.diagnostics_enabled = value;
+        self
     }
 }

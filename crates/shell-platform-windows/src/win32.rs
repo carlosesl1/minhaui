@@ -1,13 +1,26 @@
 use std::sync::atomic::{AtomicI32, AtomicIsize, AtomicU32, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
+use std::{ffi::c_void, path::PathBuf};
+use std::{io::Write, thread::Builder};
 
-use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, WPARAM};
+use windows::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+};
+use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::System::WinRT::{RO_INIT_SINGLETHREADED, RoInitialize, RoUninitialize};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW;
+use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, RegisterWindowMessageW,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, SMTO_ERRORONEXIT, SendMessageTimeoutW,
+};
 use windows::core::{Result, w};
 
 use crate::PlatformEvent;
@@ -18,7 +31,7 @@ use crate::win32_slots::{
 };
 use crate::win32_taskbar_visibility::ExplorerTaskbarVisibilityGuard;
 use crate::win32_timer::TimerGuard;
-use crate::win32_window::WindowClass;
+use crate::win32_window::{CLASS_NAME, SETTINGS_TITLE, WindowClass};
 use crate::win32_windowing::{MessageLoopAction, message_loop, monitor_placement_inputs};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +44,7 @@ pub struct ShowcaseRunConfig {
     pub high_contrast: bool,
     pub reduced_motion: bool,
     pub liquid_glass: bool,
+    pub watchdog_heartbeat: bool,
 }
 
 pub(super) const TIMER_ID: usize = 0x4D55;
@@ -42,6 +56,7 @@ pub(super) const DOCK_EDGE_PROBE_TIMER_ID: usize = 0x4D5A;
 pub(super) const EXTERNAL_MENU_TIMER_ID: usize = 0x4D5B;
 pub(super) static LIVE_WINDOWS: AtomicI32 = AtomicI32::new(0);
 pub(super) static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+pub(super) static ACTIVATE_INSTANCE: AtomicU32 = AtomicU32::new(0);
 pub(super) static DOCK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static TOPBAR_WINDOW: AtomicIsize = AtomicIsize::new(0);
 pub(super) static POPOVER_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -54,6 +69,86 @@ static POPOVER_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static APP_MENU_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static PREVIEW_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
 static SETTINGS_WINDOWS: OnceLock<Mutex<Vec<isize>>> = OnceLock::new();
+
+/// Reveals the Settings window owned by the already-running per-user instance.
+pub fn activate_existing_instance() -> Result<()> {
+    // SAFETY: Category 8 (FFI boundary). Registration uses a static protocol
+    // name and returns the same message identifier in every desktop process.
+    let message = unsafe { RegisterWindowMessageW(w!("MinhaUi.ActivateInstance.v1")) };
+    if message == 0 {
+        return Err(windows::core::Error::from_thread());
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        // SAFETY: Category 8 (FFI boundary). Both class and title are static,
+        // null-terminated UTF-16 strings shared with the registered owner window.
+        if let Ok(hwnd) = unsafe { FindWindowW(CLASS_NAME, SETTINGS_TITLE) } {
+            let mut process_id = 0;
+            // SAFETY: Category 8 (FFI boundary). The OS writes one process ID to
+            // live stack storage for the HWND it just returned.
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+            if process_id != 0 {
+                // SAFETY: Category 8 (FFI boundary). The secondary process was
+                // user-launched and delegates its foreground right to the primary.
+                let _ = unsafe { AllowSetForegroundWindow(process_id) };
+            }
+            let mut delivered = 0;
+            // SAFETY: Category 8 (FFI boundary). The registered message carries
+            // no pointers. The bounded timeout prevents a hung primary blocking
+            // the secondary process indefinitely.
+            let result = unsafe {
+                SendMessageTimeoutW(
+                    hwnd,
+                    message,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT,
+                    2_000,
+                    Some(&mut delivered),
+                )
+            };
+            if result.0 == 0 || delivered != 1 {
+                return Err(windows::core::Error::new(
+                    E_FAIL,
+                    "the primary Minha UI instance did not acknowledge activation",
+                ));
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(windows::core::Error::new(
+                E_FAIL,
+                "the primary Minha UI instance owns the lock but has no Settings window",
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Resolves Local AppData through the Windows known-folder API.
+pub fn local_app_data_path() -> Result<PathBuf> {
+    // SAFETY: Category 8 (FFI boundary). The API allocates a null-terminated
+    // string for the current user and transfers ownership to the caller.
+    let raw = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None) }?;
+    // SAFETY: Category 8 (FFI boundary). `raw` is a live null-terminated string
+    // returned by SHGetKnownFolderPath above.
+    let value = unsafe { raw.to_string() };
+    // SAFETY: Category 8 (FFI boundary). Balance the successful known-folder
+    // allocation exactly once after copying the UTF-16 value.
+    unsafe { CoTaskMemFree(Some(raw.0.cast::<c_void>())) };
+    value
+        .map(PathBuf::from)
+        .map_err(|_| windows::core::Error::new(E_FAIL, "Local AppData contains invalid UTF-16"))
+}
+
+/// Returns the current Windows terminal-services session identifier.
+pub fn current_session_id() -> Result<u32> {
+    let mut session_id = 0;
+    // SAFETY: Category 8 (FFI boundary). The current process ID is valid and the
+    // API writes exactly one u32 to live stack storage.
+    unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session_id) }?;
+    Ok(session_id)
+}
 
 pub fn run_showcase(config: ShowcaseRunConfig) -> Result<()> {
     let safe_mode = config.safe_mode.to_string();
@@ -101,8 +196,13 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     // null-terminated UTF-16 string and the returned identifier is process-global.
     let taskbar_message = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
     TASKBAR_CREATED.store(taskbar_message, Ordering::Release);
-    let mut explorer_taskbars = ExplorerTaskbarVisibilityGuard::prepare_work_area()?;
-
+    // SAFETY: Category 8 (FFI boundary). The activation protocol name is static
+    // and process-global; secondary instances register the identical name.
+    let activate_message = unsafe { RegisterWindowMessageW(w!("MinhaUi.ActivateInstance.v1")) };
+    if activate_message == 0 {
+        return Err(windows::core::Error::from_thread());
+    }
+    ACTIVATE_INSTANCE.store(activate_message, Ordering::Release);
     let monitors = monitor_placement_inputs()?;
     if monitors.is_empty() {
         return Err(windows::core::Error::new(
@@ -110,7 +210,16 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             "no display monitors were enumerated",
         ));
     }
-    let shell_config = crate::win32_config::load_config();
+    let mut shell_config = crate::win32_config::load_config();
+    let explicit_taskbar_opt_in = std::env::var_os("MINHA_UI_UNSAFE_TASKBAR_REPLACEMENT")
+        .is_some_and(|value| value == "I_ACCEPT_NO_NATIVE_RECOVERY");
+    let mut explorer_taskbars = taskbar_replacement_enabled(
+        shell_config.taskbar_policy(),
+        config.safe_mode,
+        explicit_taskbar_opt_in,
+    )
+    .then(ExplorerTaskbarVisibilityGuard::prepare_work_area)
+    .transpose()?;
     print_monitor_placements(&monitors, &shell_config);
     let liquid_glass = config.liquid_glass && !config.safe_mode && !config.high_contrast;
     println!(
@@ -137,6 +246,7 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         &shell_config,
         initial_observation,
     )?;
+    let heartbeat = WatchdogHeartbeat::new(config.watchdog_heartbeat);
     let timer = config
         .qa_exit_ms
         .map(|milliseconds| TimerGuard::start(slots[0].topbar_hwnd(), milliseconds))
@@ -145,11 +255,14 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         .iter()
         .map(|slot| slot.dock_hwnd())
         .collect::<Vec<_>>();
-    explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+    if let Some(taskbars) = explorer_taskbars.as_mut() {
+        taskbars.reconcile_and_hide(&dock_handles)?;
+    }
     for slot in &mut slots {
         slot.show_shells();
         slot.print_windows();
     }
+    heartbeat.pulse();
     if config.simulate_device_loss_once {
         for slot in &mut slots {
             slot.handle_event(PlatformEvent::DeviceLost)?;
@@ -178,7 +291,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                     .iter()
                     .map(|slot| slot.dock_hwnd())
                     .collect::<Vec<_>>();
-                explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+                if let Some(taskbars) = explorer_taskbars.as_mut() {
+                    taskbars.reconcile_and_hide(&dock_handles)?;
+                }
             }
         }
     }
@@ -188,6 +303,12 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             Ok(true)
         }
         MessageLoopAction::Dispatch(event) => {
+            if matches!(event.event(), PlatformEvent::SyncWindows) {
+                heartbeat.pulse();
+            }
+            if let PlatformEvent::SettingsConfigCommitted(config) = event.event() {
+                shell_config = config.as_ref().clone();
+            }
             let taskbar_layout_changed = matches!(
                 event.event(),
                 PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated
@@ -205,7 +326,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                     .iter()
                     .map(|slot| slot.dock_hwnd())
                     .collect::<Vec<_>>();
-                explorer_taskbars.reconcile_and_hide(&dock_handles)?;
+                if let Some(taskbars) = explorer_taskbars.as_mut() {
+                    taskbars.reconcile_and_hide(&dock_handles)?;
+                }
             }
             Ok(keep_running)
         }
@@ -218,8 +341,59 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     result
 }
 
+struct WatchdogHeartbeat {
+    sender: Option<SyncSender<()>>,
+}
+
+impl WatchdogHeartbeat {
+    fn new(enabled: bool) -> Self {
+        if !enabled {
+            return Self { sender: None };
+        }
+        let (sender, receiver) = sync_channel::<()>(1);
+        let spawned = Builder::new()
+            .name("minha-ui-watchdog-heartbeat".to_owned())
+            .spawn(move || {
+                while receiver.recv().is_ok() {
+                    // Acquire stdout only while emitting one protocol frame.
+                    // Holding StdoutLock across the blocking receive would
+                    // deadlock normal startup diagnostics in the UI thread.
+                    let stdout = std::io::stdout();
+                    let mut output = stdout.lock();
+                    if writeln!(output, "MINHA_UI_HEARTBEAT v1").is_err() || output.flush().is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        match spawned {
+            Ok(_thread) => Self {
+                sender: Some(sender),
+            },
+            Err(_) => Self { sender: None },
+        }
+    }
+
+    fn pulse(&self) {
+        if let Some(sender) = &self.sender {
+            let _ = sender.try_send(());
+        }
+    }
+}
+
 const fn solid_material_for_accessibility(safe_mode: bool, high_contrast: bool) -> bool {
     safe_mode || high_contrast
+}
+
+const fn taskbar_replacement_enabled(
+    policy: shell_core::TaskbarPolicy,
+    safe_mode: bool,
+    explicit_opt_in: bool,
+) -> bool {
+    !safe_mode
+        && explicit_opt_in
+        && cfg!(feature = "experimental-taskbar-replacement")
+        && matches!(policy, shell_core::TaskbarPolicy::Hide)
 }
 
 struct ComApartment;
@@ -381,12 +555,43 @@ const fn invalid_arg() -> windows::core::HRESULT {
 
 #[cfg(test)]
 mod material_policy_tests {
-    use super::solid_material_for_accessibility;
+    use super::{solid_material_for_accessibility, taskbar_replacement_enabled};
 
     #[test]
     fn system_backdrop_is_not_required_for_translucent_composition() {
         assert!(!solid_material_for_accessibility(false, false));
         assert!(solid_material_for_accessibility(true, false));
         assert!(solid_material_for_accessibility(false, true));
+    }
+
+    #[test]
+    fn stable_build_never_replaces_the_explorer_taskbar() {
+        if !cfg!(feature = "experimental-taskbar-replacement") {
+            for policy in [
+                shell_core::TaskbarPolicy::Off,
+                shell_core::TaskbarPolicy::AutoHide,
+                shell_core::TaskbarPolicy::Hide,
+            ] {
+                assert!(!taskbar_replacement_enabled(policy, false, true));
+            }
+        }
+    }
+
+    #[test]
+    fn safe_mode_never_replaces_the_explorer_taskbar() {
+        assert!(!taskbar_replacement_enabled(
+            shell_core::TaskbarPolicy::Hide,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn experimental_taskbar_replacement_requires_a_second_explicit_opt_in() {
+        assert!(!taskbar_replacement_enabled(
+            shell_core::TaskbarPolicy::Hide,
+            false,
+            false,
+        ));
     }
 }

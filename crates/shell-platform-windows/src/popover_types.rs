@@ -49,6 +49,7 @@ pub enum SystemRoute {
     Bluetooth,
     Sound,
     Display,
+    NightLight,
     Focus,
     Power,
     DateTime,

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex, OnceLock};
 
 mod animation;
 mod resize;
@@ -34,8 +35,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::core::{Interface, Result};
 
-use crate::ShowcaseTokens;
-use crate::native_desktop_capture::{DesktopBlurCapture, wants_desktop_blur};
+use crate::native_desktop_capture::{DesktopBlurCapture, DesktopBlurPipeline, wants_desktop_blur};
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
 use crate::native_liquid_glass::{
@@ -48,7 +48,9 @@ use crate::{
     ContextMenuScene, DockScene, Dpi, PopoverScene, QuickSettingsScene, SettingsScene, TopbarScene,
     WindowPreviewScene, logical_surface_rect,
 };
+use crate::{ShowcaseTokens, VisualPreferences};
 
+pub use crate::native_desktop_capture::DESKTOP_BLUR_WAKE_MESSAGE;
 pub use crate::native_present::{
     DeviceLossKind, PresentOutcome, classify_present_hresult, device_loss_hresult,
     is_recoverable_hresult,
@@ -92,9 +94,11 @@ pub struct CompositionRenderer {
     dcomp: IDCompositionDevice,
     device_kind: DeviceKind,
     icons: RefCell<NativeIconCache>,
+    desktop_blur_pipeline: Option<Arc<Mutex<DesktopBlurPipeline>>>,
     showcase_resources: RefCell<ShowcaseResourceCache>,
     solid_material: bool,
     liquid_glass_mode: LiquidGlassMode,
+    visual_preferences: VisualPreferences,
 }
 
 pub struct WindowSurface {
@@ -152,6 +156,25 @@ impl<T> BackBufferCache<T> {
     }
 }
 
+fn shared_desktop_blur_pipeline() -> Option<Arc<Mutex<DesktopBlurPipeline>>> {
+    static PIPELINE: OnceLock<Option<Arc<Mutex<DesktopBlurPipeline>>>> = OnceLock::new();
+    PIPELINE
+        .get_or_init(|| match DesktopBlurPipeline::new() {
+            Ok(pipeline) => Some(Arc::new(Mutex::new(pipeline))),
+            Err(error) => {
+                eprintln!("DESKTOP_BLUR stage=worker_spawn status=disabled error={error}");
+                None
+            }
+        })
+        .clone()
+}
+
+fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SurfaceMetrics {
     width: u32,
@@ -177,6 +200,7 @@ impl CompositionRenderer {
         solid_material: bool,
         liquid_glass: bool,
         reduced_motion: bool,
+        visual_preferences: VisualPreferences,
     ) -> Result<Self> {
         let (d3d, device_kind) = create_d3d_device(force_warp)?;
         let dxgi_device: IDXGIDevice = d3d.cast()?;
@@ -199,6 +223,7 @@ impl CompositionRenderer {
         // DXGI device and the generic interface type supplies its documented IID.
         let dcomp: IDCompositionDevice = unsafe { DCompositionCreateDevice(&dxgi_device) }?;
         let icons = NativeIconCache::new(&d2d_context)?;
+        let desktop_blur_pipeline = shared_desktop_blur_pipeline();
 
         Ok(Self {
             _d3d: d3d,
@@ -207,6 +232,7 @@ impl CompositionRenderer {
             dcomp,
             device_kind,
             icons: RefCell::new(icons),
+            desktop_blur_pipeline,
             showcase_resources: RefCell::new(ShowcaseResourceCache::default()),
             solid_material,
             liquid_glass_mode: liquid_glass_mode(
@@ -215,6 +241,7 @@ impl CompositionRenderer {
                 device_kind,
                 reduced_motion,
             ),
+            visual_preferences,
         })
     }
 
@@ -277,13 +304,16 @@ impl CompositionRenderer {
                 &self.d2d_context,
                 logical_surface.width,
                 logical_surface.height,
-                ShowcaseTokens::obsidian_glass().dock_radius,
+                ShowcaseTokens::obsidian_glass()
+                    .with_preferences(self.visual_preferences, self.solid_material)
+                    .dock_radius,
             )?)
         } else {
             None
         };
         let liquid_glass = if let Some(profile) = profile_for_role(role) {
-            let tokens = ShowcaseTokens::obsidian_glass();
+            let tokens = ShowcaseTokens::obsidian_glass()
+                .with_preferences(self.visual_preferences, self.solid_material);
             let (glass_width, glass_height, radius) = match profile {
                 LiquidGlassProfile::Dock => (
                     logical_surface.width,
@@ -316,15 +346,17 @@ impl CompositionRenderer {
             scenes.quick_settings.is_some(),
             self.solid_material,
         ) {
-            DesktopBlurCapture::capture(&self.d2d_context, hwnd, width, height, dpi).unwrap_or_else(
-                |error| {
-                    eprintln!(
-                        "DESKTOP_BLUR stage=initial_capture status=fallback hresult={:#010X}",
-                        error.code().0 as u32,
-                    );
-                    None
-                },
-            )
+            self.desktop_blur_pipeline.as_ref().and_then(|pipeline| {
+                lock_recover(pipeline)
+                    .prepare_hidden(&self.d2d_context, hwnd, width, height, dpi)
+                    .unwrap_or_else(|error| {
+                        eprintln!(
+                            "DESKTOP_BLUR stage=initial_capture status=fallback hresult={:#010X}",
+                            error.code().0 as u32,
+                        );
+                        None
+                    })
+            })
         } else {
             None
         };
@@ -340,6 +372,7 @@ impl CompositionRenderer {
                 dock_inset.as_ref(),
                 liquid_glass.as_ref(),
                 desktop_blur.as_ref(),
+                self.visual_preferences,
             ),
             logical_surface,
             scenes,
@@ -461,24 +494,40 @@ impl CompositionRenderer {
         );
         if !desktop_blur_enabled {
             surface.desktop_blur.borrow_mut().take();
-        // SAFETY: The surface owns this HWND and visibility is queried only to
-        // avoid capturing the popover into its own background.
-        } else if !unsafe { IsWindowVisible(surface.hwnd) }.as_bool() {
-            let capture = DesktopBlurCapture::capture(
-                &self.d2d_context,
-                surface.hwnd,
-                surface.width,
-                surface.height,
-                surface.dpi,
-            )
-            .unwrap_or_else(|error| {
-                eprintln!(
-                    "DESKTOP_BLUR stage=refresh status=fallback hresult={:#010X}",
-                    error.code().0 as u32,
-                );
-                None
+        } else {
+            // SAFETY: The surface owns this HWND. Hidden redraws may submit one
+            // latest-only GDI request; visible redraws only consume a completed
+            // CPU raster and keep all D2D resource creation on this UI thread.
+            let hidden = !unsafe { IsWindowVisible(surface.hwnd) }.as_bool();
+            let capture = self.desktop_blur_pipeline.as_ref().and_then(|pipeline| {
+                let capture = if hidden {
+                    lock_recover(pipeline).prepare_hidden(
+                        &self.d2d_context,
+                        surface.hwnd,
+                        surface.width,
+                        surface.height,
+                        surface.dpi,
+                    )
+                } else {
+                    lock_recover(pipeline).take_ready(
+                        &self.d2d_context,
+                        surface.hwnd,
+                        surface.width,
+                        surface.height,
+                        surface.dpi,
+                    )
+                };
+                capture.unwrap_or_else(|error| {
+                    eprintln!(
+                        "DESKTOP_BLUR stage=refresh status=fallback hresult={:#010X}",
+                        error.code().0 as u32,
+                    );
+                    None
+                })
             });
-            *surface.desktop_blur.borrow_mut() = capture;
+            if hidden || capture.is_some() {
+                *surface.desktop_blur.borrow_mut() = capture;
+            }
         }
         let bitmap = self.current_target_bitmap(surface)?;
         // SAFETY: Category 8 (FFI boundary). The freshly acquired back-buffer
@@ -501,11 +550,29 @@ impl CompositionRenderer {
                 surface.dock_inset.as_ref(),
                 surface.liquid_glass.as_ref(),
                 surface.desktop_blur.borrow().as_ref(),
+                self.visual_preferences,
             ),
             logical_surface_rect(surface.width, surface.height, surface.dpi),
             scenes,
         )?;
         surface.present()
+    }
+
+    pub fn prefetch_desktop_blur(&self, surface: &WindowSurface) {
+        let Some(pipeline) = self.desktop_blur_pipeline.as_ref() else {
+            return;
+        };
+        if let Err(error) = lock_recover(pipeline).request_hidden(
+            surface.hwnd,
+            surface.width,
+            surface.height,
+            surface.dpi,
+        ) {
+            eprintln!(
+                "DESKTOP_BLUR stage=prefetch status=fallback hresult={:#010X}",
+                error.code().0 as u32,
+            );
+        }
     }
 
     fn current_target_bitmap(&self, surface: &WindowSurface) -> Result<ID2D1Bitmap1> {

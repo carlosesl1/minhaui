@@ -3,7 +3,7 @@
 Windows Native Dock, currently branded **Obsidian Glass**, is a local-first
 shell companion for Windows 10 22H2 and Windows 11 on x64 hardware. The app
 provides a native dock, top bar, popovers, settings, portable themes, safe mode,
-and a separate recovery watchdog.
+and a separate launcher/watchdog.
 
 ## Repository layout
 
@@ -18,7 +18,7 @@ Minha UI APP/
 |   |-- shell-core/              Pure domain state and reducers
 |   |-- shell-platform-windows/  Windows integration and native input
 |   |-- shell-renderer/          D3D11 and DirectComposition rendering
-|   `-- shell-watchdog/          Recovery and taskbar restoration
+|   `-- shell-watchdog/          Launcher, supervision, and recovery boundary
 |-- docs/                        Product references, specifications, and plans
 |-- packaging/
 |   |-- msix/                    Microsoft Store and sideloading layout
@@ -48,14 +48,14 @@ the current stabilization baseline. This README remains a concise project map.
 | `shell-platform-windows` | Documented Windows API adapters |
 | `shell-renderer` | D3D11 and DirectComposition rendering boundary |
 | `shell-app` | Main process and dependency composition |
-| `shell-watchdog` | Recovery and taskbar-restoration process |
+| `shell-watchdog` | Launcher, heartbeat/crash-loop supervision, and recovery boundary |
 
-`shell-core`, `shell-config`, `shell-app`, and `shell-watchdog` forbid unsafe
-Rust. The workspace denies unsafe code by default. A future native adapter may
-remove workspace lint inheritance only in `shell-platform-windows` or
-`shell-renderer`; that change must isolate each unsafe operation behind a safe
-API, document its safety invariant, and add the dedicated Miri or Windows
-integration proof before review.
+`shell-core`, `shell-config`, and `shell-app` forbid unsafe Rust. The workspace
+denies unsafe code by default. `shell-watchdog` keeps its journal, supervision,
+and recovery planner safe; ADR-0011 permits `unsafe` only inside its private,
+Windows-only taskbar recovery adapter. Native adapters must isolate every unsafe
+operation behind a safe API, document its invariant, and add a dedicated Miri
+or Windows integration proof before review.
 
 ## Prerequisites
 
@@ -97,17 +97,28 @@ Windows image. It must include Calculator and Windows Terminal, have DWM active,
 and have no existing Obsidian Glass instance or conflicting AppBar registration.
 
 Release builds use abort-on-panic, fat LTO, one codegen unit, and stripped
-symbols. The two process skeletons currently print an explicit bootstrap status
-and exit successfully; lifecycle and crash recovery arrive in later milestones.
+symbols. Normal packaged startup enters `shell-watchdog`, which launches the
+sibling `shell-app`, monitors its heartbeat, applies bounded restart backoff,
+and makes one safe-mode attempt after a crash loop.
 
 ## Run the app
 
 ```powershell
-cargo run --release --bin shell-app
-cargo run --release --bin shell-watchdog
+cargo build --release -p shell-app -p shell-watchdog
+.\target\x86_64-pc-windows-msvc\release\shell-watchdog.exe
 ```
 
-The normal app launch opens the interactive shell. `--safe-mode` disables
+The watchdog is the normal entry point for packaged and local release runs. It
+accepts an alternate child through `--child <path>` and forwards shell arguments
+only after `--`, for example
+`.\shell-watchdog.exe -- --liquid-glass`. Running `shell-app.exe` directly is a
+diagnostic path and bypasses crash-loop supervision.
+
+Release builds use the Windows GUI subsystem, so packaged startup does not leave
+a console window open. Debug builds retain the console for diagnostics; the
+watchdog heartbeat remains a private pipe between the two release processes.
+
+`--safe-mode` disables
 expensive visual effects and enables reduced motion while keeping the normal
 hardware-first renderer with automatic WARP fallback. Use `--force-warp` only
 to explicitly require software rendering. `--high-contrast` and
@@ -123,13 +134,70 @@ cargo run --release --bin shell-app -- --liquid-glass
 It affects only the dock material and is suppressed by safe mode and high
 contrast. WARP and reduced-motion launches use its static fallback.
 
-The **Apps** module in the top bar lists active applications registered in the
-Windows notification area. It refreshes only when opened, reads Explorer's
-per-user registration data without changing it, and uses no background polling.
-Selecting a row focuses an existing eligible window or opens the already-running
-application; it does not reproduce private tray-icon callbacks. If a future
-Windows version removes the Explorer registry contract, the popover reports
-that background apps are unavailable and the rest of the shell keeps running.
+## Settings and personalization
+
+Open **Settings** from the top-bar system menu, or choose **Edit controls** in
+Quick Settings. The native, resizable Settings window currently supports:
+
+- Dock size, spacing, alignment, magnification, and auto-hide;
+- top-bar density and module visibility;
+- Quick Controls visibility and keyboard reordering; and
+- shared surface opacity and corner radius with live preview.
+
+Changes remain in a draft until **Apply** is selected (`Ctrl+Enter` also
+applies). **Cancel**, closing the window, or dismissing the draft restores the
+last committed runtime configuration. A successful commit is broadcast to all
+monitor slots while preserving the latest pinned Dock layout. If another
+monitor commits while a local draft is open, that draft is preserved and
+Settings shows an explicit review warning instead of silently replacing it.
+Sections whose Windows/runtime contract is not complete remain visibly
+unavailable instead of showing controls that do nothing.
+
+The Settings window now exposes its logical navigation and controls through a
+server-side Windows UI Automation provider, including Invoke, Toggle, and
+RangeValue patterns. Consecutive snapshots raise structure, property, and focus
+notifications only while UIA clients are listening. Native Narrator/
+Accessibility Insights validation remains a release gate; the Dock, top bar,
+previews, and popovers do not yet expose equivalent providers.
+
+The **Apps** module in the top bar lists active applications from read-only
+per-user notification registrations and the current process snapshot. The
+registration location is treated as a capability-probed compatibility fallback,
+not as a guaranteed public Windows API.
+It refreshes only when opened and uses no background polling. Stable builds do
+not inject code into Explorer, install a helper at sign-in, or read Explorer's
+private toolbar memory. Selecting a row focuses an eligible existing window or
+opens the already-running application. If registrations are unavailable, the
+popover reports that background apps are unavailable and the rest of the shell
+keeps running.
+
+An unsupported Explorer tray bridge remains source-gated behind the
+`experimental-tray-bridge` Cargo feature for isolated research only. It is not
+compiled or executed by normal builds and must not be enabled for release,
+Store, or end-user packages.
+
+Stable builds also leave the Windows taskbar untouched, including when an old
+configuration contains the legacy `hide` policy. The watchdog now provides real
+process/heartbeat supervision, a bounded/versioned write-ahead journal, and a
+fail-closed native `--restore-only` path for a compatible pending journal. The
+native recovery path rediscovers Explorer taskbars, restores the supported V1
+state, verifies it, and preserves the journal whenever recovery is uncertain.
+Arming the journal before mutation and validating crash recovery on real Windows
+are still release gates. Explorer replacement therefore remains source-gated
+behind `experimental-taskbar-replacement`, requires the explicit unsafe
+validation token `MINHA_UI_UNSAFE_TASKBAR_REPLACEMENT=I_ACCEPT_NO_NATIVE_RECOVERY`,
+and is intended only for a disposable, controlled Windows validation image.
+
+Night Light opens the documented `ms-settings:nightlight` Windows page. Stable
+builds do not edit private CloudStore records or depend on an unlicensed Git
+package to simulate a direct toggle.
+
+Do not disturb and default audio-output selection follow the same stability
+boundary: the shell keeps documented Core Audio reads, mute, master volume, and
+per-session volume controls, but opens `ms-settings:quiethours` or
+`ms-settings:sound` when Windows requires the user to change system policy.
+Stable builds no longer ship the private WNF quiet-hours bridge or the
+undocumented `IPolicyConfig` COM ABI.
 
 ## Build distributable layouts
 
