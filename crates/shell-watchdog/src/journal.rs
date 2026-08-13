@@ -346,6 +346,34 @@ pub fn remove_recovery_journal_for_transaction(
     remove_recovery_journal_locked(path, parent)
 }
 
+/// Cancels a transaction that never reached `Applied`.
+///
+/// A `Prepared` journal cannot authorize native mutation. This operation holds
+/// the cross-process journal lock, authenticates the transaction and phase, and
+/// removes only that exact file. It deliberately does not apply the old
+/// Explorer snapshot, which may have changed legitimately before LEASE.
+pub fn cancel_prepared_recovery_journal(
+    path: &Path,
+    expected_transaction_id: RecoveryTransactionId,
+) -> Result<(), RecoveryJournalError> {
+    let parent = journal_parent(path);
+    prepare_parent(path, parent)?;
+    let _lock = acquire_journal_lock(path, parent)?;
+    let Some(journal) = load_recovery_journal(path)? else {
+        return Ok(());
+    };
+    let found_transaction_id = parse_transaction_id(path, &journal)?;
+    authenticate_transaction(path, expected_transaction_id, found_transaction_id)?;
+    if journal.phase != RecoveryJournalPhase::Prepared {
+        return Err(RecoveryJournalError::UnexpectedPhase {
+            path: path.to_path_buf(),
+            expected: RecoveryJournalPhase::Prepared,
+            found: journal.phase,
+        });
+    }
+    remove_recovery_journal_locked(path, parent)
+}
+
 fn remove_recovery_journal_locked(path: &Path, parent: &Path) -> Result<(), RecoveryJournalError> {
     match fs::remove_file(path) {
         Ok(()) => {

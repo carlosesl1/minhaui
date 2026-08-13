@@ -15,6 +15,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
 $repo = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $stage = Join-Path $output 'layout'
@@ -29,8 +31,6 @@ Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'Assets') | Out-Null
 Copy-Item -LiteralPath (Join-Path $release 'shell-app.exe') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $release 'shell-watchdog.exe') -Destination $stage
-Copy-Item -LiteralPath (Join-Path $repo 'packaging\common\Invoke-ObsidianRecovery.ps1') -Destination $stage
-Copy-Item -LiteralPath (Join-Path $repo 'packaging\common\Remove-ObsidianGlass.ps1') -Destination $stage
 
 $manifest = Get-Content -Raw (Join-Path $PSScriptRoot 'AppxManifest.xml.in')
 $manifest = $manifest.Replace('@@VERSION@@', $Version).Replace('@@PUBLISHER@@', $Publisher)
@@ -85,8 +85,34 @@ if ($CertificatePath) {
     if ($LASTEXITCODE -ne 0) { throw 'Package signing failed.' }
 }
 
-Get-FileHash -Algorithm SHA256 -LiteralPath $package |
-    Format-List Algorithm, Hash, Path |
-    Out-File -Encoding utf8 (Join-Path $output 'SHA256SUMS.txt')
-Write-Host "MSIX ready: $package"
+$deploymentScript = Join-Path $output 'Deploy-ObsidianMsix.ps1'
+$recoveryScript = Join-Path $output 'Invoke-ObsidianRecovery.ps1'
+$lifecyclePolicy = Join-Path $output 'ObsidianLifecyclePolicy.psm1'
+$companionWatchdog = Join-Path $output 'shell-watchdog-recovery.exe'
+Copy-Item `
+    -LiteralPath (Join-Path $repo 'packaging\msix\Deploy-ObsidianMsix.ps1') `
+    -Destination $deploymentScript `
+    -Force
+Copy-Item `
+    -LiteralPath (Join-Path $repo 'packaging\common\Invoke-ObsidianRecovery.ps1') `
+    -Destination $recoveryScript `
+    -Force
+Copy-Item `
+    -LiteralPath (Join-Path $repo 'packaging\common\ObsidianLifecyclePolicy.psm1') `
+    -Destination $lifecyclePolicy `
+    -Force
+Copy-Item `
+    -LiteralPath (Join-Path $release 'shell-watchdog.exe') `
+    -Destination $companionWatchdog `
+    -Force
 
+Get-FileHash `
+    -Algorithm SHA256 `
+    -LiteralPath @(
+        $package, $deploymentScript, $recoveryScript, $lifecyclePolicy, $companionWatchdog
+    ) |
+    Sort-Object Path |
+    ForEach-Object { "$($_.Hash)  $([System.IO.Path]::GetFileName($_.Path))" } |
+    Set-Content -Encoding utf8 (Join-Path $output 'SHA256SUMS.txt')
+Write-Host "MSIX ready: $package"
+Write-Host "Recovery-aware sideload command: .\Deploy-ObsidianMsix.ps1 -Action InstallOrUpdate -PackagePath .\$([System.IO.Path]::GetFileName($package))"

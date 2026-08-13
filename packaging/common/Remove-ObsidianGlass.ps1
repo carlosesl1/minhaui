@@ -12,13 +12,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
 $settingsRoot = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Minha UI'))
 $localRoot = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\') + '\'
 if (-not $settingsRoot.StartsWith($localRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Settings path escaped the current user LocalAppData directory.'
 }
 
-& (Join-Path $PSScriptRoot 'Invoke-ObsidianRecovery.ps1') -Hook Uninstall -AppRoot $AppRoot -DryRun:$DryRun
+$recoveryDryRun = $DryRun -or [bool]$WhatIfPreference
+& (Join-Path $PSScriptRoot 'Invoke-ObsidianRecovery.ps1') `
+    -Hook Uninstall `
+    -AppRoot $AppRoot `
+    -DryRun:$recoveryDryRun
 
 switch ($SettingsAction) {
     'Keep' { Write-Host "Settings preserved at $settingsRoot" }
@@ -26,7 +32,8 @@ switch ($SettingsAction) {
         if ([string]::IsNullOrWhiteSpace($ExportPath)) {
             throw 'ExportPath is required when SettingsAction is Export.'
         }
-        if ((Test-Path -LiteralPath $settingsRoot) -and -not $DryRun) {
+        if ((Test-Path -LiteralPath $settingsRoot) -and -not $recoveryDryRun -and
+            $PSCmdlet.ShouldProcess($ExportPath, 'Export application settings')) {
             New-Item -ItemType Directory -Force -Path $ExportPath | Out-Null
             Copy-Item -LiteralPath $settingsRoot -Destination $ExportPath -Recurse -Force
         }

@@ -6,8 +6,9 @@ use shell_renderer::native::{
     DeviceKind, ShellScenes, ShowcaseRole, SurfaceMetrics, SurfaceVisibilityAnimation,
 };
 use shell_renderer::{
-    DipPoint, Dpi, PhysicalRect, WindowPreviewPanelLayout, WindowPreviewScene,
-    context_menu_height_for_entries, layout_popover_scene, physical_from_dip, popover_surface_size,
+    DipPoint, Dpi, PhysicalRect, PopoverScene, QuickSettingsScene, WindowPreviewPanelLayout,
+    WindowPreviewScene, context_menu_height_for_entries, layout_popover_scene, physical_from_dip,
+    popover_surface_size,
 };
 use windows::Win32::Foundation::{E_UNEXPECTED, HANDLE};
 use windows::core::Result;
@@ -26,7 +27,8 @@ use crate::win32_sample_state::density_for_width;
 use crate::win32_shell_observation::ShellObservation;
 use crate::win32_surface_runtime::{
     LazySurfaceVisibility, NativeSurfaceOptions, SurfaceBuildPlan, SurfaceFrame, SurfaceTarget,
-    SurfaceUpdate, Win32NativeSurfaceRuntime, present_app_menu_frame, runtime_device_kind,
+    SurfaceUpdate, VisualPreferencesUpdate, Win32NativeSurfaceRuntime, present_app_menu_frame,
+    runtime_device_kind,
 };
 use crate::win32_timer::TimerGuard;
 use crate::win32_window::{ExternalMenuPopoverLayerGuard, OwnedWindow};
@@ -130,6 +132,7 @@ pub(super) struct RuntimeSurfaces {
     background_app_context_point: Option<shell_renderer::DipPoint>,
     app_menu_endpoint: SurfaceEndpoint,
     pub(super) settings_controller: SettingsController,
+    effective_config: shell_config::ShellConfigV1,
     pub(super) popover_provider: DefaultPopoverDataProvider<crate::OfflineWeatherProvider>,
     dock_animation_active: bool,
     dock_animation_timer: Option<TimerGuard>,
@@ -259,9 +262,9 @@ fn shell_menu_owner_process_ids(app_owner_pid: u32) -> Box<[u32]> {
 
 const fn dock_pointer_waits_for_frame(
     phase: crate::DockPointerPhase,
-    reduced_motion: bool,
+    motion_disabled: bool,
 ) -> bool {
-    !reduced_motion
+    !motion_disabled
         && matches!(
             phase,
             crate::DockPointerPhase::Moved | crate::DockPointerPhase::Dragged
@@ -272,6 +275,60 @@ fn visual_preferences(config: &shell_config::ShellConfigV1) -> shell_renderer::V
     shell_renderer::VisualPreferences::new(
         config.appearance().opacity(),
         config.appearance().radius(),
+    )
+    .with_blur_radius(config.appearance().blur())
+}
+
+fn config_with_previous_dock_animation(
+    current: &shell_config::ShellConfigV1,
+    next: &shell_config::ShellConfigV1,
+) -> shell_config::ShellConfigV1 {
+    next.with_dock(
+        next.dock()
+            .clone()
+            .with_animation_ms(current.dock().animation_ms()),
+    )
+}
+
+fn dock_runtime_only_change(
+    current: &shell_config::ShellConfigV1,
+    next: &shell_config::ShellConfigV1,
+) -> bool {
+    current != next
+        && current == &config_with_previous_dock_animation(current, next)
+        && current.dock().animation_ms() != next.dock().animation_ms()
+}
+
+fn config_with_previous_live_appearance(
+    current: &shell_config::ShellConfigV1,
+    next: &shell_config::ShellConfigV1,
+) -> shell_config::ShellConfigV1 {
+    next.with_appearance(
+        next.appearance()
+            .clone()
+            .with_opacity(current.appearance().opacity())
+            .with_blur(current.appearance().blur()),
+    )
+}
+
+fn appearance_runtime_only_change(
+    current: &shell_config::ShellConfigV1,
+    next: &shell_config::ShellConfigV1,
+) -> bool {
+    current != next
+        && current == &config_with_previous_live_appearance(current, next)
+        && (current.appearance().opacity() != next.appearance().opacity()
+            || current.appearance().blur() != next.appearance().blur())
+}
+
+fn anchored_overlay_scenes(
+    popover_scene: Option<PopoverScene>,
+    quick_settings_scene: Option<QuickSettingsScene>,
+    anchor_x: f32,
+) -> (Option<PopoverScene>, Option<QuickSettingsScene>) {
+    (
+        popover_scene.map(|scene| scene.with_anchor_x(anchor_x)),
+        quick_settings_scene.map(|scene| scene.with_anchor_x(anchor_x)),
     )
 }
 
@@ -330,7 +387,8 @@ impl RuntimeSurfaces {
             external_menu_focus_restore_deadline: None,
             background_app_context_point: None,
             app_menu_endpoint: surface_endpoint(app_menu),
-            settings_controller: SettingsController::new(config),
+            settings_controller: SettingsController::new(config.clone()),
+            effective_config: config,
             popover_provider: DefaultPopoverDataProvider::offline(),
             dock_animation_active: false,
             dock_animation_timer: None,
@@ -647,6 +705,8 @@ impl RuntimeSurfaces {
                 return Ok(true);
             }
             PlatformEvent::DockPointer(sample) => {
+                let motion_disabled =
+                    self.reduced_motion || self.dock_controller.config().animation_ms() == 0;
                 let high_frequency_motion = matches!(
                     sample.phase,
                     crate::DockPointerPhase::Moved | crate::DockPointerPhase::Dragged
@@ -655,7 +715,7 @@ impl RuntimeSurfaces {
                     self.dock_pointer_moves_received =
                         self.dock_pointer_moves_received.saturating_add(1);
                 }
-                if dock_pointer_waits_for_frame(sample.phase, self.reduced_motion) {
+                if dock_pointer_waits_for_frame(sample.phase, motion_disabled) {
                     self.edge_reveal_active = false;
                     self.edge_reveal_grace_deadline = None;
                     self.pending_dock_pointer = Some(*sample);
@@ -1642,10 +1702,85 @@ impl RuntimeSurfaces {
         preview: &mut OwnedWindow,
         settings: &mut OwnedWindow,
     ) -> Result<()> {
+        let previous_config = self.effective_config.clone();
+        let dock_runtime_only = dock_runtime_only_change(&previous_config, config);
+        let appearance_runtime_only = appearance_runtime_only_change(&previous_config, config);
         let dock_config = crate::win32_sample_state::dock_runtime_config(config);
         self.dock_controller
             .update_config(dock_config)
             .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
+
+        if dock_runtime_only {
+            if dock_config.animation_ms() == 0 {
+                self.dock_controller.snap_animation_to_target();
+                let update = self.begin_dock_visibility(dock);
+                let target_opacity = self.dock_visibility_opacity;
+                self.complete_surface_update_with_one_retry(
+                    update,
+                    SurfaceWindows {
+                        topbar,
+                        dock: &*dock,
+                        popover,
+                        preview,
+                        settings,
+                    },
+                    |runtime| runtime.set_visibility_state(ShowcaseRole::Dock, 0.0, target_opacity),
+                )?;
+                self.stop_dock_animation_clock();
+                self.redraw_dock(SurfaceWindows {
+                    topbar,
+                    dock: &*dock,
+                    popover,
+                    preview,
+                    settings,
+                })?;
+            }
+            self.effective_config = config.clone();
+            return Ok(());
+        }
+
+        if appearance_runtime_only {
+            let preferences_update = self
+                .surface_runtime
+                .update_visual_preferences(visual_preferences(config));
+            if self.surface_runtime.size(ShowcaseRole::Topbar).is_none() {
+                self.rebuild_native_surfaces(SurfaceWindows {
+                    topbar,
+                    dock: &*dock,
+                    popover,
+                    preview,
+                    settings,
+                })?;
+            } else {
+                match preferences_update {
+                    // `Unchanged` while `effective_config` still differs means
+                    // a previous redraw failed after updating the renderer.
+                    // Retry the frame instead of committing an invisible state.
+                    VisualPreferencesUpdate::Unchanged
+                    | VisualPreferencesUpdate::RedrawRequired => {
+                        self.redraw_materialized_visual_surfaces(SurfaceWindows {
+                            topbar,
+                            dock: &*dock,
+                            popover,
+                            preview,
+                            settings,
+                        })?;
+                    }
+                    VisualPreferencesUpdate::RebuildAllRequired => {
+                        self.rebuild_native_surfaces(SurfaceWindows {
+                            topbar,
+                            dock: &*dock,
+                            popover,
+                            preview,
+                            settings,
+                        })?;
+                    }
+                }
+            }
+            self.effective_config = config.clone();
+            return Ok(());
+        }
+
         let work = window_work_area(dock.hwnd)?;
         let (_, hidden) = crate::resolve_dock_visibility(
             dock_config,
@@ -1670,7 +1805,8 @@ impl RuntimeSurfaces {
             .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
         self.quick_settings_controller
             .set_preferences(config.quick_settings().clone());
-        self.surface_runtime
+        let _ = self
+            .surface_runtime
             .update_visual_preferences(visual_preferences(config));
         self.rebuild_native_surfaces(SurfaceWindows {
             topbar,
@@ -1678,7 +1814,9 @@ impl RuntimeSurfaces {
             popover,
             preview,
             settings,
-        })
+        })?;
+        self.effective_config = config.clone();
+        Ok(())
     }
 
     pub(super) fn apply_shell_observation(
@@ -1739,7 +1877,7 @@ impl RuntimeSurfaces {
     }
 
     pub(super) fn sync_dock_animation(&mut self, dock: &OwnedWindow) -> Result<()> {
-        if self.reduced_motion {
+        if self.reduced_motion || self.dock_controller.config().animation_ms() == 0 {
             self.dock_controller.snap_animation_to_target();
             if self.pending_dock_redraw {
                 self.ensure_dock_animation_clock(dock)?;
@@ -1782,6 +1920,9 @@ impl RuntimeSurfaces {
             .map_err(|error| windows::core::Error::new(invalid_arg(), error.to_string()))?;
         if !apply_dock_actions(&actions, self.dock_controller.state())? {
             return Ok(false);
+        }
+        if self.reduced_motion || self.dock_controller.config().animation_ms() == 0 {
+            self.dock_controller.snap_animation_to_target();
         }
         if let Some(delta_seconds) = frame_delta_seconds {
             if !self.dock_controller.animations_idle() {
@@ -2400,6 +2541,92 @@ impl RuntimeSurfaces {
         self.rebuild_native_surfaces(windows)
     }
 
+    fn redraw_materialized_visual_surfaces(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
+        self.topbar_controller
+            .update_surface(dip_surface(windows.topbar));
+        let topbar_scene = self.topbar_controller.scene();
+        self.dock_controller
+            .update_surface(dip_surface(windows.dock));
+        let dock_scene = self.dock_scene_for_render(windows.dock);
+        let (popover_scene, quick_settings_scene) = anchored_overlay_scenes(
+            self.popover_controller.scene(),
+            self.quick_settings_controller
+                .is_open()
+                .then(|| self.quick_settings_controller.scene()),
+            windows.popover.popover_anchor_x_dip(),
+        );
+        let context_menu_scene = self.context_menu_controller.scene();
+        let app_menu_scene = self.background_app_menu_controller.scene();
+        let preview_scene = self.preview_scene.clone();
+        self.settings_controller
+            .update_surface(dip_surface(windows.settings));
+        let settings_scene = self.settings_controller.scene();
+        let settings_layout =
+            shell_renderer::layout_settings_scene(&settings_scene, dip_surface(windows.settings));
+        crate::win32_settings_uia::publish(
+            windows.settings.hwnd,
+            &settings_scene,
+            &settings_layout,
+            windows.settings.dpi(),
+        )?;
+
+        let frames = [
+            (
+                ShowcaseRole::Topbar,
+                ShellScenes {
+                    topbar: Some(&topbar_scene),
+                    ..empty_scenes()
+                },
+            ),
+            (
+                ShowcaseRole::Dock,
+                ShellScenes {
+                    dock: Some(&dock_scene),
+                    ..empty_scenes()
+                },
+            ),
+            (
+                ShowcaseRole::Popover,
+                ShellScenes {
+                    popover: popover_scene.as_ref(),
+                    quick_settings: quick_settings_scene.as_ref(),
+                    context_menu: context_menu_scene.as_ref(),
+                    ..empty_scenes()
+                },
+            ),
+            (
+                ShowcaseRole::AppMenu,
+                ShellScenes {
+                    context_menu: app_menu_scene.as_ref(),
+                    ..empty_scenes()
+                },
+            ),
+            (
+                ShowcaseRole::Preview,
+                ShellScenes {
+                    preview: preview_scene.as_ref(),
+                    ..empty_scenes()
+                },
+            ),
+            (
+                ShowcaseRole::Settings,
+                ShellScenes {
+                    settings: Some(&settings_scene),
+                    ..empty_scenes()
+                },
+            ),
+        ];
+        for (role, scenes) in frames {
+            match self.surface_runtime.redraw_materialized(role, scenes)? {
+                SurfaceUpdate::Presented | SurfaceUpdate::FrameSkipped => {}
+                SurfaceUpdate::RebuildAllRequired => {
+                    return self.rebuild_native_surfaces(windows);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn rebuild_native_surfaces(&mut self, windows: SurfaceWindows<'_>) -> Result<()> {
         let now = now_ms();
         let preview_scene = self.preview_scene.clone();
@@ -2413,11 +2640,13 @@ impl RuntimeSurfaces {
         self.dock_controller
             .update_surface(dip_surface(windows.dock));
         let dock_scene = self.dock_scene_for_render(windows.dock);
-        let popover_scene = self.popover_controller.scene();
-        let quick_settings_scene = self
-            .quick_settings_controller
-            .is_open()
-            .then(|| self.quick_settings_controller.scene());
+        let (popover_scene, quick_settings_scene) = anchored_overlay_scenes(
+            self.popover_controller.scene(),
+            self.quick_settings_controller
+                .is_open()
+                .then(|| self.quick_settings_controller.scene()),
+            windows.popover.popover_anchor_x_dip(),
+        );
         let context_menu_scene = self.context_menu_controller.scene();
         let app_menu_scene = self.background_app_menu_controller.scene();
         let settings_scene = self.settings_controller.scene();
@@ -2869,13 +3098,13 @@ mod tests {
     use shell_renderer::native::{ShellScenes, ShowcaseRole, SurfaceMetrics};
     use shell_renderer::{
         Dpi, PhysicalRect, PopoverContentState, PopoverLayoutStyle, PopoverRow, PopoverScene,
-        WindowPreviewScene,
+        QuickSettingsScene, WindowPreviewScene,
     };
     use windows::Win32::Foundation::HWND;
 
     use super::{
         CanonicalSurfaceScenes, ShellMenuHandoff, SurfaceCompositionState, SurfaceEndpoint,
-        SurfaceEndpoints, canonical_surface_targets, empty_scenes,
+        SurfaceEndpoints, anchored_overlay_scenes, canonical_surface_targets, empty_scenes,
         external_menu_focus_restore_is_active, finish_surface_retry, focused_background_app_anchor,
         native_activation_generation, should_dismiss_after_external_menu_end,
         suppress_external_menu_dismissal, surface_build_plan, surface_composition_state,
@@ -3036,6 +3265,27 @@ mod tests {
         .expect("focused row anchor");
 
         assert_eq!(anchor, PhysicalRect::new(372, 170, 1, 1));
+    }
+
+    #[test]
+    fn canonical_overlay_scenes_keep_the_window_anchor_during_rebuilds() {
+        let popover = PopoverScene::new(
+            Popover::SystemMenu,
+            "Minha UI",
+            PopoverContentState::Ready,
+            Vec::new(),
+            None,
+        );
+        let quick_settings = QuickSettingsScene::new(Vec::new());
+
+        let (popover, quick_settings) =
+            anchored_overlay_scenes(Some(popover), Some(quick_settings), 173.5);
+
+        assert_eq!(popover.and_then(|scene| scene.anchor_x()), Some(173.5));
+        assert_eq!(
+            quick_settings.and_then(|scene| scene.anchor_x()),
+            Some(173.5)
+        );
     }
 
     #[test]
@@ -3205,6 +3455,36 @@ mod tests {
         assert!(!super::dock_frame_waitable_is_active(false, false, true));
         assert!(!super::dock_frame_waitable_is_active(true, true, true));
         assert!(!super::dock_frame_waitable_is_active(true, false, false));
+    }
+
+    #[test]
+    fn dock_animation_only_preview_is_identified_without_rebuilding_unrelated_surfaces() {
+        let current = shell_config::ShellConfigV1::default();
+        let animation = current.with_dock(current.dock().clone().with_animation_ms(280));
+        let geometry = current.with_dock(current.dock().clone().with_item_size(60));
+        let mixed = geometry.with_dock(geometry.dock().clone().with_animation_ms(280));
+
+        assert!(super::dock_runtime_only_change(&current, &animation));
+        assert!(!super::dock_runtime_only_change(&current, &current));
+        assert!(!super::dock_runtime_only_change(&current, &geometry));
+        assert!(!super::dock_runtime_only_change(&current, &mixed));
+    }
+
+    #[test]
+    fn only_opacity_and_blur_are_safe_live_appearance_updates() {
+        let current = shell_config::ShellConfigV1::default();
+        let opacity = current.with_appearance(current.appearance().clone().with_opacity(80));
+        let blur = current.with_appearance(current.appearance().clone().with_blur(0));
+        let both = opacity.with_appearance(opacity.appearance().clone().with_blur(4));
+        let radius = current.with_appearance(current.appearance().clone().with_radius(22));
+        let mixed = opacity.with_appearance(opacity.appearance().clone().with_radius(22));
+
+        assert!(super::appearance_runtime_only_change(&current, &opacity));
+        assert!(super::appearance_runtime_only_change(&current, &blur));
+        assert!(super::appearance_runtime_only_change(&current, &both));
+        assert!(!super::appearance_runtime_only_change(&current, &current));
+        assert!(!super::appearance_runtime_only_change(&current, &radius));
+        assert!(!super::appearance_runtime_only_change(&current, &mixed));
     }
 
     #[test]

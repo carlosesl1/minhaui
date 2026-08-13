@@ -90,11 +90,18 @@ workspace gate:
 ```powershell
 cargo test -p shell-platform-windows --features native-validation --lib
 cargo test -p shell-app --features native-validation --test showcase_startup
+cargo build -p shell-app --features native-validation
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/Invoke-NativeWindowsValidation.ps1 `
+  -ShellAppPath target/debug/shell-app.exe
 ```
 
 Run native validation only on the controlled `obsidian-native-validation`
-Windows image. It must include Calculator and Windows Terminal, have DWM active,
-and have no existing Obsidian Glass instance or conflicting AppBar registration.
+Windows image. It must use an interactive non-Session-0 desktop, include
+Calculator and Windows Terminal, have DWM active, and have no existing Obsidian
+Glass instance or conflicting AppBar registration. See
+[`docs/architecture/native-windows-validation.md`](docs/architecture/native-windows-validation.md)
+for the automated boundary and the remaining lab matrix.
 
 Release builds use abort-on-panic, fat LTO, one codegen unit, and stripped
 symbols. Normal packaged startup enters `shell-watchdog`, which launches the
@@ -139,10 +146,14 @@ contrast. WARP and reduced-motion launches use its static fallback.
 Open **Settings** from the top-bar system menu, or choose **Edit controls** in
 Quick Settings. The native, resizable Settings window currently supports:
 
-- Dock size, spacing, alignment, magnification, and auto-hide;
+- Dock size, spacing, alignment, magnification, animation duration, and auto-hide;
 - top-bar density and module visibility;
 - Quick Controls visibility and keyboard reordering; and
-- shared surface opacity and corner radius with live preview.
+- shared surface opacity, panel blur, and corner radius with live preview.
+
+Animation and panel blur can each be set to **Off**. Those zero-value settings
+take the corresponding runtime effect out of the rendering path instead of
+only hiding its visual result.
 
 Changes remain in a draft until **Apply** is selected (`Ctrl+Enter` also
 applies). **Cancel**, closing the window, or dismissing the draft restores the
@@ -207,5 +218,25 @@ undocumented `IPolicyConfig` COM ABI.
 ```
 
 The MSIX output is unsigned by default and ready for a publisher certificate.
-Signing secrets are accepted only at build time. Steam VDF files are templates;
-replace the application and depot identifiers in the release pipeline.
+Signing secrets are accepted only at build time. For a recovery-aware sideload,
+ship the generated MSIX together with its three checksum-listed companion files
+and use the synchronous deployment entrypoint:
+
+```powershell
+.\Deploy-ObsidianMsix.ps1 -Action InstallOrUpdate -PackagePath .\ObsidianGlass-0.1.0.0-x64.msix
+.\Deploy-ObsidianMsix.ps1 -Action Uninstall
+```
+
+The companion pipeline invokes the installed watchdog and stops before package
+replacement or removal if recovery cannot be proved. MSIX does not provide an
+arbitrary pre-update/pre-uninstall script for Windows Settings, Store, or normal
+App Installer lifecycle operations; those paths do not execute these companion
+files. Experimental taskbar replacement must therefore remain disabled for
+those distribution paths.
+
+The Steam layout generates a versioned, current-user InstallScript. Steam runs
+the update recovery contract before the first launch of each new build and the
+uninstall contract through `Run Process On Uninstall`. The recovery wrapper
+waits for the watchdog and returns a nonzero status on uncertainty. Steam VDF
+application and depot identifiers remain templates and must be replaced in the
+release pipeline.

@@ -14,6 +14,9 @@ use crate::dock_launch::initial_launch_targets;
 use crate::dock_visuals::{DockIconSourceCache, visual_items};
 use crate::{DockAnimator, DockControllerError, DockRuntimeConfig};
 
+const MAX_SCALED_ANIMATION_SUBSTEP_SECONDS: f32 = 0.05;
+const REORDER_DECAY_PER_SECOND: f32 = 18.0;
+
 pub struct DockController {
     pub(crate) state: ShellState,
     pub(crate) config: DockRuntimeConfig,
@@ -222,14 +225,38 @@ impl DockController {
     }
 
     pub fn advance_animation(&mut self, delta_seconds: f32) {
-        let mut changed = self.animator.advance(delta_seconds);
-        if delta_seconds.is_finite() && delta_seconds > 0.0 && !self.reorder_offsets.is_empty() {
-            let retention = (-18.0 * delta_seconds.min(0.05)).exp();
-            self.reorder_offsets.retain(|_, offset| {
-                *offset *= retention;
-                offset.abs() >= 0.1
-            });
-            changed = true;
+        let animation_ms = self.config.animation_ms();
+        if animation_ms == 0 {
+            self.snap_animation_to_target();
+            return;
+        }
+        // The original springs were tuned for the 140 ms default. Scaling time
+        // preserves their damping while making the persisted duration control
+        // meaningful across hover, magnification and reorder motion.
+        let scaled_delta = delta_seconds * 140.0 / f32::from(animation_ms);
+        if !scaled_delta.is_finite() || scaled_delta <= 0.0 {
+            return;
+        }
+        let mut remaining = scaled_delta;
+        let mut changed = false;
+        while remaining > 0.0 {
+            let step = remaining.min(MAX_SCALED_ANIMATION_SUBSTEP_SECONDS);
+            changed |= self.animator.advance(step);
+            if !self.reorder_offsets.is_empty() {
+                let retention = (-REORDER_DECAY_PER_SECOND * step).exp();
+                self.reorder_offsets.retain(|_, offset| {
+                    *offset *= retention;
+                    offset.abs() >= 0.1
+                });
+                changed = true;
+            }
+            if self.animator.is_idle() && self.reorder_offsets.is_empty() {
+                break;
+            }
+            if remaining <= MAX_SCALED_ANIMATION_SUBSTEP_SECONDS {
+                break;
+            }
+            remaining -= step;
         }
         if changed {
             self.visual_generation = self.visual_generation.wrapping_add(1);

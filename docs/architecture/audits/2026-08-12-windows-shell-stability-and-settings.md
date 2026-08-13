@@ -29,7 +29,10 @@ Glass design contract.
 
 ## Settings vertical slice
 
-The native Settings shell now follows a single draft transaction:
+The native Settings shell now follows a single draft transaction. Dock
+animation duration and Appearance panel blur are wired through live preview,
+persistence, Cancel, and UI Automation. Both accept an explicit `Off` value;
+blur at zero skips desktop capture and the D2D blur effect.
 
 1. A control changes `draft` and validated `preview`.
 2. Dock, Top bar, Quick Controls, and appearance update in the owning monitor.
@@ -116,21 +119,37 @@ performance work remains:
    real Windows remain open.
 2. Validate the implemented single-instance-per-user-and-session activation
    forwarding under concurrent launch, elevated/medium-integrity launch, RDP,
-   Fast User Switching, and primary-process failure during startup.
+   Fast User Switching, and primary-process failure during startup. Windows CI
+   now proves cross-process exclusion and abnormal-owner lock release; the
+   opt-in interactive gate proves same-session activation forwarding. Integrity,
+   RDP, Fast User Switching, and the startup-failure race remain open.
 3. Validate the Settings-only server-side UI Automation provider on native
    Windows with Narrator, Accessibility Insights, and automated clients. The
    provider now handles `WM_GETOBJECT`, fragment navigation, screen bounds,
    accessible properties, and Invoke/Toggle/RangeValue patterns through queued
    controller actions. Snapshot-diffed focus/property/structure notifications
-   are implemented and remain part of the native validation gate; tooltips and
-   providers for the remaining custom D2D surfaces are still open.
+   are implemented and remain part of the native validation gate. The opt-in
+   gate now uses an external UIA client to inspect the Window/List tree and
+   execute Invoke/RangeValue patterns; Narrator, Accessibility Insights,
+   tooltips, and providers for the remaining custom D2D surfaces are still open.
 4. Run Windows quality gates and native soak tests across mixed DPI, monitor
    attach/detach, Explorer restart, sleep/resume, device loss, WARP, high
-   contrast, and reduced motion.
-5. Wire the synchronous `--restore-only` contract into supported update and
-   uninstall pipelines. The checked-in scripts expose and validate the contract,
-   but merely copying them into MSIX/Steam layouts does not register a platform
-   lifecycle hook.
+   contrast, and reduced motion. The controlled gate now covers bounded
+   simulated display/resume/Explorer events plus the synthetic rebuild/device-
+   loss event path under WARP in safe/reduced-motion mode. Real topology
+   changes, hardware device loss, sleep, visual acceptance, and sustained soak
+   remain open.
+
+The packaging lifecycle gate is closed for the supported distribution paths.
+Steam now marks a versioned InstallScript in its depot: it runs recovery before
+the first launch of a new build and registers `Run Process On Uninstall`, both
+as the current user. The MSIX build no longer copies inert scripts into the
+package; instead it emits a checksum-listed companion deployment pipeline that
+performs synchronous recovery before `Add-AppxPackage` or `Remove-AppxPackage`
+and fails before mutation on any recovery error. Windows Settings, Store, and
+normal App Installer operations do not expose an arbitrary package lifecycle
+script and are explicitly not claimed as covered. Experimental taskbar
+replacement remains prohibited on those automatic MSIX paths.
 
 The private Windows-policy gate is closed in this revision: Night Light, Do not
 disturb, and default audio-output selection now use Microsoft's documented

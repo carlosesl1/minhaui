@@ -26,7 +26,7 @@ impl DockController {
             }
             DockPointerPhase::Pressed | DockPointerPhase::Moved => true,
         };
-        match sample.phase {
+        let actions = match sample.phase {
             DockPointerPhase::Pressed => {
                 let entry = self
                     .hit_layout_entry(sample.point)
@@ -85,7 +85,11 @@ impl DockController {
                 self.animator.retarget(sample.point.x, hover_strength);
                 self.reveal_if_needed(sample.point)
             }
+        }?;
+        if self.config.animation_ms() == 0 {
+            self.snap_animation_to_target();
         }
+        Ok(actions)
     }
 
     pub fn hold_revealed_for_overlay(

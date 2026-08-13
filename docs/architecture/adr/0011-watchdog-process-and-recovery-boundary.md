@@ -42,9 +42,11 @@ independente do processo que pode falhar.
 - A conclusão da restauração faz compare-and-delete sob o mesmo lock: ausência
   é sucesso idempotente, mas um journal com outro `RecoveryTransactionId` é
   preservado. Assim, um restaurador atrasado não apaga uma transação mais nova.
-- A restauração nativa é um Adapter privado do watchdog. Todo `unsafe` fica em um
-  único módulo `cfg(windows)`, com invariantes por chamada. Regras, journal,
-  supervisão e planejamento continuam seguros e testáveis fora do Windows.
+- Os dois boundaries nativos privados do watchdog são explicitamente
+  allowlisted: `taskbar_restore_win32` para observar/restaurar Explorer e
+  `lifecycle_win32` para mutex/evento nomeados. Todo `unsafe` fica nesses dois
+  módulos `cfg(windows)`; um terceiro Adapter ou `unsafe` fora deles falha na
+  política de arquitetura.
 - O Adapter V1 redescobre taskbars apenas por classe, imagem confiável do
   `explorer.exe`, device do monitor e bounds; HWND nunca é persistido. Contagem
   divergente, ambiguidade, topologia alterada ou processos owner distintos
@@ -73,17 +75,36 @@ independente do processo que pode falhar.
 - Travamento, crash loop e recuperação passam a ter políticas limitadas e
   observáveis.
 - Os scripts de update/uninstall expõem um contrato real `--restore-only`, sem
-  simulação que pudesse reportar sucesso falso. O wiring automático em cada
-  instalador/pipeline ainda é um gate de empacotamento.
+  simulação que pudesse reportar sucesso falso. O wrapper é síncrono e propaga
+  falha quando o watchdog não existe ou retorna status diferente de zero.
+- O depot Steam registra um InstallScript versionado para recuperação antes do
+  primeiro launch de cada build e `Run Process On Uninstall` para remoção. Ambos
+  rodam no contexto do usuário atual, onde o journal existe.
+- O sideload MSIX suportado publica um pipeline acompanhante que executa
+  recuperação antes de `Add-AppxPackage` ou `Remove-AppxPackage`. Um watchdog
+  companion fora do package, validado por SHA-256, mantém o gate desde o READY
+  versionado até o deploy fechar stdin depois da mutação, impedindo relaunch no
+  intervalo em que `-ForceApplicationShutdown` encerra binários empacotados. O manifest não
+  declara um hook fictício: Windows Settings, Store e App Installer não executam
+  scripts arbitrários de pre-update/pre-uninstall.
 - O journal preserva evidência quando a restauração não pode ser comprovada.
 
 ### Custos e riscos
 
 - O pacote contém dois executáveis e precisa validar a presença de ambos.
+- Distribuições MSIX que não passam pelo pipeline acompanhante não possuem hook
+  de lifecycle; builds experimentais capazes de alterar Explorer não podem usar
+  esses caminhos automáticos.
 - Stdout do filho vira um protocolo interno; frames são limitados e versionados
   para não permitir crescimento de memória.
 - FFI no watchdog é uma exceção intencional à regra anterior de crate totalmente
   segura e exige validação em Windows real.
+- Journal V1 é por usuário, enquanto HWND e o gate `Local` pertencem à sessão.
+  Arming e recovery real recusam fail-closed outra sessão da mesma conta
+  (RDP/Fast User Switching); o caminho estável sem journal/replacement continua
+  permitido em múltiplas sessões. Steam não oferece um hook que envolva a
+  mutação de arquivos, portanto seu restore é síncrono mas não declara a mesma
+  atomicidade do companion MSIX e pressupõe ausência de relaunch durante o hook.
 - A primeira versão não deve habilitar mutação da taskbar apenas porque a leitura
   do journal existe; arming, aplicação, verificação e restore precisam ser uma
   transação completa.

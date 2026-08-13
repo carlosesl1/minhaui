@@ -9,6 +9,7 @@ use crate::Rgba8;
 pub struct VisualPreferences {
     opacity_percent: u8,
     corner_radius: u16,
+    blur_radius: u8,
 }
 
 impl VisualPreferences {
@@ -29,6 +30,7 @@ impl VisualPreferences {
             } else {
                 corner_radius
             },
+            blur_radius: 16,
         }
     }
 
@@ -40,6 +42,17 @@ impl VisualPreferences {
     #[must_use]
     pub const fn corner_radius(self) -> u16 {
         self.corner_radius
+    }
+
+    #[must_use]
+    pub const fn blur_radius(self) -> u8 {
+        self.blur_radius
+    }
+
+    #[must_use]
+    pub const fn with_blur_radius(mut self, value: u8) -> Self {
+        self.blur_radius = if value > 32 { 32 } else { value };
+        self
     }
 
     pub(crate) const fn apply_background_alpha(self, mut color: Rgba8) -> Rgba8 {
@@ -208,6 +221,12 @@ mod visual_preferences_tests {
         assert_eq!(
             VisualPreferences::new(u8::MAX, u16::MAX),
             VisualPreferences::new(100, 24)
+        );
+        assert_eq!(
+            VisualPreferences::default()
+                .with_blur_radius(u8::MAX)
+                .blur_radius(),
+            32
         );
     }
 

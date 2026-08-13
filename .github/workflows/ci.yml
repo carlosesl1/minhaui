@@ -36,10 +36,12 @@ jobs:
         run: cargo fmt --all --check
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Run tests
+      - name: Run hermetic tests, including Windows process contracts
         run: cargo test --workspace
       - name: Build release binaries
         run: cargo build --workspace --release
+      - name: Validate package lifecycle recovery hooks
+        run: powershell -NoProfile -File packaging/tests/PackagingLifecycle.Tests.ps1
       - name: Install supply-chain tools
         uses: taiki-e/install-action@v2
         with:
@@ -64,5 +66,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Validate installed package and shell integration
         run: cargo test -p shell-platform-windows --features native-validation --lib
-      - name: Validate native AppBar startup
+      - name: Validate native AppBar and lifecycle recovery
         run: cargo test -p shell-app --features native-validation --test showcase_startup
+      - name: Build native validation shell
+        run: cargo build -p shell-app --features native-validation
+      - name: Validate instance activation and Settings UI Automation
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass
+          -File scripts/Invoke-NativeWindowsValidation.ps1
+          -ShellAppPath target/debug/shell-app.exe
+      - name: Upload native validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-validation-${{ github.run_id }}
+          path: artifacts/native-windows-validation/
+          if-no-files-found: warn
+          retention-days: 14
