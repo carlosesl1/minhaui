@@ -350,6 +350,8 @@ mod win32_tray_bridge;
     reason = "bounded Explorer toolbar discovery and remote-memory reads are isolated here"
 )]
 mod win32_tray_source;
+#[cfg(windows)]
+mod win32_watchdog_arming;
 mod window_preview;
 
 #[cfg(test)]

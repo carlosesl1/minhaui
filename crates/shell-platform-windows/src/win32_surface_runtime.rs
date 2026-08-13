@@ -13,6 +13,22 @@ pub(super) enum SurfaceUpdate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum VisualPreferencesUpdate {
+    Unchanged,
+    RedrawRequired,
+    RebuildAllRequired,
+}
+
+const SURFACE_ROLES: [ShowcaseRole; 6] = [
+    ShowcaseRole::Topbar,
+    ShowcaseRole::Dock,
+    ShowcaseRole::Popover,
+    ShowcaseRole::AppMenu,
+    ShowcaseRole::Preview,
+    ShowcaseRole::Settings,
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SurfaceRenderDecision {
     RebuildAll,
     Redraw,
@@ -123,6 +139,8 @@ pub(super) trait SurfaceAdapter {
 
     fn create_renderer(options: NativeSurfaceOptions) -> windows::core::Result<Self::Renderer>;
     fn device_kind(renderer: &Self::Renderer) -> DeviceKind;
+    fn update_visual_preferences(renderer: &mut Self::Renderer, preferences: VisualPreferences);
+    fn update_desktop_blur(renderer: &Self::Renderer, surface: &Self::Surface, blur_radius: u8);
     fn create_surface(
         renderer: &Self::Renderer,
         hwnd: HWND,
@@ -178,6 +196,14 @@ impl SurfaceAdapter for DirectCompositionAdapter {
 
     fn device_kind(renderer: &Self::Renderer) -> DeviceKind {
         renderer.device_kind()
+    }
+
+    fn update_visual_preferences(renderer: &mut Self::Renderer, preferences: VisualPreferences) {
+        renderer.update_visual_preferences(preferences);
+    }
+
+    fn update_desktop_blur(renderer: &Self::Renderer, surface: &Self::Surface, blur_radius: u8) {
+        renderer.update_desktop_blur(surface, blur_radius);
     }
 
     fn create_surface(
@@ -354,12 +380,34 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         }
     }
 
-    pub(super) fn update_visual_preferences(&mut self, preferences: VisualPreferences) -> bool {
-        if self.options.visual_preferences == preferences {
-            return false;
+    pub(super) fn update_visual_preferences(
+        &mut self,
+        preferences: VisualPreferences,
+    ) -> VisualPreferencesUpdate {
+        let previous = self.options.visual_preferences;
+        if previous == preferences {
+            return VisualPreferencesUpdate::Unchanged;
         }
         self.options.visual_preferences = preferences;
-        true
+        if previous.corner_radius() != preferences.corner_radius() {
+            return VisualPreferencesUpdate::RebuildAllRequired;
+        }
+        if let Some(resources) = self.resources.as_mut() {
+            let SurfaceResources { surfaces, renderer } = resources;
+            if let Some(renderer) = renderer.as_mut() {
+                A::update_visual_preferences(renderer, preferences);
+                if previous.blur_radius() != preferences.blur_radius()
+                    && let Some(surfaces) = surfaces.as_ref()
+                {
+                    for role in SURFACE_ROLES {
+                        if let Some(surface) = surfaces.surface(role) {
+                            A::update_desktop_blur(renderer, surface, preferences.blur_radius());
+                        }
+                    }
+                }
+            }
+        }
+        VisualPreferencesUpdate::RedrawRequired
     }
 
     pub(super) fn build(&mut self, plan: SurfaceBuildPlan<'_>) -> windows::core::Result<()> {
@@ -411,6 +459,9 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
     }
 
     pub(super) fn prefetch_desktop_blur(&self, role: ShowcaseRole) {
+        if self.options.solid_material || self.options.visual_preferences.blur_radius() == 0 {
+            return;
+        }
         let Some(resources) = self.resources.as_ref() else {
             return;
         };
@@ -438,6 +489,17 @@ impl<A: SurfaceAdapter> NativeSurfaceRuntime<A> {
         let surfaces = resources.surfaces.as_ref().ok_or_else(runtime_not_ready)?;
         let surface = surfaces.surface(role).ok_or_else(surface_not_ready)?;
         normalize_present_result(A::redraw_surface(renderer, surface, role, scenes))
+    }
+
+    pub(super) fn redraw_materialized(
+        &mut self,
+        role: ShowcaseRole,
+        scenes: ShellScenes<'_>,
+    ) -> windows::core::Result<SurfaceUpdate> {
+        if !self.has_surface(role) {
+            return Ok(SurfaceUpdate::FrameSkipped);
+        }
+        self.redraw(role, scenes)
     }
 
     pub(super) fn resize(
@@ -753,8 +815,8 @@ mod tests {
     use super::{
         LazySurfaceVisibility, NativeSurfaceOptions, NativeSurfaceRuntime, SurfaceAdapter,
         SurfaceBuildPlan, SurfaceFrame, SurfaceRenderDecision, SurfaceSizeChange, SurfaceTarget,
-        SurfaceUpdate, is_lazy_role, normalize_present_result, present_app_menu_frame,
-        present_frame, runtime_device_kind, surface_render_decision,
+        SurfaceUpdate, VisualPreferencesUpdate, is_lazy_role, normalize_present_result,
+        present_app_menu_frame, present_frame, runtime_device_kind, surface_render_decision,
     };
 
     #[test]
@@ -792,6 +854,9 @@ mod tests {
     enum Event {
         Attempt(usize),
         Created(usize, ShowcaseRole),
+        VisualPreferences(usize, VisualPreferences),
+        DesktopBlurUpdated(usize, ShowcaseRole, u8),
+        DesktopBlurPrefetched(usize, ShowcaseRole),
         MetricsRead(usize, ShowcaseRole),
         Opacity(usize, ShowcaseRole, f32),
         Redrawn(usize, ShowcaseRole, ShowcaseRole),
@@ -935,6 +1000,27 @@ mod tests {
             recording().device_kind.unwrap_or(DeviceKind::Hardware)
         }
 
+        fn update_visual_preferences(
+            renderer: &mut Self::Renderer,
+            preferences: VisualPreferences,
+        ) {
+            recording()
+                .events
+                .push(Event::VisualPreferences(renderer.attempt, preferences));
+        }
+
+        fn update_desktop_blur(
+            renderer: &Self::Renderer,
+            surface: &Self::Surface,
+            blur_radius: u8,
+        ) {
+            recording().events.push(Event::DesktopBlurUpdated(
+                renderer.attempt,
+                surface.role,
+                blur_radius,
+            ));
+        }
+
         fn create_surface(
             renderer: &Self::Renderer,
             hwnd: HWND,
@@ -1018,6 +1104,12 @@ mod tests {
         fn frame_latency_waitable_object(surface: &Self::Surface) -> Option<HANDLE> {
             (surface.role == ShowcaseRole::Dock)
                 .then_some(HANDLE(std::ptr::dangling_mut::<core::ffi::c_void>()))
+        }
+
+        fn prefetch_desktop_blur(renderer: &Self::Renderer, surface: &Self::Surface) {
+            recording()
+                .events
+                .push(Event::DesktopBlurPrefetched(renderer.attempt, surface.role));
         }
 
         fn set_opacity(surface: &Self::Surface, opacity: f32) -> windows::core::Result<()> {
@@ -1300,6 +1392,116 @@ mod tests {
                 "operation routing mismatch for {role:?}"
             );
         }
+    }
+
+    #[test]
+    fn opacity_and_blur_updates_reuse_renderer_and_materialized_surfaces() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        runtime
+            .redraw(ShowcaseRole::Popover, empty_scenes())
+            .unwrap();
+        runtime
+            .redraw(ShowcaseRole::Settings, empty_scenes())
+            .unwrap();
+        recording().events.clear();
+
+        let opacity = VisualPreferences::new(80, 18).with_blur_radius(16);
+        assert_eq!(
+            runtime.update_visual_preferences(opacity),
+            VisualPreferencesUpdate::RedrawRequired
+        );
+        for role in ROLES {
+            runtime.redraw_materialized(role, empty_scenes()).unwrap();
+        }
+        assert!(
+            events()
+                .iter()
+                .all(|event| !matches!(event, Event::Attempt(_) | Event::Created(_, _)))
+        );
+        assert!(events().contains(&Event::VisualPreferences(1, opacity)));
+
+        recording().events.clear();
+        let stronger_blur = opacity.with_blur_radius(24);
+        assert_eq!(
+            runtime.update_visual_preferences(stronger_blur),
+            VisualPreferencesUpdate::RedrawRequired
+        );
+        for role in ROLES {
+            runtime.redraw_materialized(role, empty_scenes()).unwrap();
+        }
+        let blur_events = events();
+        assert!(
+            blur_events
+                .iter()
+                .all(|event| !matches!(event, Event::Attempt(_) | Event::Created(_, _)))
+        );
+        for role in [
+            ShowcaseRole::Topbar,
+            ShowcaseRole::Dock,
+            ShowcaseRole::Popover,
+            ShowcaseRole::Settings,
+        ] {
+            assert!(blur_events.contains(&Event::DesktopBlurUpdated(1, role, 24)));
+        }
+
+        recording().events.clear();
+        let blur_off = stronger_blur.with_blur_radius(0);
+        assert_eq!(
+            runtime.update_visual_preferences(blur_off),
+            VisualPreferencesUpdate::RedrawRequired
+        );
+        runtime.prefetch_desktop_blur(ShowcaseRole::Popover);
+        for role in ROLES {
+            runtime.redraw_materialized(role, empty_scenes()).unwrap();
+        }
+        let events = events();
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            Event::Attempt(_) | Event::Created(_, _) | Event::DesktopBlurPrefetched(_, _)
+        )));
+        for role in [
+            ShowcaseRole::Topbar,
+            ShowcaseRole::Dock,
+            ShowcaseRole::Popover,
+            ShowcaseRole::Settings,
+        ] {
+            assert!(events.contains(&Event::DesktopBlurUpdated(1, role, 0)));
+        }
+    }
+
+    #[test]
+    fn corner_radius_update_requires_and_receives_a_full_resource_rebuild() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset([]);
+        let mut runtime = runtime();
+        runtime.build(plan()).unwrap();
+        recording().events.clear();
+
+        let radius = VisualPreferences::new(94, 22).with_blur_radius(16);
+        assert_eq!(
+            runtime.update_visual_preferences(radius),
+            VisualPreferencesUpdate::RebuildAllRequired
+        );
+        assert!(events().is_empty());
+
+        runtime.rebuild(plan()).unwrap();
+        assert_eq!(
+            events()
+                .iter()
+                .filter(|event| matches!(event, Event::Attempt(_)))
+                .count(),
+            1
+        );
+        assert!(events().contains(&Event::Attempt(2)));
+        assert!(events().contains(&Event::Created(2, ShowcaseRole::Topbar)));
+        assert!(events().contains(&Event::Created(2, ShowcaseRole::Dock)));
     }
 
     #[test]

@@ -6,7 +6,9 @@ use shell_config::{
     AppearanceSettings, ConfigStore, ShellConfigV1, ThemeError, ThemePayload, export_theme,
 };
 use shell_core::{AppId, DockItem, DockItemId, DockLayoutEntry, TopbarModuleKind};
-use shell_renderer::{DipPoint, DipRect, SettingsFocus, SettingsHit, layout_settings_scene};
+use shell_renderer::{
+    DipPoint, DipRect, SettingsControlId, SettingsFocus, SettingsHit, layout_settings_scene,
+};
 
 fn qa_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir()
@@ -339,7 +341,7 @@ fn compact_keyboard_focus_reaches_back_and_footer_actions() -> Result<(), Box<dy
     ));
 
     controller.edit(SettingsEdit::DockSpacing(12))?;
-    for _ in 0..5 {
+    for _ in 0..6 {
         controller.handle_key(SettingsKey::Next)?;
     }
     assert_eq!(controller.scene().focus(), Some(SettingsFocus::Reset));
@@ -351,6 +353,85 @@ fn compact_keyboard_focus_reaches_back_and_footer_actions() -> Result<(), Box<dy
         controller.handle_key(SettingsKey::Activate)?,
         vec![QueuedSettingsAction::CommitConfig]
     );
+    Ok(())
+}
+
+#[test]
+fn dock_animation_duration_is_a_live_transactional_slider() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.open_section(SettingsSection::Dock);
+    let section = controller
+        .scene()
+        .active_section()
+        .ok_or("missing Dock section")?;
+    let animation = controller.scene().controls()[4].id();
+
+    assert_eq!(
+        controller.scene().controls()[4].label(),
+        "Animation duration"
+    );
+    assert_eq!(controller.scene().controls()[4].value(), "140 ms");
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::SetRange {
+            section,
+            control: animation,
+            position: 0.0,
+        })?,
+        vec![
+            QueuedSettingsAction::PreviewConfig,
+            QueuedSettingsAction::Redraw,
+        ]
+    );
+    assert_eq!(controller.preview().dock().animation_ms(), 0);
+    assert_eq!(controller.scene().controls()[4].value(), "Off");
+
+    controller.cancel();
+    assert_eq!(controller.preview().dock().animation_ms(), 140);
+    Ok(())
+}
+
+#[test]
+fn new_dock_animation_control_preserves_the_legacy_autohide_automation_id() {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.open_section(SettingsSection::Dock);
+    let scene = controller.scene();
+    let controls = scene.controls();
+
+    assert_eq!(controls[4].label(), "Animation duration");
+    assert_eq!(controls[4].id(), SettingsControlId::new(6));
+    assert_eq!(controls[5].label(), "Automatically hide the Dock");
+    assert_eq!(controls[5].id(), SettingsControlId::new(5));
+}
+
+#[test]
+fn appearance_blur_is_previewed_and_can_be_disabled() -> Result<(), Box<dyn std::error::Error>> {
+    let mut controller = SettingsController::new(ShellConfigV1::default());
+    controller.open_section(SettingsSection::Appearance);
+    let section = controller
+        .scene()
+        .active_section()
+        .ok_or("missing Appearance section")?;
+    let blur = controller.scene().controls()[1].id();
+
+    assert_eq!(controller.scene().controls()[1].label(), "Panel blur");
+    assert_eq!(controller.scene().controls()[1].value(), "16 DIP");
+    assert_eq!(
+        controller.handle_automation(SettingsAutomationAction::SetRange {
+            section,
+            control: blur,
+            position: 0.0,
+        })?,
+        vec![
+            QueuedSettingsAction::PreviewConfig,
+            QueuedSettingsAction::Redraw,
+        ]
+    );
+    assert_eq!(controller.preview().appearance().blur(), 0);
+    assert_eq!(controller.scene().controls()[1].value(), "Off");
+
+    controller.cancel();
+    assert_eq!(controller.preview().appearance().blur(), 16);
     Ok(())
 }
 

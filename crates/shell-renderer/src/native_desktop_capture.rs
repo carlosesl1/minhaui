@@ -33,7 +33,7 @@ use crate::native::ShowcaseRole;
 use crate::{Dpi, PopoverLayoutStyle};
 
 const PANEL_BODY_TOP_DIP: f32 = 8.0;
-const BLUR_STANDARD_DEVIATION_DIP: f32 = 18.0;
+const MAX_BLUR_STANDARD_DEVIATION_DIP: f32 = 32.0;
 const BLUR_KERNEL_RADIUS_MULTIPLIER: f32 = 3.0;
 const CAPTURE_CACHE_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 const COMPLETED_CAPTURE_BYTE_BUDGET: usize = 32 * 1024 * 1024;
@@ -42,6 +42,33 @@ const MAX_CAPTURE_SLOTS: usize = 16;
 /// Pointer-free wake posted after a hidden desktop capture enters the bounded
 /// CPU cache. The platform translates it into a UI-thread redraw when useful.
 pub const DESKTOP_BLUR_WAKE_MESSAGE: u32 = WM_APP + 0x6A;
+
+#[derive(Clone, Copy)]
+pub(crate) struct DesktopBlurTarget {
+    hwnd: HWND,
+    width: u32,
+    height: u32,
+    dpi: Dpi,
+    blur_radius: u8,
+}
+
+impl DesktopBlurTarget {
+    pub(crate) const fn new(
+        hwnd: HWND,
+        width: u32,
+        height: u32,
+        dpi: Dpi,
+        blur_radius: u8,
+    ) -> Self {
+        Self {
+            hwnd,
+            width,
+            height,
+            dpi,
+            blur_radius,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PixelRect {
@@ -85,7 +112,7 @@ pub(super) fn capture_plan(
         return None;
     }
     let overscan =
-        (BLUR_STANDARD_DEVIATION_DIP * BLUR_KERNEL_RADIUS_MULTIPLIER * scale).ceil() as i64;
+        (MAX_BLUR_STANDARD_DEVIATION_DIP * BLUR_KERNEL_RADIUS_MULTIPLIER * scale).ceil() as i64;
     let requested_left = i64::from(window_x) - overscan;
     let requested_top = i64::from(window_y) + i64::from(body_top_px) - overscan;
     let requested_right = i64::from(window_x) + i64::from(width) + overscan;
@@ -351,20 +378,26 @@ impl DesktopBlurPipeline {
     pub(crate) fn prepare_hidden(
         &mut self,
         context: &ID2D1DeviceContext,
-        hwnd: HWND,
-        width: u32,
-        height: u32,
-        dpi: Dpi,
+        target: DesktopBlurTarget,
     ) -> Result<Option<DesktopBlurCapture>> {
         self.drain_completed();
-        let Some((key, plan)) = capture_target(hwnd, width, height, dpi)? else {
+        let Some((key, plan)) =
+            capture_target(target.hwnd, target.width, target.height, target.dpi)?
+        else {
             return Ok(None);
         };
         if let Some((cached_plan, pixels)) = self.cache.get(key) {
             remove_key(&mut self.newly_ready, key);
-            return DesktopBlurCapture::from_pixels(context, cached_plan, dpi, &pixels).map(Some);
+            return DesktopBlurCapture::from_pixels(
+                context,
+                cached_plan,
+                target.dpi,
+                target.blur_radius,
+                &pixels,
+            )
+            .map(Some);
         }
-        if !is_hidden_live_window(hwnd) {
+        if !is_hidden_live_window(target.hwnd) {
             return Ok(None);
         }
         self.enqueue(key, plan);
@@ -404,13 +437,10 @@ impl DesktopBlurPipeline {
     pub(crate) fn take_ready(
         &mut self,
         context: &ID2D1DeviceContext,
-        hwnd: HWND,
-        width: u32,
-        height: u32,
-        dpi: Dpi,
+        target: DesktopBlurTarget,
     ) -> Result<Option<DesktopBlurCapture>> {
         self.drain_completed();
-        let Some(key) = capture_key(hwnd, width, height, dpi)? else {
+        let Some(key) = capture_key(target.hwnd, target.width, target.height, target.dpi)? else {
             return Ok(None);
         };
         if !remove_key(&mut self.newly_ready, key) {
@@ -419,7 +449,27 @@ impl DesktopBlurPipeline {
         let Some((plan, pixels)) = self.cache.get(key) else {
             return Ok(None);
         };
-        DesktopBlurCapture::from_pixels(context, plan, dpi, &pixels).map(Some)
+        DesktopBlurCapture::from_pixels(context, plan, target.dpi, target.blur_radius, &pixels)
+            .map(Some)
+    }
+
+    /// Reprocesses the last radius-independent CPU raster without waiting for
+    /// a new hidden-window capture. This is used only when a visible surface
+    /// turns blur back on; GDI must never capture the panel into itself.
+    pub(crate) fn reprocess_cached(
+        &mut self,
+        context: &ID2D1DeviceContext,
+        target: DesktopBlurTarget,
+    ) -> Result<Option<DesktopBlurCapture>> {
+        self.drain_completed();
+        let Some(key) = capture_key(target.hwnd, target.width, target.height, target.dpi)? else {
+            return Ok(None);
+        };
+        let Some((plan, pixels)) = self.cache.get(key) else {
+            return Ok(None);
+        };
+        DesktopBlurCapture::from_pixels(context, plan, target.dpi, target.blur_radius, &pixels)
+            .map(Some)
     }
 
     fn drain_completed(&mut self) {
@@ -560,6 +610,7 @@ impl DesktopBlurCapture {
         context: &ID2D1DeviceContext,
         plan: CapturePlan,
         dpi: Dpi,
+        blur_radius: u8,
         pixels: &[u8],
     ) -> Result<Self> {
         let expected_len = pixel_byte_len(plan.source)?;
@@ -599,7 +650,7 @@ impl DesktopBlurCapture {
             effect.SetValue(
                 D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
                 D2D1_PROPERTY_TYPE_FLOAT,
-                &BLUR_STANDARD_DEVIATION_DIP.to_ne_bytes(),
+                &f32::from(blur_radius).to_ne_bytes(),
             )?;
             effect.SetValue(
                 D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
@@ -612,6 +663,18 @@ impl DesktopBlurCapture {
             effect,
             plan,
         })
+    }
+
+    pub(crate) fn set_blur_radius(&self, blur_radius: u8) -> Result<()> {
+        // SAFETY: The effect remains owned by this capture and the byte slice
+        // exactly represents the documented FLOAT standard-deviation value.
+        unsafe {
+            self.effect.SetValue(
+                D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                D2D1_PROPERTY_TYPE_FLOAT,
+                &f32::from(blur_radius).to_ne_bytes(),
+            )
+        }
     }
 
     pub(crate) fn draw(
@@ -860,8 +923,8 @@ mod tests {
         assert_eq!(
             plan,
             CapturePlan {
-                source: PixelRect::new(46, 0, 396, 486),
-                draw_origin_x_dip: -54.0,
+                source: PixelRect::new(4, 0, 480, 528),
+                draw_origin_x_dip: -96.0,
                 draw_origin_y_dip: -32.0,
                 body_top_dip: PANEL_BODY_TOP_DIP,
             }

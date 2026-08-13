@@ -1,7 +1,8 @@
-"DepotBuildConfig"
+"DepotBuild"
 {
     "DepotID" "REPLACE_WITH_DEPOT_ID"
     "ContentRoot" ".\out\content"
+    "InstallScript" "installscript.vdf"
     "FileMapping"
     {
         "LocalPath" "*"
@@ -9,4 +10,3 @@
         "recursive" "1"
     }
 }
-

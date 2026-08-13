@@ -31,7 +31,7 @@ impl RuntimeSurfaces {
             .map_or((dock.rect, self.dock_visibility_opacity), |motion| {
                 (motion.rect(), motion.opacity())
             });
-        if self.reduced_motion || start == target {
+        if self.reduced_motion || config.animation_ms() == 0 || start == target {
             self.dock_visibility_motion = None;
             self.dock_visibility_opacity = target_opacity;
             dock.place_dock_motion(target)?;
@@ -42,11 +42,12 @@ impl RuntimeSurfaces {
                 Ok(SurfaceUpdate::Presented)
             };
         }
-        let duration = if hidden {
+        let base_duration = if hidden {
             DOCK_HIDE_DURATION_MS
         } else {
             DOCK_REVEAL_DURATION_MS
         };
+        let duration = scaled_visibility_duration(base_duration, config.animation_ms());
         let motion = DockVisibilityMotion::new_with_opacity(
             start,
             target,
@@ -112,5 +113,28 @@ impl RuntimeSurfaces {
             }
         }
         Ok(SurfaceUpdate::Presented)
+    }
+}
+
+fn scaled_visibility_duration(base_duration_ms: u64, animation_ms: u16) -> u64 {
+    base_duration_ms
+        .saturating_mul(u64::from(animation_ms))
+        .div_ceil(140)
+        .max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DOCK_HIDE_DURATION_MS, DOCK_REVEAL_DURATION_MS, scaled_visibility_duration};
+
+    #[test]
+    fn persisted_dock_duration_scales_native_reveal_and_hide_motion() {
+        assert_eq!(scaled_visibility_duration(DOCK_HIDE_DURATION_MS, 140), 180);
+        assert_eq!(
+            scaled_visibility_duration(DOCK_REVEAL_DURATION_MS, 140),
+            220
+        );
+        assert_eq!(scaled_visibility_duration(DOCK_HIDE_DURATION_MS, 280), 360);
+        assert_eq!(scaled_visibility_duration(DOCK_REVEAL_DURATION_MS, 70), 110);
     }
 }

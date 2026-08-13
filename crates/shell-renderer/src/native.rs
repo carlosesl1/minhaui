@@ -35,7 +35,9 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::core::{Interface, Result};
 
-use crate::native_desktop_capture::{DesktopBlurCapture, DesktopBlurPipeline, wants_desktop_blur};
+use crate::native_desktop_capture::{
+    DesktopBlurCapture, DesktopBlurPipeline, DesktopBlurTarget, wants_desktop_blur,
+};
 use crate::native_device::create_d3d_device;
 use crate::native_icons::NativeIconCache;
 use crate::native_liquid_glass::{
@@ -250,6 +252,36 @@ impl CompositionRenderer {
         self.device_kind
     }
 
+    /// Updates brush and desktop-blur preferences without replacing the D3D,
+    /// D2D, DirectComposition or swap-chain resources owned by this renderer.
+    /// Corner-radius changes are intentionally screened by the platform
+    /// runtime because radius-dependent dock inset and liquid-glass resources
+    /// still require a surface rebuild.
+    pub fn update_visual_preferences(&mut self, preferences: VisualPreferences) {
+        self.visual_preferences = preferences;
+    }
+
+    /// Updates an existing radius-independent desktop capture in place. Blur
+    /// disabled explicitly releases it; an effect update failure degrades to
+    /// the normal material and lets a later cached redraw recover it.
+    pub fn update_desktop_blur(&self, surface: &WindowSurface, blur_radius: u8) {
+        let mut capture = surface.desktop_blur.borrow_mut();
+        if blur_radius == 0 {
+            capture.take();
+            return;
+        }
+        let update = capture
+            .as_ref()
+            .map(|capture| capture.set_blur_radius(blur_radius));
+        if let Some(Err(error)) = update {
+            eprintln!(
+                "DESKTOP_BLUR stage=preference_update status=fallback hresult={:#010X}",
+                error.code().0 as u32,
+            );
+            capture.take();
+        }
+    }
+
     pub fn create_surface(
         &self,
         hwnd: HWND,
@@ -340,15 +372,20 @@ impl CompositionRenderer {
         } else {
             None
         };
-        let desktop_blur = if wants_desktop_blur(
-            role,
-            scenes.popover.map(PopoverScene::layout_style),
-            scenes.quick_settings.is_some(),
-            self.solid_material,
-        ) {
+        let blur_radius = self.visual_preferences.blur_radius();
+        let desktop_blur = if blur_radius > 0
+            && wants_desktop_blur(
+                role,
+                scenes.popover.map(PopoverScene::layout_style),
+                scenes.quick_settings.is_some(),
+                self.solid_material,
+            ) {
             self.desktop_blur_pipeline.as_ref().and_then(|pipeline| {
                 lock_recover(pipeline)
-                    .prepare_hidden(&self.d2d_context, hwnd, width, height, dpi)
+                    .prepare_hidden(
+                        &self.d2d_context,
+                        DesktopBlurTarget::new(hwnd, width, height, dpi, blur_radius),
+                    )
                     .unwrap_or_else(|error| {
                         eprintln!(
                             "DESKTOP_BLUR stage=initial_capture status=fallback hresult={:#010X}",
@@ -486,12 +523,14 @@ impl CompositionRenderer {
         role: ShowcaseRole,
         scenes: ShellScenes<'_>,
     ) -> Result<PresentOutcome> {
-        let desktop_blur_enabled = wants_desktop_blur(
-            role,
-            scenes.popover.map(PopoverScene::layout_style),
-            scenes.quick_settings.is_some(),
-            self.solid_material,
-        );
+        let blur_radius = self.visual_preferences.blur_radius();
+        let desktop_blur_enabled = blur_radius > 0
+            && wants_desktop_blur(
+                role,
+                scenes.popover.map(PopoverScene::layout_style),
+                scenes.quick_settings.is_some(),
+                self.solid_material,
+            );
         if !desktop_blur_enabled {
             surface.desktop_blur.borrow_mut().take();
         } else {
@@ -500,22 +539,24 @@ impl CompositionRenderer {
             // CPU raster and keep all D2D resource creation on this UI thread.
             let hidden = !unsafe { IsWindowVisible(surface.hwnd) }.as_bool();
             let capture = self.desktop_blur_pipeline.as_ref().and_then(|pipeline| {
+                let target = DesktopBlurTarget::new(
+                    surface.hwnd,
+                    surface.width,
+                    surface.height,
+                    surface.dpi,
+                    blur_radius,
+                );
                 let capture = if hidden {
-                    lock_recover(pipeline).prepare_hidden(
-                        &self.d2d_context,
-                        surface.hwnd,
-                        surface.width,
-                        surface.height,
-                        surface.dpi,
-                    )
+                    lock_recover(pipeline).prepare_hidden(&self.d2d_context, target)
                 } else {
-                    lock_recover(pipeline).take_ready(
-                        &self.d2d_context,
-                        surface.hwnd,
-                        surface.width,
-                        surface.height,
-                        surface.dpi,
-                    )
+                    let missing_capture = surface.desktop_blur.borrow().is_none();
+                    let mut pipeline = lock_recover(pipeline);
+                    match pipeline.take_ready(&self.d2d_context, target) {
+                        Ok(None) if missing_capture => {
+                            pipeline.reprocess_cached(&self.d2d_context, target)
+                        }
+                        ready => ready,
+                    }
                 };
                 capture.unwrap_or_else(|error| {
                     eprintln!(
@@ -559,6 +600,9 @@ impl CompositionRenderer {
     }
 
     pub fn prefetch_desktop_blur(&self, surface: &WindowSurface) {
+        if self.solid_material || self.visual_preferences.blur_radius() == 0 {
+            return;
+        }
         let Some(pipeline) = self.desktop_blur_pipeline.as_ref() else {
             return;
         };

@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use shell_watchdog::{
     ChildEvent, DiagnosticEvent, DiagnosticField, ProcessSupervisorConfig, RestartDelay,
-    SupervisorAction, SupervisorConfig, SupervisorState, TaskbarRestoreOutcome, export_diagnostics,
-    recovery_journal_path, restore_recovery_journal, supervise_process,
+    SupervisorAction, SupervisorConfig, SupervisorState, TaskbarRestoreOutcome,
+    current_user_local_app_data, ensure_current_user_session_exclusive, export_diagnostics,
+    quiesce_for_restore, recovery_journal_path, restore_recovery_journal, supervise_process,
 };
 
 const USAGE: &str = "\
@@ -16,7 +17,7 @@ Obsidian Glass watchdog
 
 Usage:
   shell-watchdog [--child <path>] [-- <shell arguments>...]
-  shell-watchdog --restore-only --hook <update|uninstall> [--check-only]
+  shell-watchdog --restore-only --hook <update|uninstall> [--check-only|--hold-until-stdin-eof]
   shell-watchdog --simulate-heartbeat-miss [count]
   shell-watchdog --simulate-crash-loop [count]
   shell-watchdog --diagnostics-export <path>
@@ -28,9 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match CliCommand::parse(&args)? {
         CliCommand::Supervise { child, child_args } => {
             let executable = child.map_or_else(sibling_shell_app, Ok)?;
+            let recovery_journal = pending_recovery_journal_path(None)?;
             supervise_process(
                 &executable,
                 &child_args,
+                &recovery_journal,
                 ProcessSupervisorConfig::production(),
             )?;
         }
@@ -42,8 +45,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let action = simulate_restarts(ChildEvent::ChildCrashed, count);
             println!("shell-watchdog: crash simulation action={action}");
         }
-        CliCommand::RestoreOnly { hook, check_only } => {
-            run_restore_only(hook, check_only)?;
+        CliCommand::RestoreOnly {
+            hook,
+            check_only,
+            hold_until_stdin_eof,
+            test_state_root,
+        } => {
+            run_restore_only(
+                hook,
+                check_only,
+                hold_until_stdin_eof,
+                test_state_root.as_deref(),
+            )?;
         }
         CliCommand::DiagnosticsExport(path) => {
             let event =
@@ -67,6 +80,8 @@ enum CliCommand {
     RestoreOnly {
         hook: RestoreOnlyHook,
         check_only: bool,
+        hold_until_stdin_eof: bool,
+        test_state_root: Option<PathBuf>,
     },
     DiagnosticsExport(PathBuf),
     Help,
@@ -196,6 +211,8 @@ fn parse_diagnostics_export(args: &[OsString]) -> io::Result<CliCommand> {
 fn parse_restore_only(args: &[OsString]) -> io::Result<CliCommand> {
     let mut hook = None;
     let mut check_only = false;
+    let mut hold_until_stdin_eof = false;
+    let mut test_state_root = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].to_str() {
@@ -220,6 +237,30 @@ fn parse_restore_only(args: &[OsString]) -> io::Result<CliCommand> {
             Some("--check-only") => {
                 return Err(invalid_input("--check-only may be specified only once"));
             }
+            Some("--hold-until-stdin-eof") if !hold_until_stdin_eof => {
+                hold_until_stdin_eof = true;
+                index += 1;
+            }
+            Some("--hold-until-stdin-eof") => {
+                return Err(invalid_input(
+                    "--hold-until-stdin-eof may be specified only once",
+                ));
+            }
+            Some("--test-state-root") if cfg!(debug_assertions) => {
+                if test_state_root.is_some() {
+                    return Err(invalid_input(
+                        "--test-state-root may be specified only once",
+                    ));
+                }
+                let path = args
+                    .get(index + 1)
+                    .ok_or_else(|| invalid_input("--test-state-root requires a path"))?;
+                if path.is_empty() {
+                    return Err(invalid_input("--test-state-root requires a non-empty path"));
+                }
+                test_state_root = Some(PathBuf::from(path));
+                index += 2;
+            }
             Some(flag) => {
                 return Err(invalid_input(format!("unknown restore argument '{flag}'")));
             }
@@ -230,9 +271,16 @@ fn parse_restore_only(args: &[OsString]) -> io::Result<CliCommand> {
             }
         }
     }
+    if check_only && hold_until_stdin_eof {
+        return Err(invalid_input(
+            "--check-only cannot hold a lifecycle mutation gate",
+        ));
+    }
     Ok(CliCommand::RestoreOnly {
         hook: hook.ok_or_else(|| invalid_input("--restore-only requires --hook"))?,
         check_only,
+        hold_until_stdin_eof,
+        test_state_root,
     })
 }
 
@@ -257,8 +305,23 @@ const fn shell_app_filename() -> &'static str {
     }
 }
 
-fn run_restore_only(hook: RestoreOnlyHook, check_only: bool) -> io::Result<()> {
-    let journal = pending_recovery_journal_path()?;
+fn run_restore_only(
+    hook: RestoreOnlyHook,
+    check_only: bool,
+    hold_until_stdin_eof: bool,
+    test_state_root: Option<&std::path::Path>,
+) -> io::Result<()> {
+    if !check_only {
+        ensure_current_user_session_exclusive()?;
+    }
+    let journal = pending_recovery_journal_path(test_state_root)?;
+    // A real packaging recovery must first stop the only supervisor, wait for
+    // its child/control pipe (and therefore the lease) to close, and retain
+    // exclusive ownership through the final journal restore. Dry-run checks
+    // remain strictly read-only and never disrupt a running shell.
+    let _lifecycle_gate = (!check_only)
+        .then(|| quiesce_for_restore(&journal))
+        .transpose()?;
     let outcome = restore_recovery_journal(&journal, check_only).map_err(io::Error::other)?;
     let message = match outcome {
         TaskbarRestoreOutcome::NoJournal => "no pending taskbar recovery journal",
@@ -266,15 +329,33 @@ fn run_restore_only(hook: RestoreOnlyHook, check_only: bool) -> io::Result<()> {
         TaskbarRestoreOutcome::Restored => "taskbar recovery restored and journal removed",
     };
     println!("shell-watchdog: {message} for {}", hook.as_str());
+    if hold_until_stdin_eof {
+        use std::io::{BufRead, Write};
+
+        println!("MINHA_UI_LIFECYCLE_READY v1");
+        io::stdout().flush()?;
+        let mut release = String::new();
+        let bytes = io::stdin().lock().read_line(&mut release)?;
+        if bytes != 0 {
+            return Err(invalid_input(
+                "lifecycle holder accepts only stdin EOF as release authority",
+            ));
+        }
+    }
     Ok(())
 }
 
-fn pending_recovery_journal_path() -> io::Result<PathBuf> {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is unavailable"))?;
-    let state_directory = PathBuf::from(local_app_data)
-        .join("Minha UI")
-        .join("watchdog");
+fn pending_recovery_journal_path(test_state_root: Option<&std::path::Path>) -> io::Result<PathBuf> {
+    if test_state_root.is_some() && !cfg!(debug_assertions) {
+        return Err(invalid_input(
+            "test state overrides are disabled in release builds",
+        ));
+    }
+    let local_app_data = match test_state_root {
+        Some(path) => path.to_path_buf(),
+        None => current_user_local_app_data()?,
+    };
+    let state_directory = local_app_data.join("Minha UI").join("watchdog");
     Ok(recovery_journal_path(&state_directory))
 }
 
@@ -376,7 +457,36 @@ mod tests {
             Some(CliCommand::RestoreOnly {
                 hook: RestoreOnlyHook::Uninstall,
                 check_only: true,
+                hold_until_stdin_eof: false,
+                test_state_root: None,
             })
+        );
+        assert_eq!(
+            CliCommand::parse(&args(&[
+                "shell-watchdog",
+                "--restore-only",
+                "--hook",
+                "update",
+                "--hold-until-stdin-eof",
+            ]))
+            .ok(),
+            Some(CliCommand::RestoreOnly {
+                hook: RestoreOnlyHook::Update,
+                check_only: false,
+                hold_until_stdin_eof: true,
+                test_state_root: None,
+            })
+        );
+        assert!(
+            CliCommand::parse(&args(&[
+                "shell-watchdog",
+                "--restore-only",
+                "--hook",
+                "update",
+                "--check-only",
+                "--hold-until-stdin-eof",
+            ]))
+            .is_err()
         );
         assert!(
             CliCommand::parse(&args(&[

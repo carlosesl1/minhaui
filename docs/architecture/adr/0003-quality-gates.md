@@ -55,6 +55,9 @@ Rejeitada porque mistura falha de produto com variação ambiental.
   resolução de ícone e ciclo de reserva sem consultar o estado real da máquina.
 - O smoke de bootstrap executa por padrão; o showcase com AppBar real permanece
   restrito ao feature `native-validation`.
+- O gate Windows hospedado valida locks e watchdog entre processos sem afirmar
+  que possui desktop interativo; UI Automation e lifecycle visual permanecem
+  no runner controlado e produzem evidência separada.
 - O gate nativo lista pré-requisitos e produz resultado separado.
 - Nenhuma exceção ou teste ignorado existe sem expiração registrada.
 

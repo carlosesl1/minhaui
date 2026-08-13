@@ -23,6 +23,7 @@ pub enum SettingsEdit {
     DockSpacing(u16),
     DockAlignment(DockAlignmentPreference),
     DockMagnification(u16),
+    DockAnimation(u16),
     DockAutohide(bool),
     Appearance(AppearanceSettings),
     TopbarDensity(TopbarDensityPreference),
@@ -724,7 +725,14 @@ impl SettingsController {
                     5,
                     true,
                 )))?,
-                4 => self.edit(SettingsEdit::DockAutohide(!self.draft.autohide()))?,
+                4 => self.edit(SettingsEdit::DockAnimation(step_u16(
+                    self.draft.dock().animation_ms(),
+                    0,
+                    280,
+                    20,
+                    true,
+                )))?,
+                5 => self.edit(SettingsEdit::DockAutohide(!self.draft.autohide()))?,
                 _ => return Ok(Vec::new()),
             },
             SettingsSection::Topbar => match self.focus {
@@ -768,6 +776,15 @@ impl SettingsController {
                     )),
                 ))?,
                 1 => self.edit(SettingsEdit::Appearance(
+                    self.draft.appearance().clone().with_blur(step_u8(
+                        self.draft.appearance().blur(),
+                        0,
+                        32,
+                        2,
+                        true,
+                    )),
+                ))?,
+                2 => self.edit(SettingsEdit::Appearance(
                     self.draft.appearance().clone().with_radius(step_u16(
                         self.draft.appearance().radius(),
                         6,
@@ -829,6 +846,13 @@ impl SettingsController {
                     5,
                     increase,
                 )))?,
+                4 => self.edit(SettingsEdit::DockAnimation(step_u16(
+                    self.draft.dock().animation_ms(),
+                    0,
+                    280,
+                    20,
+                    increase,
+                )))?,
                 _ => return Ok(Vec::new()),
             },
             SettingsSection::Appearance => match self.focus {
@@ -842,6 +866,15 @@ impl SettingsController {
                     )),
                 ))?,
                 1 => self.edit(SettingsEdit::Appearance(
+                    self.draft.appearance().clone().with_blur(step_u8(
+                        self.draft.appearance().blur(),
+                        0,
+                        32,
+                        2,
+                        increase,
+                    )),
+                ))?,
+                2 => self.edit(SettingsEdit::Appearance(
                     self.draft.appearance().clone().with_radius(step_u16(
                         self.draft.appearance().radius(),
                         6,
@@ -907,6 +940,9 @@ impl SettingsController {
             (SettingsSection::Dock, 3) => self.edit(SettingsEdit::DockMagnification(
                 slider_u16(position, 100, 140, 5),
             ))?,
+            (SettingsSection::Dock, 4) => self.edit(SettingsEdit::DockAnimation(slider_u16(
+                position, 0, 280, 20,
+            )))?,
             (SettingsSection::Appearance, 0) => {
                 self.edit(SettingsEdit::Appearance(
                     self.draft
@@ -916,6 +952,14 @@ impl SettingsController {
                 ))?;
             }
             (SettingsSection::Appearance, 1) => {
+                self.edit(SettingsEdit::Appearance(
+                    self.draft
+                        .appearance()
+                        .clone()
+                        .with_blur(slider_u8(position, 0, 32, 2)),
+                ))?;
+            }
+            (SettingsSection::Appearance, 2) => {
                 self.edit(SettingsEdit::Appearance(
                     self.draft
                         .appearance()
@@ -1096,6 +1140,9 @@ fn apply_edit(config: &ShellConfigV1, edit: SettingsEdit) -> Result<ShellConfigV
         }
         SettingsEdit::DockMagnification(value) => {
             config.with_dock(config.dock().clone().with_magnification(value))
+        }
+        SettingsEdit::DockAnimation(value) => {
+            config.with_dock(config.dock().clone().with_animation_ms(value))
         }
         SettingsEdit::DockAutohide(value) => config.with_autohide(value),
         SettingsEdit::Appearance(appearance) => config.with_appearance(appearance),
@@ -1281,6 +1328,16 @@ fn controls_for_section(
                 draft.dock().magnification() != committed.dock().magnification(),
             ),
             control(
+                6,
+                "Animation duration",
+                "Speed of Dock magnification and reorder motion. Set to zero to disable it.",
+                &animation_duration_label(draft.dock().animation_ms()),
+                SettingsControlKind::Slider {
+                    position: percent_u16(draft.dock().animation_ms(), 0, 280),
+                },
+                draft.dock().animation_ms() != committed.dock().animation_ms(),
+            ),
+            control(
                 5,
                 "Automatically hide the Dock",
                 "Reveal from the physical monitor edge.",
@@ -1353,6 +1410,16 @@ fn controls_for_section(
                 draft.appearance().opacity() != committed.appearance().opacity(),
             ),
             control(
+                403,
+                "Panel blur",
+                "Background blur for system panels; zero keeps only the translucent tint.",
+                &blur_radius_label(draft.appearance().blur()),
+                SettingsControlKind::Slider {
+                    position: percent_u8(draft.appearance().blur(), 0, 32),
+                },
+                draft.appearance().blur() != committed.appearance().blur(),
+            ),
+            control(
                 402,
                 "Corner radius",
                 "Applied consistently to Dock and owned panels.",
@@ -1389,6 +1456,22 @@ fn control(
         true,
         modified,
     )
+}
+
+fn animation_duration_label(value: u16) -> String {
+    if value == 0 {
+        "Off".to_owned()
+    } else {
+        format!("{value} ms")
+    }
+}
+
+fn blur_radius_label(value: u8) -> String {
+    if value == 0 {
+        "Off".to_owned()
+    } else {
+        format!("{value} DIP")
+    }
 }
 
 fn customizable_modules(modules: &[TopbarModule]) -> Vec<TopbarModule> {

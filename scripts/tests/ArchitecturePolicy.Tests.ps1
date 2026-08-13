@@ -228,6 +228,9 @@ mod taskbar_restore;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "ADR-0011")]
 mod taskbar_restore_win32;
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "ADR-0011")]
+mod lifecycle_win32;
 '@),
     (New-NativeSurfaceSource `
         -File "crates/shell-watchdog/src/taskbar_restore.rs" `
@@ -239,6 +242,11 @@ fn plan() {}
         -File "crates/shell-watchdog/src/taskbar_restore_win32.rs" `
         -Content @'
 unsafe extern "system" fn callback() {}
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/lifecycle_win32.rs" `
+        -Content @'
+unsafe fn named_gate() {}
 '@)
 )
 $watchdogBoundaryViolations = @(
@@ -250,8 +258,13 @@ $invalidWatchdogBoundary = @(
     (New-NativeSurfaceSource `
         -File "crates/shell-watchdog/src/lib.rs" `
         -Content @'
-#![allow(unsafe_code)]
+#![deny(unsafe_code)]
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "ADR-0011")]
 mod taskbar_restore_win32;
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "ADR-0011")]
+mod lifecycle_win32;
 '@),
     (New-NativeSurfaceSource `
         -File "crates/shell-watchdog/src/taskbar_restore.rs" `
@@ -263,6 +276,16 @@ fn plan() { unsafe {} }
         -File "crates/shell-watchdog/src/taskbar_restore_win32.rs" `
         -Content @'
 unsafe extern "system" fn callback() {}
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/lifecycle_win32.rs" `
+        -Content @'
+unsafe fn named_gate() {}
+'@),
+    (New-NativeSurfaceSource `
+        -File "crates/shell-watchdog/src/third_win32.rs" `
+        -Content @'
+unsafe fn forbidden_third_adapter() {}
 '@)
 )
 $invalidWatchdogBoundaryViolations = @(

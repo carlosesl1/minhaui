@@ -82,6 +82,10 @@ Comandos atuais:
 ```powershell
 cargo test -p shell-platform-windows --features native-validation --lib
 cargo test -p shell-app --features native-validation --test showcase_startup
+cargo build -p shell-app --features native-validation
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/Invoke-NativeWindowsValidation.ps1 `
+  -ShellAppPath target/debug/shell-app.exe
 ```
 
 O runner controlado usa os labels `self-hosted`, `windows`, `x64` e
@@ -89,6 +93,10 @@ O runner controlado usa os labels `self-hosted`, `windows`, `x64` e
 DWM ativo, desktop interativo e nenhuma instância do produto ou AppBar
 conflitante. O job é solicitado explicitamente por `workflow_dispatch` e não
 deve ser substituído por skips condicionais dentro dos testes.
+
+O escopo automatizado, a evidência produzida e os cenários que continuam
+dependendo de laboratório estão detalhados em
+[`native-windows-validation.md`](native-windows-validation.md).
 
 ## Exceções
 

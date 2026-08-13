@@ -2,9 +2,10 @@ use shell_core::RecoveryTransactionId;
 use shell_watchdog::{
     MAX_RECOVERY_JOURNAL_BYTES, RECOVERY_JOURNAL_FILE_NAME, RecoveryCoordinator,
     RecoveryCoordinatorError, RecoveryJournalError, RecoveryJournalPhase, RecoveryJournalV1,
-    TaskbarBounds, TaskbarSnapshot, create_prepared_recovery_journal, load_recovery_journal,
-    mark_recovery_journal_applied, recovery_journal_path, remove_recovery_journal,
-    remove_recovery_journal_for_transaction, save_recovery_journal,
+    TaskbarBounds, TaskbarSnapshot, cancel_prepared_recovery_journal,
+    create_prepared_recovery_journal, load_recovery_journal, mark_recovery_journal_applied,
+    recovery_journal_path, remove_recovery_journal, remove_recovery_journal_for_transaction,
+    save_recovery_journal,
 };
 use std::error::Error;
 use std::ffi::OsStr;
@@ -448,5 +449,36 @@ fn pure_coordinator_tracks_authenticated_durable_phases() -> Result<(), Box<dyn 
             transaction_id: transaction
         }
     );
+    Ok(())
+}
+
+#[test]
+fn prepared_cancellation_is_phase_and_transaction_authenticated() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::create("cancel-prepared")?;
+    let path = directory.journal_path();
+    let expected = transaction_id(10)?;
+    let other = transaction_id(11)?;
+    create_prepared_recovery_journal(&path, expected, 1, sample_snapshots())?;
+
+    assert!(matches!(
+        cancel_prepared_recovery_journal(&path, other),
+        Err(RecoveryJournalError::TransactionMismatch { .. })
+    ));
+    assert!(path.exists());
+    mark_recovery_journal_applied(&path, expected)?;
+    assert!(matches!(
+        cancel_prepared_recovery_journal(&path, expected),
+        Err(RecoveryJournalError::UnexpectedPhase {
+            expected: RecoveryJournalPhase::Prepared,
+            found: RecoveryJournalPhase::Applied,
+            ..
+        })
+    ));
+    assert!(path.exists());
+
+    remove_recovery_journal(&path)?;
+    create_prepared_recovery_journal(&path, expected, 1, sample_snapshots())?;
+    cancel_prepared_recovery_journal(&path, expected)?;
+    assert!(!path.exists());
     Ok(())
 }

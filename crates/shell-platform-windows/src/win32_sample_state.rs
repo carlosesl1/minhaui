@@ -67,6 +67,7 @@ pub(super) fn dock_runtime_config(config: &ShellConfigV1) -> DockRuntimeConfig {
         .with_spacing(f32::from(settings.spacing()))
         .with_padding(padding)
         .with_magnified_item_size(magnified_item_size)
+        .with_animation_ms(settings.animation_ms())
         .with_autohide(config.autohide())
 }
 
@@ -107,6 +108,7 @@ mod tests {
         assert_eq!(runtime.layout().spacing(), 9.0);
         assert_eq!(runtime.layout().magnified_item_size(), 43.92);
         assert_eq!(runtime.dock_height_dip(), 55.0);
+        assert_eq!(runtime.animation_ms(), 140);
         assert!(!runtime.autohide());
     }
 
@@ -116,7 +118,8 @@ mod tests {
             .with_item_size(72)
             .with_spacing(20)
             .with_alignment(DockAlignmentPreference::Right)
-            .with_magnification(140);
+            .with_magnification(140)
+            .with_animation_ms(280);
         let config = ShellConfigV1::default().with_dock(dock).with_autohide(true);
 
         let runtime = dock_runtime_config(&config);
@@ -127,6 +130,7 @@ mod tests {
         assert_eq!(runtime.layout().magnified_item_size(), 100.8);
         assert_eq!(runtime.layout().padding(), 29.0);
         assert_eq!(runtime.dock_height_dip(), 112.0);
+        assert_eq!(runtime.animation_ms(), 280);
         assert!(runtime.autohide());
     }
 

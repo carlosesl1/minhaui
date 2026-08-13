@@ -18,6 +18,31 @@ fn state() -> Result<ShellState, Box<dyn std::error::Error>> {
     ]))
 }
 
+fn reordering_animation_controller(
+    animation_ms: u16,
+) -> Result<DockController, Box<dyn std::error::Error>> {
+    let config = DockRuntimeConfig::default()
+        .with_item_size(10_000.0)
+        .with_spacing(100.0)
+        .with_magnified_item_size(12_000.0)
+        .with_animation_ms(animation_ms);
+    let mut controller = DockController::new(state()?, config)?;
+    let surface = DipRect::new(0.0, 0.0, 40_000.0, 14_000.0);
+    controller.update_surface(surface);
+    let second = item_center(&controller, DockItemId::new(2), surface)?;
+    let first = item_center(&controller, DockItemId::new(1), surface)?;
+    let mut before_first = first;
+    before_first.x -= 1.0;
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Moved, first))?;
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Moved, second))?;
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Pressed, second))?;
+    controller.handle_pointer(DockPointerSample::new(
+        DockPointerPhase::Dragged,
+        before_first,
+    ))?;
+    Ok(controller)
+}
+
 #[test]
 fn dragging_an_item_reorders_the_persisted_state() -> Result<(), Box<dyn std::error::Error>> {
     // Given: two pinned dock apps.
@@ -86,6 +111,80 @@ fn neighboring_slots_glide_to_their_new_positions_during_reorder()
         .x;
     assert!((moving_x - settled_x).abs() > 20.0);
     assert!(controller.animations_idle());
+    Ok(())
+}
+
+#[test]
+fn configured_animation_consumes_full_scaled_time_at_60_and_144_hz()
+-> Result<(), Box<dyn std::error::Error>> {
+    const ELAPSED_SECONDS: f32 = 1.0 / 12.0;
+
+    for animation_ms in [20_u16, 140, 280] {
+        let mut at_60_hz = reordering_animation_controller(animation_ms)?;
+        let mut at_144_hz = reordering_animation_controller(animation_ms)?;
+        let initial_offset = at_60_hz.scene().item_offset(1);
+        assert!(initial_offset.abs() > 10_000.0);
+        assert!((initial_offset - at_144_hz.scene().item_offset(1)).abs() < 0.001);
+
+        for _ in 0..5 {
+            at_60_hz.advance_animation(1.0 / 60.0);
+        }
+        for _ in 0..12 {
+            at_144_hz.advance_animation(1.0 / 144.0);
+        }
+
+        let scaled_elapsed = ELAPSED_SECONDS * 140.0 / f32::from(animation_ms);
+        let expected_offset = initial_offset * (-18.0 * scaled_elapsed).exp();
+        let offset_60_hz = at_60_hz.scene().item_offset(1);
+        let offset_144_hz = at_144_hz.scene().item_offset(1);
+        let offset_tolerance = expected_offset.abs().max(1.0) * 0.000_2;
+        assert!(
+            (offset_60_hz - expected_offset).abs() <= offset_tolerance,
+            "60 Hz reorder retention truncated scaled time for {animation_ms} ms: expected {expected_offset}, got {offset_60_hz}",
+        );
+        assert!(
+            (offset_144_hz - expected_offset).abs() <= offset_tolerance,
+            "144 Hz reorder retention diverged for {animation_ms} ms: expected {expected_offset}, got {offset_144_hz}",
+        );
+        assert!(
+            (offset_60_hz - offset_144_hz).abs() <= offset_tolerance,
+            "reorder motion depends on refresh rate for {animation_ms} ms",
+        );
+
+        let animator_60_hz = at_60_hz.animator();
+        let animator_144_hz = at_144_hz.animator();
+        assert!(
+            (animator_60_hz.position_x() - animator_144_hz.position_x()).abs() < 0.01,
+            "position spring depends on refresh rate for {animation_ms} ms",
+        );
+        assert!(
+            (animator_60_hz.strength() - animator_144_hz.strength()).abs() < 0.001,
+            "strength spring depends on refresh rate for {animation_ms} ms",
+        );
+        assert!(
+            (animator_60_hz.material_strength() - animator_144_hz.material_strength()).abs()
+                < 0.001,
+            "material spring depends on refresh rate for {animation_ms} ms",
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn zero_duration_snaps_nonessential_dock_motion() -> Result<(), Box<dyn std::error::Error>> {
+    let config = DockRuntimeConfig::default().with_animation_ms(0);
+    let mut controller = DockController::new(state()?, config)?;
+    let surface = DipRect::new(0.0, 0.0, 320.0, 96.0);
+    controller.update_surface(surface);
+    let first = item_center(&controller, DockItemId::new(1), surface)?;
+
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Moved, first))?;
+    assert!(controller.animations_idle());
+    assert_eq!(controller.animator().strength(), 1.0);
+
+    controller.handle_pointer(DockPointerSample::new(DockPointerPhase::Exited, first))?;
+    assert!(controller.animations_idle());
+    assert_eq!(controller.animator().strength(), 0.0);
     Ok(())
 }
 

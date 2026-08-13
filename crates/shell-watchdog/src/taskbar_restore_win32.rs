@@ -4,6 +4,10 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use shell_core::{
+    RecoveryTransactionId, TaskbarFingerprintBounds, TaskbarFingerprintSnapshot,
+    TaskbarStateFingerprint, TaskbarWindowClass, taskbar_arming_fingerprint_v1,
+};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, RECT};
 use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
 use windows::Win32::Graphics::Gdi::{
@@ -14,35 +18,306 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::{
     MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::RemoteDesktop::{
+    ProcessIdToSessionId, WTS_SESSION_INFO_1W, WTSEnumerateSessionsExW, WTSFreeMemoryExW,
+    WTSTypeSessionInfoLevel1,
+};
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, ABM_GETSTATE,
-    ABM_SETAUTOHIDEBAREX, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage,
+    ABM_SETAUTOHIDEBAREX, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, FOLDERID_LocalAppData,
+    KF_FLAG_DEFAULT, SHAppBarMessage, SHGetKnownFolderPath,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE,
     SW_SHOWNOACTIVATE, ShowWindowAsync,
 };
-use windows::core::{BOOL, Error as WindowsError, PCWSTR, PWSTR};
+use windows::core::{BOOL, Error as WindowsError, GUID, PCWSTR, PWSTR};
 
-use crate::RecoveryJournalV1;
-use crate::TaskbarBounds;
 use crate::taskbar_restore::{
     TaskbarObservation, TaskbarObservationId, TaskbarRestoreBackend, TaskbarRestoreError,
     TaskbarRestorePlan, TaskbarRestoreTarget, plan_taskbar_restore,
 };
+use crate::{RecoveryJournalV1, TaskbarBounds, TaskbarSnapshot};
 
 const PRIMARY_TASKBAR_CLASS: &str = "Shell_TrayWnd";
 const SECONDARY_TASKBAR_CLASS: &str = "Shell_SecondaryTrayWnd";
 const MAX_WINDOWS_PATH_UNITS: usize = 32_768;
 const VERIFICATION_BUDGET: Duration = Duration::from_secs(2);
 const VERIFICATION_INTERVAL: Duration = Duration::from_millis(50);
+
+pub(crate) struct NativeTaskbarArmingObservation {
+    pub fingerprint: TaskbarStateFingerprint,
+    pub appbar_state: u32,
+    pub snapshots: Vec<TaskbarSnapshot>,
+}
+
+/// Performs the watchdog-owned, read-only half of the V1 arming comparison.
+///
+/// Every HWND is rediscovered here, independently of the child, and accepted
+/// only when its image is the trusted Windows `explorer.exe`. No HWND crosses
+/// the protocol or enters the durable journal.
+pub(crate) fn observe_taskbar_arming_state()
+-> Result<NativeTaskbarArmingObservation, TaskbarRestoreError> {
+    let taskbars = discover_explorer_taskbars()?;
+    for taskbar in &taskbars {
+        require_default_region_for_arming(
+            window_region_state(taskbar.hwnd)?,
+            &taskbar.observation,
+        )?;
+    }
+    let explorer_process_id = taskbars.first().map_or(0, |taskbar| taskbar.process_id);
+    let session_id = current_session_id()?;
+    let appbar_state = current_appbar_state();
+    let fingerprint_snapshots = taskbars
+        .iter()
+        .map(|taskbar| {
+            let class = match taskbar.observation.class_name.as_str() {
+                PRIMARY_TASKBAR_CLASS => TaskbarWindowClass::Primary,
+                SECONDARY_TASKBAR_CLASS => TaskbarWindowClass::Secondary,
+                _ => {
+                    return Err(TaskbarRestoreError::verification(
+                        "taskbar discovery returned an unsupported window class",
+                    ));
+                }
+            };
+            let bounds = taskbar.observation.bounds;
+            Ok(TaskbarFingerprintSnapshot::new(
+                taskbar.observation.device.clone(),
+                class,
+                taskbar.observation.visible,
+                TaskbarFingerprintBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom),
+            ))
+        })
+        .collect::<Result<Vec<_>, TaskbarRestoreError>>()?;
+    let fingerprint = taskbar_arming_fingerprint_v1(
+        session_id,
+        explorer_process_id,
+        appbar_state,
+        &fingerprint_snapshots,
+    )
+    .map_err(|error| {
+        TaskbarRestoreError::verification(format!(
+            "the current taskbar state cannot be armed by protocol V1: {error}"
+        ))
+    })?;
+    let snapshots = taskbars
+        .into_iter()
+        .map(|taskbar| {
+            TaskbarSnapshot::new(
+                taskbar.observation.device,
+                taskbar.observation.class_name,
+                taskbar.observation.visible,
+                taskbar.observation.bounds,
+            )
+        })
+        .collect();
+    Ok(NativeTaskbarArmingObservation {
+        fingerprint,
+        appbar_state,
+        snapshots,
+    })
+}
+
+/// Validates that abandoning `Prepared` cannot conceal a taskbar mutation.
+///
+/// Visibility and appbar state may legitimately change while the child waits
+/// for LEASE, so they are deliberately not restored. The trusted Explorer
+/// identity, class/device/bounds topology and default window regions must still
+/// match before the exact transaction journal may be compare-deleted.
+pub(crate) fn preflight_prepared_cancellation(
+    journal: &RecoveryJournalV1,
+) -> Result<(), TaskbarRestoreError> {
+    let taskbars = discover_explorer_taskbars()?;
+    let observations = taskbars
+        .iter()
+        .map(|taskbar| taskbar.observation.clone())
+        .collect::<Vec<_>>();
+    let _plan = plan_taskbar_restore(journal, &observations)?;
+    for taskbar in &taskbars {
+        require_default_region_for_arming(
+            window_region_state(taskbar.hwnd)?,
+            &taskbar.observation,
+        )?;
+    }
+    Ok(())
+}
+
+fn require_default_region_for_arming(
+    region: WindowRegionState,
+    observation: &TaskbarObservation,
+) -> Result<(), TaskbarRestoreError> {
+    match region {
+        WindowRegionState::NoRegion => Ok(()),
+        WindowRegionState::Empty | WindowRegionState::Simple | WindowRegionState::Complex => {
+            Err(TaskbarRestoreError::verification(format!(
+                "protocol V1 cannot arm a taskbar with a pre-existing {region:?} region on {}",
+                observation.device
+            )))
+        }
+    }
+}
+
+pub(crate) fn new_recovery_transaction_id() -> Result<RecoveryTransactionId, TaskbarRestoreError> {
+    let guid =
+        GUID::new().map_err(|error| native_error("creating a recovery transaction id", error))?;
+    RecoveryTransactionId::try_from_bytes(guid.to_u128().to_be_bytes()).map_err(|error| {
+        TaskbarRestoreError::verification(format!(
+            "Windows generated an invalid recovery transaction id: {error}"
+        ))
+    })
+}
+
+pub(crate) fn current_user_local_app_data() -> std::io::Result<std::path::PathBuf> {
+    // SAFETY: The well-known folder id and default flags are static. Windows
+    // allocates one NUL-terminated UTF-16 string for the current user token.
+    let folder_id = FOLDERID_LocalAppData;
+    // SAFETY: `folder_id` is live immutable storage and the default-token query
+    // returns one caller-owned CoTaskMem string handled below.
+    let value = unsafe { SHGetKnownFolderPath(&raw const folder_id, KF_FLAG_DEFAULT, None) }
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    // SAFETY: `value` is owned by this call and remains valid until freed below.
+    let decoded = unsafe { value.to_string() }
+        .map(std::path::PathBuf::from)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+    // SAFETY: SHGetKnownFolderPath documents CoTaskMemFree for its returned
+    // allocation; it is released exactly once after copying.
+    unsafe { CoTaskMemFree(Some(value.as_ptr().cast())) };
+    decoded
+}
+
+/// Refuses supervision and package mutation when the same Windows account has
+/// any other logged-on session. Journal V1 is per user while native restoration
+/// must execute in the HWND-owning session, so silently spanning RDP/Fast User
+/// Switching would make a Local lease invisible to the package hook.
+pub fn ensure_current_user_session_exclusive() -> std::io::Result<()> {
+    let current_session =
+        current_session_id().map_err(|error| std::io::Error::other(error.to_string()))?;
+    let sessions = LoggedOnSessions::enumerate()?;
+    let current = sessions
+        .entries()
+        .iter()
+        .find(|session| session.SessionId == current_session)
+        .ok_or_else(|| std::io::Error::other("current Windows session was not enumerated"))?;
+    let current_account = session_account(current)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "current Windows session has no authenticated account identity",
+        )
+    })?;
+    let accounts = sessions
+        .entries()
+        .iter()
+        .map(|session| Ok((session.SessionId, session_account(session)?)))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    if let Some(session_id) = conflicting_session_id(current_session, &current_account, &accounts) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "the current account is also logged on in Windows session {session_id}; lifecycle recovery is session-local"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn conflicting_session_id(
+    current_session: u32,
+    current_account: &SessionAccount,
+    sessions: &[(u32, Option<SessionAccount>)],
+) -> Option<u32> {
+    sessions.iter().find_map(|(session_id, account)| {
+        (*session_id != current_session && account.as_ref() == Some(current_account))
+            .then_some(*session_id)
+    })
+}
+
+#[derive(Eq, PartialEq)]
+struct SessionAccount {
+    domain: String,
+    user: String,
+}
+
+fn session_account(session: &WTS_SESSION_INFO_1W) -> std::io::Result<Option<SessionAccount>> {
+    let user = copy_wts_string(session.pUserName)?;
+    if user.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(SessionAccount {
+        domain: copy_wts_string(session.pDomainName)?.to_uppercase(),
+        user: user.to_uppercase(),
+    }))
+}
+
+fn copy_wts_string(value: PWSTR) -> std::io::Result<String> {
+    if value.is_null() {
+        return Ok(String::new());
+    }
+    // SAFETY: The string pointers belong to the live WTSEnumerateSessionsExW
+    // allocation and are copied before LoggedOnSessions frees that allocation.
+    unsafe { value.to_string() }
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+struct LoggedOnSessions {
+    pointer: *mut WTS_SESSION_INFO_1W,
+    count: u32,
+}
+
+impl LoggedOnSessions {
+    fn enumerate() -> std::io::Result<Self> {
+        let mut level = 1_u32;
+        let mut pointer = std::ptr::null_mut();
+        let mut count = 0_u32;
+        // SAFETY: The API writes one allocated array pointer and count to live
+        // stack storage. Level 1 supplies user/domain/session identity.
+        unsafe { WTSEnumerateSessionsExW(None, &mut level, 0, &mut pointer, &mut count) }
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        if pointer.is_null() || count == 0 {
+            if !pointer.is_null() {
+                // SAFETY: WTS returned this allocation and Level1/count match.
+                let _ =
+                    unsafe { WTSFreeMemoryExW(WTSTypeSessionInfoLevel1, pointer.cast(), count) };
+            }
+            return Err(std::io::Error::other(
+                "Windows returned no logged-on session authority",
+            ));
+        }
+        Ok(Self { pointer, count })
+    }
+
+    fn entries(&self) -> &[WTS_SESSION_INFO_1W] {
+        // SAFETY: `pointer` is a non-null array of `count` Level1 entries owned
+        // by this guard and is freed only after all borrows end.
+        unsafe { std::slice::from_raw_parts(self.pointer, self.count as usize) }
+    }
+}
+
+impl Drop for LoggedOnSessions {
+    fn drop(&mut self) {
+        // SAFETY: The pointer/count pair came from WTSEnumerateSessionsExW at
+        // Level1 and is released exactly once by its owner.
+        let _ =
+            unsafe { WTSFreeMemoryExW(WTSTypeSessionInfoLevel1, self.pointer.cast(), self.count) };
+    }
+}
+
+fn current_session_id() -> Result<u32, TaskbarRestoreError> {
+    let mut session_id = 0;
+    // SAFETY: The current process id is valid and the API writes one u32 to
+    // live stack storage for this synchronous query.
+    unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session_id) }
+        .map_err(|error| native_error("resolving the watchdog session id", error))?;
+    Ok(session_id)
+}
 
 /// Atomically publishes a fully synchronized journal replacement on Windows.
 ///
@@ -766,7 +1041,11 @@ fn native_error(operation: &'static str, error: WindowsError) -> TaskbarRestoreE
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowRegionState, region_state_from_code, replace_recovery_journal};
+    use super::{
+        SessionAccount, WindowRegionState, conflicting_session_id, region_state_from_code,
+        replace_recovery_journal, require_default_region_for_arming,
+    };
+    use crate::{TaskbarBounds, TaskbarObservation, TaskbarObservationId};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
     use windows::Win32::Graphics::Gdi::{COMPLEXREGION, ERROR, NULLREGION, SIMPLEREGION};
@@ -790,6 +1069,61 @@ mod tests {
             Some(WindowRegionState::Complex)
         );
         assert!(region_state_from_code(99).is_err());
+    }
+
+    #[test]
+    fn arming_v1_rejects_every_preexisting_custom_region() {
+        let observation = TaskbarObservation::new(
+            TaskbarObservationId::new(1),
+            "DISPLAY1",
+            "Shell_TrayWnd",
+            true,
+            TaskbarBounds::new(0, 1040, 1920, 1080),
+        );
+
+        assert!(
+            require_default_region_for_arming(WindowRegionState::NoRegion, &observation).is_ok()
+        );
+        for region in [
+            WindowRegionState::Empty,
+            WindowRegionState::Simple,
+            WindowRegionState::Complex,
+        ] {
+            assert!(require_default_region_for_arming(region, &observation).is_err());
+        }
+    }
+
+    #[test]
+    fn another_session_for_the_same_account_is_rejected_purely() {
+        let account = SessionAccount {
+            domain: "MACHINE".to_owned(),
+            user: "ALICE".to_owned(),
+        };
+        let sessions = vec![
+            (
+                1,
+                Some(SessionAccount {
+                    domain: account.domain.clone(),
+                    user: account.user.clone(),
+                }),
+            ),
+            (
+                2,
+                Some(SessionAccount {
+                    domain: account.domain.clone(),
+                    user: account.user.clone(),
+                }),
+            ),
+            (
+                3,
+                Some(SessionAccount {
+                    domain: "MACHINE".to_owned(),
+                    user: "BOB".to_owned(),
+                }),
+            ),
+        ];
+
+        assert_eq!(conflicting_session_id(1, &account, &sessions), Some(2));
     }
 
     #[test]

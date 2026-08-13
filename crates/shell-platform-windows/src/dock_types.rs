@@ -13,6 +13,7 @@ pub struct DockRuntimeConfig {
     layout: DockLayoutConfig,
     autohide: bool,
     reveal_zone_height: f32,
+    animation_ms: u16,
 }
 
 impl DockRuntimeConfig {
@@ -24,6 +25,7 @@ impl DockRuntimeConfig {
             layout: DockLayoutConfig::new(alignment),
             autohide: false,
             reveal_zone_height: 8.0,
+            animation_ms: 140,
         }
     }
 
@@ -46,6 +48,13 @@ impl DockRuntimeConfig {
     #[must_use]
     pub const fn reveal_zone_height(self) -> f32 {
         self.reveal_zone_height
+    }
+
+    /// User-selected duration used to scale Dock spring and reorder motion.
+    /// Zero disables nonessential Dock animation while preserving interaction.
+    #[must_use]
+    pub const fn animation_ms(self) -> u16 {
+        self.animation_ms
     }
 
     #[must_use]
@@ -80,6 +89,12 @@ impl DockRuntimeConfig {
     #[must_use]
     pub const fn with_autohide(mut self, enabled: bool) -> Self {
         self.autohide = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_animation_ms(mut self, value: u16) -> Self {
+        self.animation_ms = value;
         self
     }
 

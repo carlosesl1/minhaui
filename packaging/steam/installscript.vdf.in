@@ -1,0 +1,30 @@
+"InstallScript"
+{
+    "Run Process"
+    {
+        "ObsidianGlassRecovery_@@VERSION_KEY@@"
+        {
+            "Process 1" "%WinDir%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+            "Command 1" "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%INSTALLDIR%\\Invoke-ObsidianRecovery.ps1\" -Hook Update -AppRoot \"%INSTALLDIR%\""
+            "HasRunKey" "HKEY_CURRENT_USER\\Software\\ObsidianGlass\\Steam\\Lifecycle"
+            "AsCurrentUser" "1"
+            "Requirement_OS"
+            {
+                "Is64BitWindows" "1"
+            }
+        }
+    }
+    "Run Process On Uninstall"
+    {
+        "ObsidianGlassRecovery"
+        {
+            "Process 1" "%WinDir%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+            "Command 1" "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%INSTALLDIR%\\Invoke-ObsidianRecovery.ps1\" -Hook Uninstall -AppRoot \"%INSTALLDIR%\""
+            "AsCurrentUser" "1"
+            "Requirement_OS"
+            {
+                "Is64BitWindows" "1"
+            }
+        }
+    }
+}

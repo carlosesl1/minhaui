@@ -31,6 +31,7 @@ use crate::win32_slots::{
 };
 use crate::win32_taskbar_visibility::ExplorerTaskbarVisibilityGuard;
 use crate::win32_timer::TimerGuard;
+use crate::win32_watchdog_arming::TaskbarMutationLease;
 use crate::win32_window::{CLASS_NAME, SETTINGS_TITLE, WindowClass};
 use crate::win32_windowing::{MessageLoopAction, message_loop, monitor_placement_inputs};
 
@@ -213,13 +214,21 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     let mut shell_config = crate::win32_config::load_config();
     let explicit_taskbar_opt_in = std::env::var_os("MINHA_UI_UNSAFE_TASKBAR_REPLACEMENT")
         .is_some_and(|value| value == "I_ACCEPT_NO_NATIVE_RECOVERY");
-    let mut explorer_taskbars = taskbar_replacement_enabled(
+    let taskbar_replacement_requested = taskbar_replacement_enabled(
         shell_config.taskbar_policy(),
         config.safe_mode,
         explicit_taskbar_opt_in,
-    )
-    .then(ExplorerTaskbarVisibilityGuard::prepare_work_area)
-    .transpose()?;
+    );
+    let taskbar_lease = taskbar_replacement_requested
+        .then(|| {
+            let fingerprint = crate::win32_taskbar_visibility::taskbar_state_fingerprint()?;
+            TaskbarMutationLease::acquire(fingerprint, config.watchdog_heartbeat)
+        })
+        .transpose()?;
+    let mut explorer_taskbars = taskbar_lease
+        .as_ref()
+        .map(ExplorerTaskbarVisibilityGuard::prepare_work_area)
+        .transpose()?;
     print_monitor_placements(&monitors, &shell_config);
     let liquid_glass = config.liquid_glass && !config.safe_mode && !config.high_contrast;
     println!(
@@ -255,8 +264,8 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
         .iter()
         .map(|slot| slot.dock_hwnd())
         .collect::<Vec<_>>();
-    if let Some(taskbars) = explorer_taskbars.as_mut() {
-        taskbars.reconcile_and_hide(&dock_handles)?;
+    if let Some((taskbars, lease)) = explorer_taskbars.as_mut().zip(taskbar_lease.as_ref()) {
+        taskbars.reconcile_and_hide(lease, &dock_handles)?;
     }
     for slot in &mut slots {
         slot.show_shells();
@@ -274,6 +283,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             PlatformEvent::PowerResumed,
             PlatformEvent::TaskbarCreated,
         ] {
+            if taskbar_layout_change_requires_restart(taskbar_lease.is_some(), &event) {
+                return Err(taskbar_layout_restart_error());
+            }
             let taskbar_layout_changed = matches!(
                 event,
                 PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated
@@ -291,8 +303,10 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                     .iter()
                     .map(|slot| slot.dock_hwnd())
                     .collect::<Vec<_>>();
-                if let Some(taskbars) = explorer_taskbars.as_mut() {
-                    taskbars.reconcile_and_hide(&dock_handles)?;
+                if let Some((taskbars, lease)) =
+                    explorer_taskbars.as_mut().zip(taskbar_lease.as_ref())
+                {
+                    taskbars.reconcile_and_hide(lease, &dock_handles)?;
                 }
             }
         }
@@ -303,6 +317,9 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
             Ok(true)
         }
         MessageLoopAction::Dispatch(event) => {
+            if taskbar_layout_change_requires_restart(taskbar_lease.is_some(), event.event()) {
+                return Err(taskbar_layout_restart_error());
+            }
             if matches!(event.event(), PlatformEvent::SyncWindows) {
                 heartbeat.pulse();
             }
@@ -326,8 +343,10 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
                     .iter()
                     .map(|slot| slot.dock_hwnd())
                     .collect::<Vec<_>>();
-                if let Some(taskbars) = explorer_taskbars.as_mut() {
-                    taskbars.reconcile_and_hide(&dock_handles)?;
+                if let Some((taskbars, lease)) =
+                    explorer_taskbars.as_mut().zip(taskbar_lease.as_ref())
+                {
+                    taskbars.reconcile_and_hide(lease, &dock_handles)?;
                 }
             }
             Ok(keep_running)
@@ -338,7 +357,12 @@ fn run_showcase_runtime(config: ShowcaseRunConfig) -> Result<()> {
     drop(timer);
     drop(class);
     drop(explorer_taskbars);
-    result
+    let disarmed = taskbar_lease.map_or(Ok(()), TaskbarMutationLease::disarm);
+    match (result, disarmed) {
+        (_, Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 struct WatchdogHeartbeat {
@@ -394,6 +418,24 @@ const fn taskbar_replacement_enabled(
         && explicit_opt_in
         && cfg!(feature = "experimental-taskbar-replacement")
         && matches!(policy, shell_core::TaskbarPolicy::Hide)
+}
+
+const fn taskbar_layout_change_requires_restart(
+    replacement_active: bool,
+    event: &PlatformEvent,
+) -> bool {
+    replacement_active
+        && matches!(
+            event,
+            PlatformEvent::DisplayChanged | PlatformEvent::TaskbarCreated
+        )
+}
+
+fn taskbar_layout_restart_error() -> windows::core::Error {
+    windows::core::Error::new(
+        E_FAIL,
+        "taskbar layout changed while the replacement lease was active; restart is required",
+    )
 }
 
 struct ComApartment;
@@ -555,7 +597,11 @@ const fn invalid_arg() -> windows::core::HRESULT {
 
 #[cfg(test)]
 mod material_policy_tests {
-    use super::{solid_material_for_accessibility, taskbar_replacement_enabled};
+    use super::{
+        solid_material_for_accessibility, taskbar_layout_change_requires_restart,
+        taskbar_replacement_enabled,
+    };
+    use crate::PlatformEvent;
 
     #[test]
     fn system_backdrop_is_not_required_for_translucent_composition() {
@@ -592,6 +638,26 @@ mod material_policy_tests {
             shell_core::TaskbarPolicy::Hide,
             false,
             false,
+        ));
+    }
+
+    #[test]
+    fn active_replacement_restarts_before_taskbar_topology_is_reconciled() {
+        assert!(taskbar_layout_change_requires_restart(
+            true,
+            &PlatformEvent::DisplayChanged,
+        ));
+        assert!(taskbar_layout_change_requires_restart(
+            true,
+            &PlatformEvent::TaskbarCreated,
+        ));
+        assert!(!taskbar_layout_change_requires_restart(
+            true,
+            &PlatformEvent::PowerResumed,
+        ));
+        assert!(!taskbar_layout_change_requires_restart(
+            false,
+            &PlatformEvent::DisplayChanged,
         ));
     }
 }

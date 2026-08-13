@@ -6,11 +6,26 @@ Run `shell-app.exe`. No command-line option is required. If graphics initializat
 
 ## Restore Windows state
 
-The app never changes taskbar behavior without explicit consent. The separate `shell-watchdog.exe` owns recovery state. Update and uninstall flows call `Invoke-ObsidianRecovery.ps1` before replacing or removing files.
+The app never changes taskbar behavior without explicit consent. The separate
+`shell-watchdog.exe` owns recovery state. `Invoke-ObsidianRecovery.ps1` waits for
+that native recovery contract and fails when the watchdog is missing, returns a
+nonzero status, or cannot prove recovery.
+
+Steam packages register the script for first launch after each update and for
+Steam uninstall. Recovery-aware MSIX sideloads use the companion
+`Deploy-ObsidianMsix.ps1` for both update and uninstall. Removing an MSIX from
+Windows Settings, or updating it through Store/App Installer, does not execute
+an arbitrary package script; Microsoft does not expose that lifecycle hook.
+Stable packages keep experimental taskbar replacement disabled, so do not use
+those automatic MSIX paths with an experimental build that can alter Explorer.
 
 ## Uninstall settings choice
 
-Run `Remove-ObsidianGlass.ps1 -SettingsAction Keep`, `Export`, or `Remove`. Export also requires `-ExportPath`. The script restricts removal to the app directory under the current user's LocalAppData.
+For a portable or Steam layout, run `Remove-ObsidianGlass.ps1 -SettingsAction
+Keep`, `Export`, or `Remove`. Export also requires `-ExportPath`. Recovery is
+completed before settings are preserved, exported, or removed. Settings removal
+is restricted to the application's directory under the current user's
+LocalAppData.
 
 ## Reporting a problem
 

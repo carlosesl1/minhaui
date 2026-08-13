@@ -7,7 +7,8 @@ use thiserror::Error;
 #[cfg(any(windows, test))]
 use crate::remove_recovery_journal_for_transaction;
 use crate::{
-    RecoveryJournalError, RecoveryJournalV1, TaskbarBounds, TaskbarSnapshot, load_recovery_journal,
+    RecoveryJournalError, RecoveryJournalPhase, RecoveryJournalV1, TaskbarBounds, TaskbarSnapshot,
+    cancel_prepared_recovery_journal, load_recovery_journal,
 };
 
 const PRIMARY_TASKBAR_CLASS: &str = "Shell_TrayWnd";
@@ -222,6 +223,18 @@ pub fn restore_recovery_journal(
     let Some(journal) = load_recovery_journal(path)? else {
         return Ok(TaskbarRestoreOutcome::NoJournal);
     };
+    if journal.phase == RecoveryJournalPhase::Prepared {
+        #[cfg(windows)]
+        {
+            return cancel_prepared_with_preflight(path, check_only, &journal, |journal| {
+                crate::taskbar_restore_win32::preflight_prepared_cancellation(journal)
+            });
+        }
+        #[cfg(not(windows))]
+        {
+            return cancel_prepared_with_preflight(path, check_only, &journal, |_| Ok(()));
+        }
+    }
 
     #[cfg(windows)]
     {
@@ -237,6 +250,26 @@ pub fn restore_recovery_journal(
         let _ = (check_only, journal);
         Err(TaskbarRestoreError::UnsupportedPlatform)
     }
+}
+
+fn cancel_prepared_with_preflight(
+    path: &Path,
+    check_only: bool,
+    journal: &RecoveryJournalV1,
+    preflight: impl FnOnce(&RecoveryJournalV1) -> Result<(), TaskbarRestoreError>,
+) -> Result<TaskbarRestoreOutcome, TaskbarRestoreError> {
+    let transaction_id = journal.transaction_id.parse().map_err(|source| {
+        RecoveryJournalError::InvalidTransactionId {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    preflight(journal)?;
+    if check_only {
+        return Ok(TaskbarRestoreOutcome::Checked);
+    }
+    cancel_prepared_recovery_journal(path, transaction_id)?;
+    Ok(TaskbarRestoreOutcome::Restored)
 }
 
 #[cfg(any(windows, test))]
@@ -644,6 +677,28 @@ mod tests {
             TaskbarRestoreOutcome::NoJournal
         );
         assert_eq!(backend.apply_count.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn abandoned_prepared_is_authenticated_cancellation_not_native_restore()
+    -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::create("cancel-prepared")?;
+        let path = directory.journal_path();
+        let transaction_id = transaction_id(9);
+        let journal =
+            create_prepared_recovery_journal(&path, transaction_id, 1, sample_journal().snapshots)?;
+
+        assert_eq!(
+            super::cancel_prepared_with_preflight(&path, true, &journal, |_| Ok(()))?,
+            TaskbarRestoreOutcome::Checked
+        );
+        assert_eq!(load_recovery_journal(&path)?, Some(journal.clone()));
+        assert_eq!(
+            super::cancel_prepared_with_preflight(&path, false, &journal, |_| Ok(()))?,
+            TaskbarRestoreOutcome::Restored
+        );
+        assert_eq!(load_recovery_journal(&path)?, None);
         Ok(())
     }
 

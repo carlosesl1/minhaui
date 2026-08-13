@@ -542,7 +542,10 @@ function Test-WatchdogNativeRecoveryBoundary {
     $watchdogRoot = "crates/shell-watchdog/src"
     $lib = "$watchdogRoot/lib.rs"
     $safePlanner = "$watchdogRoot/taskbar_restore.rs"
-    $nativeAdapter = "$watchdogRoot/taskbar_restore_win32.rs"
+    $nativeAdapters = @(
+        "$watchdogRoot/taskbar_restore_win32.rs",
+        "$watchdogRoot/lifecycle_win32.rs"
+    )
     if ($PSCmdlet.ParameterSetName -eq "Repository") {
         $sourceRoot = Join-Path $RepositoryRoot $watchdogRoot
         $Sources = @(
@@ -570,27 +573,33 @@ function Test-WatchdogNativeRecoveryBoundary {
             $unsafeAllows.Add($file)
         }
         if (
-            $file -ne $nativeAdapter -and
+            $file -notin $nativeAdapters -and
             $content -match '\bunsafe\s*(?:\{|extern\b|fn\b|impl\b|trait\b)'
         ) {
             $violations.Add("watchdog unsafe operation outside native recovery adapter: $file")
         }
     }
 
-    if (-not $sourceByFile.ContainsKey($nativeAdapter)) {
-        $violations.Add("watchdog native recovery adapter is missing: $nativeAdapter")
+    foreach ($nativeAdapter in $nativeAdapters) {
+        if (-not $sourceByFile.ContainsKey($nativeAdapter)) {
+            $violations.Add("watchdog native adapter is missing: $nativeAdapter")
+        }
     }
-    if ($unsafeAllows.Count -ne 1 -or $unsafeAllows[0] -ne $lib) {
+    if (
+        $unsafeAllows.Count -ne 2 -or
+        @($unsafeAllows | Where-Object { $_ -ne $lib }).Count -ne 0
+    ) {
         $violations.Add(
-            "watchdog must have exactly one unsafe_code allow on its native recovery module"
+            "watchdog must have exactly two unsafe_code allows on its explicit native adapters"
         )
     }
     if (
         -not $sourceByFile.ContainsKey($lib) -or
-        $sourceByFile[$lib] -notmatch '(?s)#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*#\s*\[\s*allow\s*\(\s*unsafe_code\b.*?\)\s*\]\s*mod\s+taskbar_restore_win32\s*;'
+        $sourceByFile[$lib] -notmatch '(?s)#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*#\s*\[\s*allow\s*\(\s*unsafe_code\b.*?\)\s*\]\s*mod\s+taskbar_restore_win32\s*;' -or
+        $sourceByFile[$lib] -notmatch '(?s)#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*#\s*\[\s*allow\s*\(\s*unsafe_code\b.*?\)\s*\]\s*mod\s+lifecycle_win32\s*;'
     ) {
         $violations.Add(
-            "watchdog native recovery adapter must be cfg(windows) with the sole unsafe allow"
+            "watchdog native adapters must be cfg(windows) with exactly scoped unsafe allows"
         )
     }
     if (
