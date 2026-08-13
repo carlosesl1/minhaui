@@ -188,8 +188,19 @@ try {
 
     $dummyMsix = Join-Path $temporaryRoot 'ObsidianGlass-test.msix'
     New-Item -ItemType File -Path $dummyMsix | Out-Null
+    $deploymentFixture = Join-Path $temporaryRoot 'msix-companion'
+    New-Item -ItemType Directory -Force -Path $deploymentFixture | Out-Null
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot 'packaging\msix\Deploy-ObsidianMsix.ps1') `
+        -Destination $deploymentFixture
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot 'packaging\common\Invoke-ObsidianRecovery.ps1') `
+        -Destination $deploymentFixture
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot 'packaging\common\ObsidianLifecyclePolicy.psm1') `
+        -Destination $deploymentFixture
     $deploymentOutput = @(
-        & (Join-Path $repositoryRoot 'packaging\msix\Deploy-ObsidianMsix.ps1') `
+        & (Join-Path $deploymentFixture 'Deploy-ObsidianMsix.ps1') `
             -Action InstallOrUpdate `
             -PackagePath $dummyMsix `
             -DryRun 6>&1
