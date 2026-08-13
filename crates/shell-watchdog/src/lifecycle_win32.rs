@@ -242,12 +242,23 @@ mod tests {
             "minha-ui-lifecycle-live-owner-{}/taskbar-recovery-v1.json",
             std::process::id()
         ));
-        let owner = SupervisionLifecycle::acquire(&path).expect("owner");
+        let owner_path = path.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let lifecycle = SupervisionLifecycle::acquire(&owner_path).expect("owner");
+            ready_sender.send(()).expect("ready");
+            release_receiver.recv().expect("release owner");
+            assert!(lifecycle.shutdown_requested());
+        });
+        ready_receiver.recv().expect("owner ready");
+
         let error = quiesce_for_restore(&path, Duration::from_millis(10))
             .err()
             .expect("live owner must not be bypassed");
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(owner.shutdown_requested());
+        release_sender.send(()).expect("release owner");
+        owner.join().expect("owner thread");
     }
 
     #[test]

@@ -224,19 +224,16 @@ pub fn restore_recovery_journal(
         return Ok(TaskbarRestoreOutcome::NoJournal);
     };
     if journal.phase == RecoveryJournalPhase::Prepared {
-        let transaction_id = journal.transaction_id.parse().map_err(|source| {
-            RecoveryJournalError::InvalidTransactionId {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
         #[cfg(windows)]
-        crate::taskbar_restore_win32::preflight_prepared_cancellation(&journal)?;
-        if check_only {
-            return Ok(TaskbarRestoreOutcome::Checked);
+        {
+            return cancel_prepared_with_preflight(path, check_only, &journal, |journal| {
+                crate::taskbar_restore_win32::preflight_prepared_cancellation(journal)
+            });
         }
-        cancel_prepared_recovery_journal(path, transaction_id)?;
-        return Ok(TaskbarRestoreOutcome::Restored);
+        #[cfg(not(windows))]
+        {
+            return cancel_prepared_with_preflight(path, check_only, &journal, |_| Ok(()));
+        }
     }
 
     #[cfg(windows)]
@@ -253,6 +250,26 @@ pub fn restore_recovery_journal(
         let _ = (check_only, journal);
         Err(TaskbarRestoreError::UnsupportedPlatform)
     }
+}
+
+fn cancel_prepared_with_preflight(
+    path: &Path,
+    check_only: bool,
+    journal: &RecoveryJournalV1,
+    preflight: impl FnOnce(&RecoveryJournalV1) -> Result<(), TaskbarRestoreError>,
+) -> Result<TaskbarRestoreOutcome, TaskbarRestoreError> {
+    let transaction_id = journal.transaction_id.parse().map_err(|source| {
+        RecoveryJournalError::InvalidTransactionId {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    preflight(journal)?;
+    if check_only {
+        return Ok(TaskbarRestoreOutcome::Checked);
+    }
+    cancel_prepared_recovery_journal(path, transaction_id)?;
+    Ok(TaskbarRestoreOutcome::Restored)
 }
 
 #[cfg(any(windows, test))]
@@ -673,12 +690,12 @@ mod tests {
             create_prepared_recovery_journal(&path, transaction_id, 1, sample_journal().snapshots)?;
 
         assert_eq!(
-            super::restore_recovery_journal(&path, true)?,
+            super::cancel_prepared_with_preflight(&path, true, &journal, |_| Ok(()))?,
             TaskbarRestoreOutcome::Checked
         );
-        assert_eq!(load_recovery_journal(&path)?, Some(journal));
+        assert_eq!(load_recovery_journal(&path)?, Some(journal.clone()));
         assert_eq!(
-            super::restore_recovery_journal(&path, false)?,
+            super::cancel_prepared_with_preflight(&path, false, &journal, |_| Ok(()))?,
             TaskbarRestoreOutcome::Restored
         );
         assert_eq!(load_recovery_journal(&path)?, None);
